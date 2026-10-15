@@ -52,6 +52,9 @@ const (
 	// ReadFileFunction reads a whole file into a new string.
 	ReadFileFunction = "ktn_rt_read_file"
 
+	// FailFunction reports a fatal runtime error and terminates the program.
+	FailFunction = "ktn_rt_fail"
+
 	// PrintIntFunction, PrintFloatFunction, PrintBoolFunction, and
 	// PrintStringFunction write one value of the corresponding primitive type.
 	PrintIntFunction    = "ktn_rt_print_int"

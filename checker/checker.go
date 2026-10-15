@@ -116,11 +116,11 @@ type Result struct {
 	// Modules are the checked modules, with the root module first.
 	Modules []*parser.Module
 
-	// StructTypes maps each struct name visible to the root module (its own
+	// Types maps each named type visible to the root module (its own
 	// declarations plus all public declarations) to its resolved type. When two
-	// modules declare private structs with the same name, this map holds only
-	// the root module's.
-	StructTypes map[string]*Type
+	// modules declare private types with the same name, this map holds only the
+	// root module's.
+	Types map[string]*Type
 
 	// Functions maps each function name visible to the root module to its
 	// signature, with the same caveat as StructTypes.
@@ -129,9 +129,9 @@ type Result struct {
 	// Builtins maps each built-in function name to its signature.
 	Builtins map[string]*Function
 
-	// StructDecls maps each struct declaration to its resolved type, exactly,
-	// even when private structs in different modules share a name.
-	StructDecls map[*parser.StructDecl]*Type
+	// TypeDecls maps each struct, enum, or union declaration to its resolved
+	// type, exactly, even when private types in different modules share a name.
+	TypeDecls map[parser.Decl]*Type
 
 	// FunctionDecls maps each function declaration to its signature.
 	FunctionDecls map[*parser.FunctionDecl]*Function
@@ -146,6 +146,11 @@ type Result struct {
 	// names.
 	TypeRefs map[*parser.TypeRef]*Type
 
+	// VariantRefs maps each expression that denotes a union or enum variant —
+	// a qualified reference "Type.Variant" or a variant literal — to that
+	// variant, so code generation can emit the right tag or constructor.
+	VariantRefs map[parser.Expr]*Variant
+
 	// Symbols maps each identifier reference that resolved to a symbol (a
 	// variable, parameter, or function) to that symbol.
 	Symbols map[*parser.Identifier]*Symbol
@@ -155,7 +160,7 @@ type Result struct {
 type moduleInfo struct {
 	path      string
 	id        int
-	structs   map[string]*Type
+	types     map[string]*Type
 	functions map[string]*Function
 	declared  map[string]parser.Position
 }
@@ -172,9 +177,9 @@ type checker struct {
 	modules []*moduleInfo
 	current *moduleInfo
 
-	// publicStructs and publicFunctions hold every public declaration of every
+	// publicTypes and publicFunctions hold every public declaration of every
 	// module, shared across the whole program.
-	publicStructs   map[string]*Type
+	publicTypes     map[string]*Type
 	publicFunctions map[string]*Function
 
 	// returnType is the return type of the function currently being checked.
@@ -212,17 +217,18 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 	c := &checker{
 		builtins:        builtinFunctions(),
 		arrayTypes:      map[*Type]*Type{},
-		publicStructs:   map[string]*Type{},
+		publicTypes:     map[string]*Type{},
 		publicFunctions: map[string]*Function{},
 		result: &Result{
 			Modules:         modules,
-			StructTypes:     map[string]*Type{},
+			Types:           map[string]*Type{},
 			Functions:       map[string]*Function{},
 			Builtins:        map[string]*Function{},
-			StructDecls:     map[*parser.StructDecl]*Type{},
+			TypeDecls:       map[parser.Decl]*Type{},
 			FunctionDecls:   map[*parser.FunctionDecl]*Function{},
 			ExpressionTypes: map[parser.Expr]*Type{},
 			TypeRefs:        map[*parser.TypeRef]*Type{},
+			VariantRefs:     map[parser.Expr]*Variant{},
 			Symbols:         map[*parser.Identifier]*Symbol{},
 		},
 	}
@@ -234,7 +240,7 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 		c.modules = append(c.modules, &moduleInfo{
 			path:      module.Path,
 			id:        module.ID,
-			structs:   map[string]*Type{},
+			types:     map[string]*Type{},
 			functions: map[string]*Function{},
 			declared:  map[string]parser.Position{},
 		})
@@ -248,6 +254,9 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 		return nil, err
 	}
 	if err := c.resolveStructs(); err != nil {
+		return nil, err
+	}
+	if err := c.resolveUnionFields(); err != nil {
 		return nil, err
 	}
 	if err := c.resolveFunctions(); err != nil {
@@ -303,28 +312,65 @@ func (c *checker) collectDeclarations() error {
 				if d == nil {
 					return c.errorAt(InvalidType, parser.Position{Line: 1, Column: 1}, "a module contains a nil struct declaration")
 				}
-				if earlier, ok := module.declared[d.Name]; ok {
-					return c.errorAt(DuplicateDeclaration, d.At, "duplicate declaration of %q (previously declared at %d:%d)", d.Name, earlier.Line, earlier.Column)
-				}
-				module.declared[d.Name] = d.At
-
-				structType := &Type{
+				namedType := &Type{
 					Kind:   KindStruct,
 					Name:   d.Name,
 					Module: module.id,
 					Struct: &StructInfo{Name: d.Name, FieldIndex: map[string]*StructField{}, Decl: d},
 				}
-				module.structs[d.Name] = structType
-				c.result.StructDecls[d] = structType
-
-				if d.Visibility == parser.VisibilityPublic {
-					if existing, ok := c.publicStructs[d.Name]; ok {
-						return c.errorAt(DuplicateDeclaration, d.At, "duplicate public declaration of %q (also declared in %s)", d.Name, c.modulePath(existing.Module))
-					}
-					c.publicStructs[d.Name] = structType
+				if err := c.registerType(index, module, d, d.Name, d.At, d.Visibility, namedType); err != nil {
+					return err
 				}
-				if index == 0 || d.Visibility == parser.VisibilityPublic {
-					c.result.StructTypes[d.Name] = structType
+
+			case *parser.EnumDecl:
+				if d == nil {
+					return c.errorAt(InvalidType, parser.Position{Line: 1, Column: 1}, "a module contains a nil enum declaration")
+				}
+				if len(d.Cases) == 0 {
+					return c.errorAt(InvalidType, d.At, "enum %q must have at least one case", d.Name)
+				}
+				namedType := &Type{Kind: KindEnum, Name: d.Name, Module: module.id, VariantIndex: map[string]*Variant{}}
+				for variantIndex, enumCase := range d.Cases {
+					if enumCase == nil {
+						return c.errorAt(InvalidType, d.At, "enum %q has a nil case", d.Name)
+					}
+					if _, ok := namedType.VariantIndex[enumCase.Name]; ok {
+						return c.errorAt(DuplicateDeclaration, enumCase.At, "duplicate case %q in enum %q", enumCase.Name, d.Name)
+					}
+					variant := &Variant{Name: enumCase.Name, Index: variantIndex, At: enumCase.At}
+					namedType.Variants = append(namedType.Variants, variant)
+					namedType.VariantIndex[enumCase.Name] = variant
+				}
+				if err := c.registerType(index, module, d, d.Name, d.At, d.Visibility, namedType); err != nil {
+					return err
+				}
+
+			case *parser.UnionDecl:
+				if d == nil {
+					return c.errorAt(InvalidType, parser.Position{Line: 1, Column: 1}, "a module contains a nil union declaration")
+				}
+				if len(d.Variants) == 0 {
+					return c.errorAt(InvalidType, d.At, "union %q must have at least one variant", d.Name)
+				}
+				namedType := &Type{Kind: KindUnion, Name: d.Name, Module: module.id, VariantIndex: map[string]*Variant{}}
+				for variantIndex, variantDeclaration := range d.Variants {
+					if variantDeclaration == nil {
+						return c.errorAt(InvalidType, d.At, "union %q has a nil variant", d.Name)
+					}
+					if _, ok := namedType.VariantIndex[variantDeclaration.Name]; ok {
+						return c.errorAt(DuplicateDeclaration, variantDeclaration.At, "duplicate variant %q in union %q", variantDeclaration.Name, d.Name)
+					}
+					variant := &Variant{
+						Name:       variantDeclaration.Name,
+						Index:      variantIndex,
+						FieldIndex: map[string]*StructField{},
+						At:         variantDeclaration.At,
+					}
+					namedType.Variants = append(namedType.Variants, variant)
+					namedType.VariantIndex[variantDeclaration.Name] = variant
+				}
+				if err := c.registerType(index, module, d, d.Name, d.At, d.Visibility, namedType); err != nil {
+					return err
 				}
 
 			case *parser.FunctionDecl:
@@ -362,6 +408,28 @@ func (c *checker) collectDeclarations() error {
 	return nil
 }
 
+// registerType adds a named type to its module and, when it is public, to the
+// shared public namespace, detecting duplicate names.
+func (c *checker) registerType(moduleIndex int, module *moduleInfo, declaration parser.Decl, name string, at parser.Position, visibility parser.Visibility, namedType *Type) error {
+	if earlier, ok := module.declared[name]; ok {
+		return c.errorAt(DuplicateDeclaration, at, "duplicate declaration of %q (previously declared at %d:%d)", name, earlier.Line, earlier.Column)
+	}
+	module.declared[name] = at
+	module.types[name] = namedType
+	c.result.TypeDecls[declaration] = namedType
+
+	if visibility == parser.VisibilityPublic {
+		if existing, ok := c.publicTypes[name]; ok {
+			return c.errorAt(DuplicateDeclaration, at, "duplicate public declaration of %q (also declared in %s)", name, c.modulePath(existing.Module))
+		}
+		c.publicTypes[name] = namedType
+	}
+	if moduleIndex == 0 || visibility == parser.VisibilityPublic {
+		c.result.Types[name] = namedType
+	}
+	return nil
+}
+
 // modulePath returns the source path of the module with the given ID, or a
 // descriptive fallback.
 func (c *checker) modulePath(id int) string {
@@ -386,7 +454,7 @@ func (c *checker) resolveStructs() error {
 			if !ok || d == nil {
 				continue
 			}
-			info := c.result.StructDecls[d].Struct
+			info := c.result.TypeDecls[d].Struct
 			for _, field := range d.Fields {
 				if field == nil {
 					return c.errorAt(InvalidType, d.At, "struct %q has a nil field declaration", d.Name)
@@ -408,6 +476,54 @@ func (c *checker) resolveStructs() error {
 		}
 	}
 	c.current = nil
+	return nil
+}
+
+// resolveUnionFields resolves each union variant's field types and detects
+// duplicate fields. Field types must exist and must not be void.
+func (c *checker) resolveUnionFields() error {
+	for index, module := range c.modules {
+		c.current = module
+		for _, declaration := range c.result.Modules[index].Program.Declarations {
+			d, ok := declaration.(*parser.UnionDecl)
+			if !ok || d == nil {
+				continue
+			}
+			unionType := c.result.TypeDecls[d]
+			for variantIndex, variantDeclaration := range d.Variants {
+				if err := c.resolveVariantFields(variantDeclaration, unionType.Variants[variantIndex], d.Name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	c.current = nil
+	return nil
+}
+
+// resolveVariantFields resolves the fields of one union variant.
+func (c *checker) resolveVariantFields(declaration *parser.VariantDecl, variant *Variant, unionName string) error {
+	if declaration == nil || variant == nil {
+		return &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "union variant is missing a declaration"}
+	}
+	for _, field := range declaration.Fields {
+		if field == nil {
+			return c.errorAt(InvalidType, declaration.At, "variant %q of union %q has a nil field declaration", variant.Name, unionName)
+		}
+		fieldType, err := c.resolveType(field.Type)
+		if err != nil {
+			return err
+		}
+		if fieldType.IsVoid() {
+			return c.errorAt(InvalidType, field.Type.Pos(), "field %q of variant %q cannot have type void", field.Name, variant.Name)
+		}
+		if _, ok := variant.FieldIndex[field.Name]; ok {
+			return c.errorAt(DuplicateDeclaration, field.At, "duplicate field %q in variant %q", field.Name, variant.Name)
+		}
+		structField := &StructField{Name: field.Name, Type: fieldType, At: field.At}
+		variant.Fields = append(variant.Fields, structField)
+		variant.FieldIndex[field.Name] = structField
+	}
 	return nil
 }
 
@@ -535,11 +651,11 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 	case primitiveTypes[reference.Name] != nil:
 		resolved = primitiveTypes[reference.Name]
 	default:
-		if structType, ok := c.lookupStruct(reference.Name); ok {
+		if structType, ok := c.lookupType(reference.Name); ok {
 			resolved = structType
 			break
 		}
-		if path, ok := c.privateStruct(reference.Name); ok {
+		if path, ok := c.privateType(reference.Name); ok {
 			return nil, c.errorAt(PrivateAccess, reference.Pos(), "type %q is private to %s", reference.Name, path)
 		}
 		return nil, c.errorAt(UndefinedName, reference.Pos(), "undefined type %q", reference.Name)
@@ -549,15 +665,15 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 	return resolved, nil
 }
 
-// lookupStruct resolves a struct name in the current module's declarations and
+// lookupType resolves a struct name in the current module's declarations and
 // then in the shared public declarations.
-func (c *checker) lookupStruct(name string) (*Type, bool) {
+func (c *checker) lookupType(name string) (*Type, bool) {
 	if c.current != nil {
-		if structType, ok := c.current.structs[name]; ok {
+		if structType, ok := c.current.types[name]; ok {
 			return structType, true
 		}
 	}
-	if structType, ok := c.publicStructs[name]; ok {
+	if structType, ok := c.publicTypes[name]; ok {
 		return structType, true
 	}
 	return nil, false
@@ -577,14 +693,14 @@ func (c *checker) lookupFunction(name string) (*Function, bool) {
 	return nil, false
 }
 
-// privateStruct reports whether name is a struct declared privately in another
+// privateType reports whether name is a struct declared privately in another
 // module, and returns that module's path.
-func (c *checker) privateStruct(name string) (string, bool) {
+func (c *checker) privateType(name string) (string, bool) {
 	for _, module := range c.modules {
 		if module == c.current {
 			continue
 		}
-		if _, ok := module.structs[name]; ok {
+		if _, ok := module.types[name]; ok {
 			return c.modulePath(module.id), true
 		}
 	}

@@ -1,0 +1,80 @@
+enum TokenKind {
+    Identifier,
+    Integer,
+    StringLiteral,
+    EndOfFile
+}
+
+union Expression {
+    IntegerLiteral { int value; }
+    Name { string name; }
+    Add { Expression left; Expression right; }
+    Missing
+}
+
+struct Token {
+    TokenKind kind;
+    string text;
+}
+
+fn evaluate(Expression expression) -> int {
+    match (expression) {
+        IntegerLiteral(value) { return value; }
+        Name(name) { return 0; }
+        Add(left, right) { return evaluate(left) + evaluate(right); }
+        Missing { return 0; }
+    }
+}
+
+fn describe_token(Token token) -> string {
+    match (token.kind) {
+        Identifier { return "identifier:" + token.text; }
+        Integer { return "integer:" + token.text; }
+        StringLiteral { return "string:" + token.text; }
+        EndOfFile { return "eof"; }
+    }
+}
+
+fn classify(TokenKind kind) -> string {
+    string result = "";
+    match (kind) {
+        Identifier { result = "id"; }
+        Integer { result = "num"; }
+        StringLiteral { result = "str"; }
+        EndOfFile { result = "end"; }
+    }
+    return result;
+}
+
+fn main() {
+    TokenKind kind = TokenKind.Identifier;
+    print(kind == TokenKind.Identifier, kind == TokenKind.Integer);
+    print(classify(TokenKind.Integer), classify(TokenKind.EndOfFile));
+
+    Token token = Token { kind = TokenKind.Integer, text = "42" };
+    print(describe_token(token));
+
+    Expression sum = Expression.Add {
+        left = Expression.IntegerLiteral { value = 2 },
+        right = Expression.Add {
+            left = Expression.IntegerLiteral { value = 3 },
+            right = Expression.IntegerLiteral { value = 4 }
+        }
+    };
+    print(evaluate(sum));
+    print(evaluate(Expression.Missing));
+
+    Expression[] items = new Expression[3];
+    items[0] = Expression.IntegerLiteral { value = 10 };
+    items[1] = Expression.Name { name = "x" };
+    items[2] = Expression.Missing;
+    int total = 0;
+    for (int index = 0; index < length(items); index++) {
+        total += evaluate(items[index]);
+    }
+    print(total);
+
+    TokenKind[] kinds = new TokenKind[2];
+    kinds[0] = TokenKind.StringLiteral;
+    print(classify(kinds[0]));
+}

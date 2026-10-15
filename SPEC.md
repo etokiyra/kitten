@@ -108,7 +108,7 @@ Recognized token kinds (implementation names):
 | Names | `Ident` |
 | Literals | `Int`, `Float`, `String` |
 | Boolean literals | `True`, `False` |
-| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Import`, `Public`, `Private` |
+| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Import`, `Public`, `Private`, `Enum`, `Union`, `Match` |
 | Type names | `TypeInt`, `TypeFloat`, `TypeBool`, `TypeString`, `TypeVoid` |
 | Operators | `Plus`, `Minus`, `Star`, `Slash`, `Percent`, `Assign`, `Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `And`, `Or`, `Not`, `Inc`, `Dec`, `PlusAssign`, `MinusAssign`, `Arrow` |
 | Punctuation | `LParen`, `RParen`, `LBrace`, `RBrace`, `LBracket`, `RBracket`, `Comma`, `Dot`, `Semicolon`, `Colon` |
@@ -142,6 +142,7 @@ identifiers:
 ```text
 struct if else while for return
 fn new import public private
+enum union match
 int float bool string void
 true false
 ```
@@ -558,7 +559,9 @@ outcome here.
   `return value;` must match the declared return type (Section 18.6).
 - Whether return-path analysis should account for loops and other constructs
   that the conservative analysis currently ignores (Section 18.6).
-- The full set of statement forms.
+- The full set of statement forms. In this revision `match` is a statement, not
+  an expression, and a match must be exhaustive with no wildcard arm; whether
+  either should change is **deferred**.
 
 **Modules and program structure**
 
@@ -618,7 +621,7 @@ input.
 ```text
 program          = { declaration } EOF ;
 
-declaration      = [ visibility ] ( function | struct ) | import ;
+declaration      = [ visibility ] ( function | struct | enum | union ) | import ;
 visibility       = "public" | "private" ;
 import           = "import" STRING ";" ;
 
@@ -628,6 +631,11 @@ parameter        = type IDENT ;
 
 struct           = "struct" IDENT "{" { field } "}" ;
 field            = type IDENT ";" ;
+
+enum             = "enum" IDENT "{" case { "," case } "}" ;
+case             = IDENT ;
+union            = "union" IDENT "{" { variant } "}" ;
+variant          = IDENT [ "{" { field } "}" ] ;
 
 type             = base_type { "[]" } ;
 base_type        = "int" | "float" | "bool" | "string" | "void" | IDENT ;
@@ -639,6 +647,7 @@ statement        = block
                  | while
                  | for
                  | return
+                 | match
                  | variable_declaration
                  | expression_statement ;
 
@@ -647,6 +656,8 @@ while            = "while" "(" expression ")" block ;
 for              = "for" "(" [ for_init ] ";" [ expression ] ";" [ expression ] ")" block ;
 for_init         = variable_declaration | expression ;
 return           = "return" [ expression ] ";" ;
+match            = "match" "(" expression ")" "{" { arm } "}" ;
+arm              = IDENT [ "(" [ IDENT { "," IDENT } ] ")" ] block ;
 
 variable_declaration = type IDENT [ "=" expression ] ";" ;
 expression_statement = expression ";" ;
@@ -668,10 +679,12 @@ index            = "[" expression "]" ;
 primary          = INT | FLOAT | STRING | "true" | "false"
                  | IDENT
                  | struct_literal
+                 | variant_literal
                  | array_creation
                  | "(" expression ")" ;
 array_creation   = "new" type "[" expression "]" ;
 struct_literal   = IDENT "{" [ field_inits ] "}" ;
+variant_literal  = IDENT "." IDENT "{" [ field_inits ] "}" ;
 field_inits      = field_init { "," field_init } ;
 field_init       = IDENT "=" expression ;
 ```
@@ -689,10 +702,13 @@ Notes on the grammar:
   type written with `[]`, so `new int[][3]` creates an array of three `int[]`
   elements. Only the outermost bracket pair carries a length.
 - A `struct_literal` is recognized when an identifier is immediately followed
-  by `{` in an expression position. There is no other prefix `{` construct in
-  expression position, so this is unambiguous for valid programs, but it means
-  malformed conditions such as `if (x {` are read as a struct literal named
-  `x`.
+  by `{` in an expression position. A `variant_literal` is recognized when an
+  identifier is followed by `.`, another identifier, and then `{`. Neither form
+  conflicts with anything else in expression position, so an expression such as
+  `a.b` is member access while `A.b { ... }` constructs a union variant.
+- `Type.Variant` without braces is an ordinary member access to the parser; the
+  checker reinterprets it as a variant reference when `Type` names an enum or
+  union (Section 23).
 - Parentheses group expressions but produce no distinct syntax-tree node.
 - The assignment operators are the only right-associative operators. All other
   binary operators are left-associative.
@@ -795,9 +811,10 @@ Notes:
 - `%` is not defined for `float`.
 - Relational operators are numeric-only; comparing `bool` or `string` values
   with `<` is an error.
-- Equality is defined for the primitive types only. Comparing two struct values
-  or two array values with `==` is an error. Comparing two `string` values
-  compares their contents, never their addresses.
+- Equality is defined for the primitive types and enums. Comparing two struct
+  values, two array values, or two union values with `==` is an error. Comparing
+  two `string` values compares their contents, never their addresses, and
+  comparing two enum values compares their cases (Section 23).
 - There is no unary `+` operator: the grammar in Section 17 does not include it.
 - The checker does not diagnose constant division by zero and does not guarantee
   overflow behavior; those are **deferred**.
@@ -895,8 +912,8 @@ the same name shadows the built-in.
 **`print`**
 
 - It accepts **one or more** arguments, and every argument must be `int`,
-  `float`, `bool`, or `string`. Calling it with no arguments, or with a struct
-  or array value, is an error.
+  `float`, `bool`, or `string`. Calling it with no arguments, or with a struct,
+  array, enum, or union value, is an error.
 - Its return type is `void`, so a call to `print` cannot be used as a value.
 - The output format is defined in Section 13 and the runtime in Section 19.4.
 
@@ -938,7 +955,8 @@ malformed or incomplete syntax trees.
 3. `void` is only a function return type.
 4. `-> void` is equivalent to no return type.
 5. Struct equality is not supported; string `==`/`!=` compare contents.
-6. Relational operators are numeric-only; equality is primitive-only.
+6. Relational operators are numeric-only; equality is defined for primitives
+   and enums and is not supported for structs, arrays, or unions.
 7. A variable initializer is optional, and reading an uninitialized variable is
    not diagnosed.
 8. Visibility modifiers are accepted on top-level `fn` and `struct`; the default
@@ -968,6 +986,8 @@ are expected to evolve.
 | `string` | `const char *` (immutable, NUL-terminated byte string) |
 | `void` | `void` (function return position only) |
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
+| enum type `E` | `ktn_e_E` (a typedef for `int64_t`) |
+| union type `U` | `ktn_s_U *` (a GC-managed object reference) |
 | array type `T[]` | `ktn_array *` (a GC-managed dynamic array) |
 
 Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
@@ -1120,6 +1140,8 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     relative path, and default visibility is private (Section 22).
 14. File reading is limited to `read_file`, and a failed read is fatal
     (Section 22.2).
+15. Enums are value types compared by case; unions are GC-managed references
+    inspected only with an exhaustive `match` (Section 23).
 
 ---
 
@@ -1495,3 +1517,179 @@ The following are **not** implemented and must not be assumed:
 7. The entry point must be in the root module.
 8. `read_file` is fatal on failure; recoverable I/O errors are deferred.
 9. The whole program is loaded and compiled together, with no caching.
+
+---
+
+## 23. Enums and tagged unions (provisional)
+
+This section records how a Kitten value can hold one of several explicitly
+declared alternatives. It is **provisional**: the feature is the first working
+design and may evolve.
+
+### 23.1 Enums
+
+An enum names a fixed set of alternatives:
+
+```text
+enum TokenKind {
+    Identifier,
+    Integer,
+    StringLiteral,
+    EndOfFile
+}
+```
+
+- A case is written with a comma between cases; a trailing comma is not allowed.
+  An enum must have at least one case.
+- A value of the enum type is one of its cases. A case reference is written
+  `EnumName.CaseName` and has the enum type.
+- Enum types match exactly. A `TokenKind` is not an `int`, and there is no
+  implicit conversion between an enum and an integer in either direction.
+- Two enum values may be compared with `==` and `!=`, which compare the cases
+  they denote. Relational operators are not defined for enums.
+- A case name must be unique within its enum.
+
+### 23.2 Tagged unions
+
+A tagged union holds exactly one of its variants, and each variant may carry
+fields:
+
+```text
+union Expression {
+    IntegerLiteral { int value; }
+    Name { string nickname; }
+    Binary { Expression left; Expression right; }
+    Missing
+}
+```
+
+- A variant with fields is written `VariantName { type name; ... }`; a variant
+  with no fields is just `VariantName`. Variants are self-delimiting, so no
+  separator is needed between them. A union must have at least one variant.
+- A variant name must be unique within its union, and a field name must be
+  unique within its variant.
+- A union value is a **reference** to a GC-managed object, like a struct value.
+  Copying a union value copies the reference.
+
+### 23.3 Construction
+
+- A payload-less variant used as a value is written `TypeName.VariantName` — for
+  example `Expression.Missing`. It has the union type.
+- A variant with fields is constructed with named field initializers:
+  `TypeName.VariantName { field = value, ... }`. Every field of the variant must
+  be initialized exactly once, and each value must have the field's declared
+  type. There is no positional form and no trailing comma.
+- Using a payload variant without braces, or constructing a payload-less variant
+  with braces, is an error.
+
+### 23.4 Matching: safe variant inspection
+
+`match` is the only way to reach a variant's fields:
+
+```text
+match (expression) {
+    IntegerLiteral(value) {
+        print(value);
+    }
+    Binary(left, right) {
+        print("binary");
+    }
+    Missing {
+        print("missing");
+    }
+}
+```
+
+- The scrutinee must be an enum or union value; otherwise it is an error.
+- Each arm names a variant and may bind its fields to fresh locals in
+  parentheses, in field order, with the fields' declared types. The bindings are
+  visible only inside the arm body.
+- A match must have exactly one arm for every variant of the scrutinee's type,
+  so it is **exhaustive**. A missing arm, a duplicate arm, an unknown variant,
+  and a binding count that does not match the variant's field count are errors.
+  There is no wildcard arm in this revision.
+- Inside an arm, only that variant's fields are bound, so reading a field that
+  belongs to a different variant is impossible: the language provides no other
+  way to read a payload.
+- There is no `.field` access on an enum or union value. Attempting it is an
+  error that points at `match`.
+- The scrutinee is evaluated once.
+
+### 23.5 Recursive and mutually recursive types
+
+Because a union value is a reference, a variant field may be of the union's own
+type (`Expression left;`) or of another struct or union type, including types
+declared later or in another module. Recursive and mutually recursive types are
+therefore supported and require no manual memory management.
+
+### 23.6 Zero values and uninitialized values
+
+- A new union object is allocated and its tag set by its constructor, so every
+  constructed union value is well defined.
+- Where a union value is zero-initialized (for example an unassigned array
+  element), its reference is null. Matching a null union reference is a fatal,
+  deterministic runtime error ("match on a null union reference"), never
+  undefined behavior.
+- An enum is a value type. A zero-initialized enum (for example an unassigned
+  array element) is the case with tag 0, which is the first case declared.
+- An uninitialized local variable of any type is not diagnosed in this revision
+  (Section 18.4).
+
+### 23.7 Equality, printing, and conversions
+
+- Enums support `==` and `!=`; unions, like structs and arrays, do not.
+- `print` does not accept enum or union values. Print the fields or the result
+  of a `match` instead.
+- There is no conversion between an enum and an integer, and no way to obtain a
+  variant's tag as a value.
+
+### 23.8 Visibility and modules
+
+- An `enum` or `union` declaration may be marked `public` or `private`, with the
+  same rules as structs: the default is private (module-local) and `public`
+  makes it visible to other modules (Section 22).
+- A type's variants are visible wherever the type is; variants are not
+  separately visible. A private enum or union referenced from another module is
+  a private-access error.
+
+### 23.9 C representation
+
+- An enum is a C `int64_t` typedef, `ktn_e_<Module>Name`, together with one
+  integer constant per case, `ktn_ec_<Module>Enum_Case`, numbered in declaration
+  order.
+- A union is a C struct, `ktn_s_<Module>Name`, holding an `int64_t` tag member
+  and every variant's fields as separate, variant-prefixed members
+  (`ktn_v_<Variant>_<field>`). A flat layout is used rather than a C `union` so
+  that reading a field is never undefined behavior; only the active variant's
+  members are read, always after the tag is checked.
+- Each variant has a constructor, `ktn_new_<Module>Union_Variant`, which
+  allocates through the GC, sets the tag, and then sets the fields.
+- A match compiles to a `switch` on the tag. The tag is compared against the
+  union's variant constants or the enum's case constants. Composite and imported
+  types are mangled by module number like other top-level names (Section 22.6).
+
+### 23.10 Deferred
+
+The following are **not** implemented and must not be assumed:
+
+- `match` as an expression, and a wildcard or default arm.
+- Converting an enum to or from an integer, and iterating an enum's cases.
+- Comparing unions structurally, and hashing or ordering variants.
+- Variant payloads declared with anonymous struct types, tuples, or generics.
+- A `switch` statement, `break`, and `continue` (unrelated to `match`).
+- Exhaustiveness warnings when a type gains a variant in another module are
+  errors rather than warnings, because matches are checked exhaustively.
+
+### 23.11 Provisional decisions recorded
+
+1. Enums are value types (`int64_t` tags); unions are GC-managed references.
+2. Variant construction uses named fields, `Type.Variant { field = value }`, and
+   a payload-less variant is written `Type.Variant`.
+3. `match` is a statement and must be exhaustive, with no wildcard arm.
+4. Payload fields are reachable only through `match` bindings; there is no
+   field access on a union.
+5. Matching a null union reference is a fatal runtime error.
+6. Enums are comparable with `==`/`!=`; unions are not comparable, printable, or
+   convertible to integers.
+7. Union values use a flat C struct rather than a C `union`, trading memory for
+   well-defined behavior.

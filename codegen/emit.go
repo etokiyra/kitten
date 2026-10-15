@@ -82,6 +82,9 @@ func (g *generator) emitStatement(statement parser.Stmt) error {
 		g.line("return %s;", value)
 		return nil
 
+	case *parser.MatchStmt:
+		return g.emitMatch(s)
+
 	default:
 		if statement == nil {
 			return &Error{Line: 1, Column: 1, Message: "nil statement"}
@@ -231,6 +234,8 @@ func (g *generator) expression(expression parser.Expr) (string, error) {
 		return g.memberExpression(e)
 	case *parser.StructLiteral:
 		return g.structLiteral(e)
+	case *parser.VariantLiteral:
+		return g.variantLiteral(e)
 	case *parser.NewArrayExpr:
 		return g.newArrayExpression(e)
 	case *parser.IndexExpr:
@@ -330,16 +335,79 @@ func (g *generator) assignExpression(expression *parser.AssignExpr) (string, err
 	return fmt.Sprintf("(%s %s %s)", target, expression.Operator, value), nil
 }
 
-// memberExpression renders struct field access.
+// memberExpression renders struct field access, or a qualified variant
+// reference ("Enum.Case" or "Union.Variant") when the checker recorded one.
 func (g *generator) memberExpression(expression *parser.MemberExpr) (string, error) {
 	if expression == nil || expression.Receiver == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete member expression"}
 	}
+
+	if variant, ok := g.checked.VariantRefs[expression]; ok {
+		namedType, err := g.expressionType(expression)
+		if err != nil {
+			return "", err
+		}
+		return g.variantReference(namedType, variant)
+	}
+
 	receiver, err := g.expression(expression.Receiver)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("(%s)->%s", receiver, fieldName(expression.Member)), nil
+}
+
+// variantReference renders a payload-less variant used as a value: an enum case
+// is a tag constant, and a payload-less union variant is a constructor call.
+func (g *generator) variantReference(namedType *checker.Type, variant *checker.Variant) (string, error) {
+	if namedType == nil || variant == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "variant reference was not resolved"}
+	}
+	if namedType.IsUnion() {
+		return fmt.Sprintf("%s()", variantConstructorName(namedType, variant.Name)), nil
+	}
+	return enumCaseName(namedType, variant.Name), nil
+}
+
+// variantLiteral renders "Union.Variant { field = value, ... }" as a call to the
+// variant's constructor, with values reordered into field declaration order.
+func (g *generator) variantLiteral(expression *parser.VariantLiteral) (string, error) {
+	if expression == nil || expression.Type == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "incomplete variant literal"}
+	}
+	unionType, err := g.declaredType(expression.Type)
+	if err != nil {
+		return "", err
+	}
+	if !unionType.IsUnion() {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: fmt.Sprintf("%s is not a union type", unionType)}
+	}
+	variant := unionType.VariantIndex[expression.Variant]
+	if variant == nil {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: fmt.Sprintf("union %s has no variant %q", unionType.Name, expression.Variant)}
+	}
+
+	values := make(map[string]parser.Expr, len(expression.Fields))
+	for _, field := range expression.Fields {
+		if field == nil {
+			return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: "variant literal contains a nil field"}
+		}
+		values[field.Name] = field.Value
+	}
+
+	arguments := make([]string, 0, len(variant.Fields))
+	for _, field := range variant.Fields {
+		value, ok := values[field.Name]
+		if !ok {
+			return "", &Error{Line: expression.OpenBrace.Line, Column: expression.OpenBrace.Column, Message: fmt.Sprintf("variant literal for %s.%s is missing field %q", unionType.Name, variant.Name, field.Name)}
+		}
+		rendered, err := g.expression(value)
+		if err != nil {
+			return "", err
+		}
+		arguments = append(arguments, rendered)
+	}
+	return fmt.Sprintf("%s(%s)", variantConstructorName(unionType, variant.Name), strings.Join(arguments, ", ")), nil
 }
 
 // structLiteral renders a struct literal as a call to the struct's constructor,
@@ -493,6 +561,96 @@ func (g *generator) indexExpression(expression *parser.IndexExpr) (string, error
 		return "", err
 	}
 	return fmt.Sprintf("(*((%s *)%s(%s, %s)))", elementCType, runtime.ArrayAtFunction, target, index), nil
+}
+
+// emitMatch writes a match statement.
+//
+// The scrutinee is evaluated once into a temporary. For a union, the temporary
+// is checked for null before its tag is read, so matching a null reference is a
+// deterministic runtime error rather than undefined behavior. Each arm becomes a
+// switch case that binds the variant's fields to locals of the field types; the
+// checker has already proved the arms are exhaustive and the bindings match.
+func (g *generator) emitMatch(statement *parser.MatchStmt) error {
+	if statement == nil || statement.Scrutinee == nil {
+		return &Error{Line: 1, Column: 1, Message: "incomplete match statement"}
+	}
+	scrutineeType, err := g.expressionType(statement.Scrutinee)
+	if err != nil {
+		return err
+	}
+	if !scrutineeType.IsVariant() {
+		return &Error{Line: statement.At.Line, Column: statement.At.Column, Message: fmt.Sprintf("match requires an enum or union value, found %s", scrutineeType)}
+	}
+
+	cScrutinee, err := cType(scrutineeType)
+	if err != nil {
+		return &Error{Line: statement.At.Line, Column: statement.At.Column, Message: err.Error()}
+	}
+	scrutinee, err := g.expression(statement.Scrutinee)
+	if err != nil {
+		return err
+	}
+
+	temporary := g.newTemp()
+	g.line("%s %s = %s;", cScrutinee, temporary, scrutinee)
+
+	if scrutineeType.IsUnion() {
+		g.line("if (%s == NULL) { %s(\"match on a null union reference\"); }", temporary, runtime.FailFunction)
+	}
+
+	g.writeIndent()
+	if scrutineeType.IsUnion() {
+		g.write(fmt.Sprintf("switch (%s->%s) {\n", temporary, tagFieldName))
+	} else {
+		g.write(fmt.Sprintf("switch (%s) {\n", temporary))
+	}
+	g.indent++
+
+	for _, arm := range statement.Arms {
+		variant := scrutineeType.VariantIndex[arm.Variant]
+		if variant == nil {
+			return &Error{Line: arm.At.Line, Column: arm.At.Column, Message: fmt.Sprintf("variant %q was not resolved", arm.Variant)}
+		}
+
+		g.writeIndent()
+		if scrutineeType.IsUnion() {
+			g.write(fmt.Sprintf("case %s: {\n", unionTagName(scrutineeType, variant.Name)))
+		} else {
+			g.write(fmt.Sprintf("case %s: {\n", enumCaseName(scrutineeType, variant.Name)))
+		}
+		g.indent++
+
+		for bindingIndex, binding := range arm.Bindings {
+			field := variant.Fields[bindingIndex]
+			fieldCType, err := cType(field.Type)
+			if err != nil {
+				return &Error{Line: arm.At.Line, Column: arm.At.Column, Message: err.Error()}
+			}
+			g.line("%s %s = %s->%s;", fieldCType, variableName(binding), temporary, variantFieldName(variant.Name, field.Name))
+			// The arm body may not use every binding; a void cast keeps an
+			// unused binding from warning without changing behavior.
+			g.line("(void)%s;", variableName(binding))
+		}
+
+		for _, bodyStatement := range arm.Body.Statements {
+			if err := g.emitStatement(bodyStatement); err != nil {
+				return err
+			}
+		}
+		g.line("break;")
+		g.indent--
+		g.line("}")
+	}
+
+	// The checker proves the arms are exhaustive, so this default is defensive:
+	// an out-of-range tag fails deterministically instead of doing nothing.
+	g.indent--
+	g.line("default:")
+	g.indent++
+	g.line("%s(\"match on an invalid variant tag\");", runtime.FailFunction)
+	g.indent--
+	g.line("}")
+	return nil
 }
 
 // printExpression expands print(a, b, ...) into a comma expression that writes

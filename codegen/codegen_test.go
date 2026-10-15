@@ -403,9 +403,9 @@ func TestGenerateRejectsNilInputs(t *testing.T) {
 func emptyResult() *checker.Result {
 	return &checker.Result{
 		Functions:       map[string]*checker.Function{},
-		StructTypes:     map[string]*checker.Type{},
+		Types:           map[string]*checker.Type{},
 		FunctionDecls:   map[*parser.FunctionDecl]*checker.Function{},
-		StructDecls:     map[*parser.StructDecl]*checker.Type{},
+		TypeDecls:       map[parser.Decl]*checker.Type{},
 		ExpressionTypes: map[parser.Expr]*checker.Type{},
 		TypeRefs:        map[*parser.TypeRef]*checker.Type{},
 		Symbols:         map[*parser.Identifier]*checker.Symbol{},
@@ -422,7 +422,7 @@ func resultForMain(program *parser.Program) *checker.Result {
 		case *parser.FunctionDecl:
 			result.FunctionDecls[d] = &checker.Function{Name: d.Name, ReturnType: checker.VoidType}
 		case *parser.StructDecl:
-			result.StructDecls[d] = &checker.Type{
+			result.TypeDecls[d] = &checker.Type{
 				Kind:   checker.KindStruct,
 				Name:   d.Name,
 				Struct: &checker.StructInfo{Name: d.Name, FieldIndex: map[string]*checker.StructField{}},
@@ -679,5 +679,145 @@ public fn scale(Point point) -> int {
 	}
 	if first != second {
 		t.Errorf("multi-module generation is not deterministic")
+	}
+}
+
+func TestEnumGeneration(t *testing.T) {
+	generated := generateSource(t, `enum Kind {
+    A,
+    B
+}
+fn main() {
+    Kind kind = Kind.B;
+    print(kind == Kind.A);
+}
+`)
+	assertContains(t, generated, "typedef int64_t ktn_e_Kind;")
+	assertContains(t, generated, "ktn_ec_Kind_A = 0,")
+	assertContains(t, generated, "ktn_ec_Kind_B = 1,")
+	assertContains(t, generated, "ktn_var_kind == ktn_ec_Kind_A")
+}
+
+func TestUnionGeneration(t *testing.T) {
+	generated := generateSource(t, `union Box {
+    Full { int value; string label; }
+    Empty
+}
+fn main() {
+    Box box = Box.Full { value = 1, label = "x" };
+    match (box) {
+        Full(value, label) { print(value, label); }
+        Empty { print("empty"); }
+    }
+}
+`)
+	assertContains(t, generated, "struct ktn_s_Box {")
+	assertContains(t, generated, "int64_t ktn_tag;")
+	assertContains(t, generated, "int64_t ktn_v_Full_value;")
+	assertContains(t, generated, "const char * ktn_v_Full_label;")
+	assertContains(t, generated, "ktn_uc_Box_Full = 0,")
+	assertContains(t, generated, "ktn_uc_Box_Empty = 1,")
+	assertContains(t, generated, `ktn_new_Box_Full(1, "x")`)
+	assertContains(t, generated, "switch (ktn_match_0->ktn_tag)")
+	assertContains(t, generated, "case ktn_uc_Box_Full:")
+	assertContains(t, generated, "ktn_var_value = ktn_match_0->ktn_v_Full_value;")
+	assertContains(t, generated, "ktn_new_Box_Empty(void)")
+}
+
+func TestRecursiveUnionGeneration(t *testing.T) {
+	generated := generateSource(t, `union Tree {
+    Leaf { int value; }
+    Node { Tree left; Tree right; }
+}
+fn main() {
+    Tree tree = Tree.Node {
+        left = Tree.Leaf { value = 1 },
+        right = Tree.Leaf { value = 2 }
+    };
+}
+`)
+	// The union struct refers to itself through pointer fields, which the
+	// forward typedef makes possible.
+	assertContains(t, generated, "typedef struct ktn_s_Tree ktn_s_Tree;")
+	assertContains(t, generated, "ktn_s_Tree * ktn_v_Node_left;")
+	assertContains(t, generated, "ktn_s_Tree * ktn_v_Node_right;")
+}
+
+func TestEnumNamesAreMangledByModule(t *testing.T) {
+	generated, err := generateModules(t,
+		`fn main() {
+    Kind kind = Kind.B;
+    print(describe(kind));
+}
+`,
+		`public enum Kind {
+    A,
+    B
+}
+public fn describe(Kind kind) -> string {
+    match (kind) {
+        A { return "a"; }
+        B { return "b"; }
+    }
+}
+`,
+	)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	assertContains(t, generated, "typedef int64_t ktn_e_1_Kind;")
+	assertContains(t, generated, "ktn_ec_1_Kind_B = 1,")
+	assertContains(t, generated, "ktn_fn_1_describe")
+	assertContains(t, generated, "ktn_var_kind = ktn_ec_1_Kind_B")
+}
+
+func TestUnionNamesAreMangledByModule(t *testing.T) {
+	generated, err := generateModules(t,
+		`fn main() {
+    Box box = Box.Full { value = 1 };
+    print(unwrap(box));
+}
+`,
+		`public union Box {
+    Full { int value; }
+    Empty
+}
+public fn unwrap(Box box) -> int {
+    match (box) {
+        Full(value) { return value; }
+        Empty { return 0; }
+    }
+}
+`,
+	)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	assertContains(t, generated, "struct ktn_s_1_Box {")
+	assertContains(t, generated, "ktn_uc_1_Box_Full = 0,")
+	assertContains(t, generated, "ktn_new_1_Box_Full(1)")
+}
+
+func TestVariantGenerationIsDeterministic(t *testing.T) {
+	source := `enum Kind {
+    A,
+    B
+}
+union Box {
+    Full { int value; }
+    Empty
+}
+fn main() {
+    Box box = Box.Full { value = 1 };
+    match (box) {
+        Full(value) { print(value); }
+        Empty { print("empty"); }
+    }
+}
+`
+	first := generateSource(t, source)
+	second := generateSource(t, source)
+	if first != second {
+		t.Errorf("variant generation is not deterministic")
 	}
 }

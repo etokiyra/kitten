@@ -19,6 +19,7 @@ func TestHeaderDeclaresRuntimeABI(t *testing.T) {
 	for _, symbol := range []string{
 		InitFunction,
 		AllocFunction,
+		FailFunction,
 		StringEqualFunction,
 		StringConcatFunction,
 		StringAppendFunction,

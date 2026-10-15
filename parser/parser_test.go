@@ -128,6 +128,12 @@ func renderExpression(expression Expr) string {
 			parts = append(parts, fmt.Sprintf("(%s %s)", field.Name, renderExpression(field.Value)))
 		}
 		return "(" + strings.Join(parts, " ") + ")"
+	case *VariantLiteral:
+		parts := []string{"variant", node.Type.Name + "." + node.Variant}
+		for _, field := range node.Fields {
+			parts = append(parts, fmt.Sprintf("(%s %s)", field.Name, renderExpression(field.Value)))
+		}
+		return "(" + strings.Join(parts, " ") + ")"
 	case *NewArrayExpr:
 		return fmt.Sprintf("(new %s %s)", node.Element.String(), renderExpression(node.Length))
 	case *IndexExpr:
@@ -925,6 +931,41 @@ func TestParseErrors(t *testing.T) {
 			column:   15,
 			contains: "';'",
 		},
+		{
+			name:     "enum without a case",
+			source:   "enum E {",
+			line:     1,
+			column:   9,
+			contains: "a case name",
+		},
+		{
+			name:     "trailing comma in an enum",
+			source:   "enum E { A, }",
+			line:     1,
+			column:   13,
+			contains: "trailing comma is not allowed in an enum",
+		},
+		{
+			name:     "union without a closing brace",
+			source:   "union U {",
+			line:     1,
+			column:   10,
+			contains: "expected '}' to close the union body",
+		},
+		{
+			name:     "match without a closing brace",
+			source:   "fn main() {\n    match (x) {\n",
+			line:     3,
+			column:   1,
+			contains: "expected '}' to close the match body",
+		},
+		{
+			name:     "variant literal without a closing brace",
+			source:   "fn main() {\n    Box b = Box.Full { value = 1;\n}\n",
+			line:     2,
+			column:   33,
+			contains: "to close a variant literal",
+		},
 	}
 
 	for _, testCase := range cases {
@@ -1110,5 +1151,118 @@ func TestImportPathDecodesEscapes(t *testing.T) {
 	}
 	if importDeclaration.Path != `a\b.ktn` {
 		t.Errorf("path = %q, want %q", importDeclaration.Path, `a\b.ktn`)
+	}
+}
+
+func TestEnumDeclaration(t *testing.T) {
+	program, err := ParseSource("enum TokenKind {\n    Identifier,\n    Integer,\n    EndOfFile\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	declaration, ok := program.Declarations[0].(*EnumDecl)
+	if !ok {
+		t.Fatalf("declaration is %T, want *EnumDecl", program.Declarations[0])
+	}
+	if declaration.Name != "TokenKind" {
+		t.Errorf("name = %q, want TokenKind", declaration.Name)
+	}
+	if declaration.At != at(1, 1) {
+		t.Errorf("position = %v, want 1:1", declaration.At)
+	}
+	want := []string{"Identifier", "Integer", "EndOfFile"}
+	if len(declaration.Cases) != len(want) {
+		t.Fatalf("got %d cases, want %d", len(declaration.Cases), len(want))
+	}
+	for index, name := range want {
+		if declaration.Cases[index].Name != name {
+			t.Errorf("case %d = %q, want %q", index, declaration.Cases[index].Name, name)
+		}
+	}
+}
+
+func TestUnionDeclaration(t *testing.T) {
+	program, err := ParseSource("union Expression {\n    IntegerLiteral { int value; }\n    Empty\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	declaration, ok := program.Declarations[0].(*UnionDecl)
+	if !ok {
+		t.Fatalf("declaration is %T, want *UnionDecl", program.Declarations[0])
+	}
+	if declaration.Name != "Expression" {
+		t.Errorf("name = %q, want Expression", declaration.Name)
+	}
+	if len(declaration.Variants) != 2 {
+		t.Fatalf("got %d variants, want 2", len(declaration.Variants))
+	}
+
+	first := declaration.Variants[0]
+	if first.Name != "IntegerLiteral" || len(first.Fields) != 1 {
+		t.Fatalf("variant 0 = %q with %d fields, want IntegerLiteral with 1", first.Name, len(first.Fields))
+	}
+	if first.Fields[0].Name != "value" || first.Fields[0].Type.Name != "int" {
+		t.Errorf("field 0 = %s %s, want int value", first.Fields[0].Type.Name, first.Fields[0].Name)
+	}
+	if second := declaration.Variants[1]; second.Name != "Empty" || len(second.Fields) != 0 {
+		t.Errorf("variant 1 = %q with %d fields, want Empty with 0", second.Name, len(second.Fields))
+	}
+}
+
+func TestVariantLiteralExpression(t *testing.T) {
+	expression := parseExpressionSource(t, "Box.Full { value = 1 }")
+	want := "(variant Box.Full (value 1))"
+	if rendered := renderExpression(expression); rendered != want {
+		t.Errorf("rendered as %q, want %q", rendered, want)
+	}
+
+	literal, ok := expression.(*VariantLiteral)
+	if !ok {
+		t.Fatalf("expression is %T, want *VariantLiteral", expression)
+	}
+	if literal.Type.Name != "Box" || literal.Variant != "Full" {
+		t.Errorf("literal = %s.%s, want Box.Full", literal.Type.Name, literal.Variant)
+	}
+}
+
+func TestMatchStatement(t *testing.T) {
+	program, err := ParseSource(`fn classify(Box box) -> int {
+    match (box) {
+        Full(value) {
+            return value;
+        }
+        Empty {
+            return 0;
+        }
+    }
+}
+`)
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	statement, ok := firstFunction(t, program).Body.Statements[0].(*MatchStmt)
+	if !ok {
+		t.Fatalf("statement is %T, want *MatchStmt", firstFunction(t, program).Body.Statements[0])
+	}
+	if statement.At != at(2, 5) {
+		t.Errorf("position = %v, want 2:5", statement.At)
+	}
+	if len(statement.Arms) != 2 {
+		t.Fatalf("got %d arms, want 2", len(statement.Arms))
+	}
+
+	full := statement.Arms[0]
+	if full.Variant != "Full" {
+		t.Errorf("arm 0 variant = %q, want Full", full.Variant)
+	}
+	if len(full.Bindings) != 1 || full.Bindings[0] != "value" {
+		t.Errorf("arm 0 bindings = %v, want [value]", full.Bindings)
+	}
+	if len(full.Body.Statements) != 1 {
+		t.Errorf("arm 0 body has %d statements, want 1", len(full.Body.Statements))
+	}
+
+	empty := statement.Arms[1]
+	if empty.Variant != "Empty" || len(empty.Bindings) != 0 {
+		t.Errorf("arm 1 = %q with bindings %v, want Empty with none", empty.Variant, empty.Bindings)
 	}
 }

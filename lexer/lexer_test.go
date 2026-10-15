@@ -74,6 +74,9 @@ func TestKeywords(t *testing.T) {
 		{"import", Import},
 		{"public", Public},
 		{"private", Private},
+		{"enum", Enum},
+		{"union", Union},
+		{"match", Match},
 	}
 
 	for _, testCase := range cases {

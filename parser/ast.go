@@ -177,6 +177,59 @@ type Field struct {
 // Pos reports where the field begins (its type).
 func (f *Field) Pos() Position { return f.At }
 
+// EnumDecl is a top-level enum declaration:
+//
+//	enum Name { Case, Case, ... }
+//
+// An enum names a fixed set of alternatives, each without a payload.
+type EnumDecl struct {
+	At         Position
+	Visibility Visibility
+	Name       string
+	Cases      []*EnumCase
+}
+
+// EnumCase is one alternative of an enum.
+type EnumCase struct {
+	At   Position
+	Name string
+}
+
+// Pos reports where the case name begins.
+func (c *EnumCase) Pos() Position { return c.At }
+
+// UnionDecl is a top-level tagged-union declaration:
+//
+//	union Name {
+//	    Variant { fields }
+//	    PayloadlessVariant
+//	}
+//
+// A union value holds exactly one variant, and a variant may carry fields.
+type UnionDecl struct {
+	At         Position
+	Visibility Visibility
+	Name       string
+	Variants   []*VariantDecl
+}
+
+// VariantDecl is one alternative of a tagged union. A variant with no fields is
+// written with just its name.
+type VariantDecl struct {
+	At     Position
+	Name   string
+	Fields []*Field
+}
+
+// Pos reports where the variant name begins.
+func (v *VariantDecl) Pos() Position { return v.At }
+
+// Pos reports where the enum declaration begins.
+func (d *EnumDecl) Pos() Position { return d.At }
+
+// Pos reports where the union declaration begins.
+func (d *UnionDecl) Pos() Position { return d.At }
+
 // Pos reports where the function declaration begins, including any visibility
 // modifier.
 func (d *FunctionDecl) Pos() Position { return d.At }
@@ -187,6 +240,8 @@ func (d *StructDecl) Pos() Position { return d.At }
 
 func (*FunctionDecl) declNode() {}
 func (*StructDecl) declNode()   {}
+func (*EnumDecl) declNode()     {}
+func (*UnionDecl) declNode()    {}
 
 // BlockStmt is a brace-delimited sequence of statements. It is used for
 // function bodies and for the bodies of control-flow statements.
@@ -272,6 +327,38 @@ type ReturnStmt struct {
 // Pos reports the position of the "return" keyword.
 func (s *ReturnStmt) Pos() Position { return s.At }
 
+// MatchStmt inspects which variant an enum or union value holds:
+//
+//	match (scrutinee) {
+//	    Variant(binding, ...) {
+//	        ...
+//	    }
+//	}
+//
+// Every variant of the scrutinee's type must have exactly one arm, so a match is
+// exhaustive. The bindings name the variant's fields inside the arm body and have
+// the fields' declared types.
+type MatchStmt struct {
+	At        Position // position of the "match" keyword
+	Scrutinee Expr
+	Arms      []*MatchArm
+}
+
+// Pos reports the position of the "match" keyword.
+func (s *MatchStmt) Pos() Position { return s.At }
+
+// MatchArm is one variant arm of a match statement.
+type MatchArm struct {
+	At         Position   // position of the variant name
+	Variant    string     // the variant this arm handles
+	Bindings   []string   // names bound to the variant's fields, in field order
+	BindingsAt []Position // positions of the binding names
+	Body       *BlockStmt
+}
+
+// Pos reports where the variant name begins.
+func (a *MatchArm) Pos() Position { return a.At }
+
 func (*BlockStmt) stmtNode()   {}
 func (*VarDeclStmt) stmtNode() {}
 func (*ExprStmt) stmtNode()    {}
@@ -279,6 +366,7 @@ func (*IfStmt) stmtNode()      {}
 func (*WhileStmt) stmtNode()   {}
 func (*ForStmt) stmtNode()     {}
 func (*ReturnStmt) stmtNode()  {}
+func (*MatchStmt) stmtNode()   {}
 
 // Identifier is a reference to a name. Whether the name is defined, and what it
 // refers to, are deferred to the checker.
@@ -428,6 +516,23 @@ type FieldInit struct {
 // Pos reports where the field name begins.
 func (f *FieldInit) Pos() Position { return f.At }
 
+// VariantLiteral constructs a tagged-union variant with named fields:
+//
+//	UnionName.Variant { field = value, ... }
+//
+// Type is the union type name and Variant is the variant name. A variant that
+// carries no fields is written without braces and is not a VariantLiteral.
+type VariantLiteral struct {
+	At        Position
+	Type      *TypeRef
+	Variant   string
+	OpenBrace Position
+	Fields    []*FieldInit
+}
+
+// Pos reports where the union type name begins.
+func (e *VariantLiteral) Pos() Position { return e.At }
+
 // NewArrayExpr creates an array, written "new Element[Length]".
 //
 // Element is the element type and Length is an int expression giving the number
@@ -455,16 +560,17 @@ type IndexExpr struct {
 // Pos reports where the indexed target begins.
 func (e *IndexExpr) Pos() Position { return e.Target.Pos() }
 
-func (*Identifier) exprNode()    {}
-func (*IntLiteral) exprNode()    {}
-func (*FloatLiteral) exprNode()  {}
-func (*StringLiteral) exprNode() {}
-func (*BoolLiteral) exprNode()   {}
-func (*UnaryExpr) exprNode()     {}
-func (*BinaryExpr) exprNode()    {}
-func (*AssignExpr) exprNode()    {}
-func (*CallExpr) exprNode()      {}
-func (*MemberExpr) exprNode()    {}
-func (*StructLiteral) exprNode() {}
-func (*NewArrayExpr) exprNode()  {}
-func (*IndexExpr) exprNode()     {}
+func (*Identifier) exprNode()     {}
+func (*IntLiteral) exprNode()     {}
+func (*FloatLiteral) exprNode()   {}
+func (*StringLiteral) exprNode()  {}
+func (*BoolLiteral) exprNode()    {}
+func (*UnaryExpr) exprNode()      {}
+func (*BinaryExpr) exprNode()     {}
+func (*AssignExpr) exprNode()     {}
+func (*CallExpr) exprNode()       {}
+func (*MemberExpr) exprNode()     {}
+func (*StructLiteral) exprNode()  {}
+func (*VariantLiteral) exprNode() {}
+func (*NewArrayExpr) exprNode()   {}
+func (*IndexExpr) exprNode()      {}

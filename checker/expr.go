@@ -45,6 +45,8 @@ func (c *checker) checkExpression(expression parser.Expr, scope *Scope) (*Type, 
 		return c.checkMember(e, scope)
 	case *parser.StructLiteral:
 		return c.checkStructLiteral(e, scope)
+	case *parser.VariantLiteral:
+		return c.checkVariantLiteral(e, scope)
 	case *parser.NewArrayExpr:
 		return c.checkNewArray(e, scope)
 	case *parser.IndexExpr:
@@ -71,13 +73,13 @@ func (c *checker) checkIdentifier(identifier *parser.Identifier, scope *Scope) (
 	if _, ok := c.builtins[identifier.Name]; ok {
 		return nil, c.errorAt(InvalidExpression, identifier.At, "function %q cannot be used as a value", identifier.Name)
 	}
-	if _, ok := c.lookupStruct(identifier.Name); ok {
+	if _, ok := c.lookupType(identifier.Name); ok {
 		return nil, c.errorAt(InvalidExpression, identifier.At, "type %q cannot be used as a value", identifier.Name)
 	}
 	if path, ok := c.privateFunction(identifier.Name); ok {
 		return nil, c.errorAt(PrivateAccess, identifier.At, "function %q is private to %s", identifier.Name, path)
 	}
-	if path, ok := c.privateStruct(identifier.Name); ok {
+	if path, ok := c.privateType(identifier.Name); ok {
 		return nil, c.errorAt(PrivateAccess, identifier.At, "type %q is private to %s", identifier.Name, path)
 	}
 	return nil, c.errorAt(UndefinedName, identifier.At, "undefined name %q", identifier.Name)
@@ -205,7 +207,7 @@ func (c *checker) checkEquality(operator string, left, right *Type, at parser.Po
 	if left != right {
 		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
 	}
-	if left.IsStruct() || left.IsArray() {
+	if left.IsStruct() || left.IsArray() || left.IsUnion() {
 		return nil, c.errorAt(InvalidOperator, at, "operator %q is not supported for values of type %s", operator, left)
 	}
 	return BoolType, nil
@@ -323,10 +325,23 @@ func (c *checker) assignableType(expression parser.Expr, scope *Scope) (*Type, e
 }
 
 // checkMember checks a member access expression used as a value.
+//
+// When the receiver is a type name rather than a value — "Enum.Case" or
+// "Union.Variant" — the member is interpreted as a variant reference instead of
+// a field access.
 func (c *checker) checkMember(expression *parser.MemberExpr, scope *Scope) (*Type, error) {
 	if expression == nil || expression.Receiver == nil {
 		return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "member expression is incomplete")
 	}
+
+	if identifier, ok := expression.Receiver.(*parser.Identifier); ok {
+		if _, local := scope.lookup(identifier.Name); !local {
+			if namedType, ok := c.lookupType(identifier.Name); ok && namedType.IsVariant() {
+				return c.resolveVariantReference(expression, namedType)
+			}
+		}
+	}
+
 	receiverType, err := c.checkExpr(expression.Receiver, scope)
 	if err != nil {
 		return nil, err
@@ -334,10 +349,98 @@ func (c *checker) checkMember(expression *parser.MemberExpr, scope *Scope) (*Typ
 	return c.resolveMember(expression, receiverType)
 }
 
+// resolveVariantReference resolves a qualified variant reference, "Type.Variant",
+// which denotes the variant itself. Only a variant with no fields is a value.
+func (c *checker) resolveVariantReference(expression *parser.MemberExpr, namedType *Type) (*Type, error) {
+	variant, ok := namedType.VariantIndex[expression.Member]
+	if !ok {
+		return nil, c.errorAt(UndefinedName, expression.Dot, "%s %s has no variant %q", variantKindWord(namedType), namedType.Name, expression.Member)
+	}
+	if variant.HasFields() {
+		return nil, c.errorAt(InvalidType, expression.Dot, "variant %s.%s carries fields and must be constructed as %s.%s { ... }", namedType.Name, variant.Name, namedType.Name, variant.Name)
+	}
+	c.result.VariantRefs[expression] = variant
+	return namedType, nil
+}
+
+// variantKindWord names the kind of a variant type for diagnostics.
+func variantKindWord(namedType *Type) string {
+	if namedType.IsEnum() {
+		return "enum"
+	}
+	return "union"
+}
+
+// checkVariantLiteral checks a tagged-union variant construction,
+// "Union.Variant { field = value, ... }".
+func (c *checker) checkVariantLiteral(expression *parser.VariantLiteral, scope *Scope) (*Type, error) {
+	if expression == nil || expression.Type == nil {
+		return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "variant literal is missing its type")
+	}
+
+	unionType, err := c.resolveType(expression.Type)
+	if err != nil {
+		return nil, err
+	}
+	if !unionType.IsUnion() {
+		return nil, c.errorAt(InvalidType, expression.Type.Pos(), "%s is not a union type", unionType)
+	}
+
+	variant, ok := unionType.VariantIndex[expression.Variant]
+	if !ok {
+		return nil, c.errorAt(UndefinedName, expression.At, "union %s has no variant %q", unionType.Name, expression.Variant)
+	}
+	if !variant.HasFields() {
+		return nil, c.errorAt(InvalidType, expression.OpenBrace, "variant %s.%s carries no fields and is written without braces", unionType.Name, variant.Name)
+	}
+
+	initialized := map[string]*parser.FieldInit{}
+	for _, field := range expression.Fields {
+		if field == nil {
+			return nil, c.errorAt(InvalidType, expression.OpenBrace, "variant literal for %s.%s has a nil field initializer", unionType.Name, variant.Name)
+		}
+		fieldDefinition, ok := variant.FieldIndex[field.Name]
+		if !ok {
+			return nil, c.errorAt(UndefinedName, field.At, "variant %s has no field %q", variant.Name, field.Name)
+		}
+		if earlier, ok := initialized[field.Name]; ok {
+			return nil, c.errorAt(DuplicateDeclaration, field.At, "field %q is initialized more than once (first at %d:%d)", field.Name, earlier.At.Line, earlier.At.Column)
+		}
+		initialized[field.Name] = field
+
+		if field.Value == nil {
+			return nil, c.errorAt(InvalidType, field.At, "field %q has no value", field.Name)
+		}
+		valueType, err := c.checkExpr(field.Value, scope)
+		if err != nil {
+			return nil, err
+		}
+		context := fmt.Sprintf("field %q of %s.%s", field.Name, unionType.Name, variant.Name)
+		if err := c.requireSameType(TypeMismatch, valueType, fieldDefinition.Type, field.Value.Pos(), context); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, fieldDefinition := range variant.Fields {
+		if _, ok := initialized[fieldDefinition.Name]; !ok {
+			return nil, c.errorAt(TypeMismatch, expression.OpenBrace, "variant literal for %s.%s is missing field %q", unionType.Name, variant.Name, fieldDefinition.Name)
+		}
+	}
+
+	c.result.VariantRefs[expression] = variant
+	return unionType, nil
+}
+
 // resolveMember resolves a field access on a receiver of the given type.
 func (c *checker) resolveMember(expression *parser.MemberExpr, receiverType *Type) (*Type, error) {
 	if receiverType == nil || receiverType.IsVoid() {
 		return nil, c.errorAt(TypeMismatch, expression.Dot, "cannot access member %q on a value with no value", expression.Member)
+	}
+	if receiverType.IsUnion() {
+		return nil, c.errorAt(TypeMismatch, expression.Dot, "cannot access member %q on union %s; use match to inspect a variant", expression.Member, receiverType.Name)
+	}
+	if receiverType.IsEnum() {
+		return nil, c.errorAt(TypeMismatch, expression.Dot, "cannot access member %q on enum %s", expression.Member, receiverType.Name)
 	}
 	if !receiverType.IsStruct() {
 		return nil, c.errorAt(TypeMismatch, expression.Dot, "cannot access member %q on a value of type %s", expression.Member, receiverType)
@@ -405,13 +508,13 @@ func (c *checker) resolveCallee(callee parser.Expr, scope *Scope) (*Function, er
 		c.result.Symbols[identifier] = functionSymbol(function, identifier.At)
 		return function, nil
 	}
-	if _, ok := c.lookupStruct(identifier.Name); ok {
+	if _, ok := c.lookupType(identifier.Name); ok {
 		return nil, c.errorAt(BadCall, identifier.At, "type %q is not a function", identifier.Name)
 	}
 	if path, ok := c.privateFunction(identifier.Name); ok {
 		return nil, c.errorAt(PrivateAccess, identifier.At, "function %q is private to %s", identifier.Name, path)
 	}
-	if path, ok := c.privateStruct(identifier.Name); ok {
+	if path, ok := c.privateType(identifier.Name); ok {
 		return nil, c.errorAt(PrivateAccess, identifier.At, "type %q is private to %s", identifier.Name, path)
 	}
 	return nil, c.errorAt(UndefinedName, identifier.At, "undefined function %q", identifier.Name)
@@ -612,6 +715,8 @@ func describeExpression(expression parser.Expr) string {
 		return "an assignment"
 	case *parser.StructLiteral:
 		return "a struct literal"
+	case *parser.VariantLiteral:
+		return "a variant literal"
 	case *parser.NewArrayExpr:
 		return "an array creation"
 	case *parser.IndexExpr:

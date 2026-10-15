@@ -166,14 +166,214 @@ func (p *parser) parseDeclaration() (Decl, error) {
 		return p.parseFunction(start, visibility)
 	case lexer.Struct:
 		return p.parseStruct(start, visibility)
+	case lexer.Enum:
+		return p.parseEnum(start, visibility)
+	case lexer.Union:
+		return p.parseUnion(start, visibility)
 	case lexer.Import:
 		if visibility != VisibilityDefault {
 			return nil, p.errorAt(token, "an import declaration cannot have a visibility modifier")
 		}
 		return p.parseImport(token)
 	default:
-		return nil, p.errorAt(token, "expected a declaration ('fn', 'struct', or 'import'), found %s", describe(token))
+		return nil, p.errorAt(token, "expected a declaration ('fn', 'struct', 'enum', 'union', or 'import'), found %s", describe(token))
 	}
+}
+
+// parseEnum parses "enum Name { Case, Case, ... }".
+func (p *parser) parseEnum(start lexer.Token, visibility Visibility) (Decl, error) {
+	p.advance() // 'enum'
+
+	name, err := p.expect(lexer.Ident, "a type name", "after 'enum'")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := p.expect(lexer.LBrace, "'{'", "to start the enum body"); err != nil {
+		return nil, err
+	}
+
+	declaration := &EnumDecl{
+		At:         positionOf(start),
+		Visibility: visibility,
+		Name:       name.Text,
+	}
+
+	if p.peek().Kind == lexer.RBrace {
+		p.advance()
+		return declaration, nil
+	}
+
+	for {
+		caseToken, err := p.expect(lexer.Ident, "a case name", "in the enum body")
+		if err != nil {
+			return nil, err
+		}
+		declaration.Cases = append(declaration.Cases, &EnumCase{At: positionOf(caseToken), Name: caseToken.Text})
+
+		if p.peek().Kind != lexer.Comma {
+			break
+		}
+		p.advance() // ','
+		if p.peek().Kind == lexer.RBrace {
+			return nil, p.errorAt(p.peek(), "trailing comma is not allowed in an enum")
+		}
+	}
+
+	if _, err := p.expect(lexer.RBrace, "'}'", "to close the enum body"); err != nil {
+		return nil, err
+	}
+	return declaration, nil
+}
+
+// parseUnion parses "union Name { Variant { fields } Variant ... }". Each
+// variant is self-delimiting: a variant with fields has a brace body, and one
+// without is just its name.
+func (p *parser) parseUnion(start lexer.Token, visibility Visibility) (Decl, error) {
+	p.advance() // 'union'
+
+	name, err := p.expect(lexer.Ident, "a type name", "after 'union'")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := p.expect(lexer.LBrace, "'{'", "to start the union body"); err != nil {
+		return nil, err
+	}
+
+	declaration := &UnionDecl{
+		At:         positionOf(start),
+		Visibility: visibility,
+		Name:       name.Text,
+	}
+
+	for {
+		token := p.peek()
+		if token.Kind == lexer.RBrace {
+			p.advance()
+			return declaration, nil
+		}
+		if token.Kind == lexer.EOF {
+			return nil, p.errorAt(token, "expected '}' to close the union body, found end of input")
+		}
+
+		variant, err := p.parseVariantDecl()
+		if err != nil {
+			return nil, err
+		}
+		declaration.Variants = append(declaration.Variants, variant)
+	}
+}
+
+// parseVariantDecl parses one union variant: "Name" or "Name { fields }".
+func (p *parser) parseVariantDecl() (*VariantDecl, error) {
+	name, err := p.expect(lexer.Ident, "a variant name", "in the union body")
+	if err != nil {
+		return nil, err
+	}
+
+	variant := &VariantDecl{At: positionOf(name), Name: name.Text}
+	if p.peek().Kind != lexer.LBrace {
+		return variant, nil
+	}
+	p.advance() // '{'
+
+	for {
+		token := p.peek()
+		if token.Kind == lexer.RBrace {
+			p.advance()
+			return variant, nil
+		}
+		if token.Kind == lexer.EOF {
+			return nil, p.errorAt(token, "expected '}' to close the variant body, found end of input")
+		}
+
+		field, err := p.parseField()
+		if err != nil {
+			return nil, err
+		}
+		variant.Fields = append(variant.Fields, field)
+	}
+}
+
+// parseMatch parses a match statement, "match (scrutinee) { Variant(bindings) { ... } ... }".
+func (p *parser) parseMatch() (Stmt, error) {
+	keyword := p.advance() // 'match'
+
+	if _, err := p.expect(lexer.LParen, "'('", "after 'match'"); err != nil {
+		return nil, err
+	}
+	scrutinee, err := p.parseExpression()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(lexer.RParen, "')'", "after the match scrutinee"); err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(lexer.LBrace, "'{'", "to start the match body"); err != nil {
+		return nil, err
+	}
+
+	statement := &MatchStmt{At: positionOf(keyword), Scrutinee: scrutinee}
+	for {
+		token := p.peek()
+		if token.Kind == lexer.RBrace {
+			p.advance()
+			return statement, nil
+		}
+		if token.Kind == lexer.EOF {
+			return nil, p.errorAt(token, "expected '}' to close the match body, found end of input")
+		}
+
+		arm, err := p.parseMatchArm()
+		if err != nil {
+			return nil, err
+		}
+		statement.Arms = append(statement.Arms, arm)
+	}
+}
+
+// parseMatchArm parses one match arm: "Variant", "Variant()", or
+// "Variant(binding, ...)", each followed by a block.
+func (p *parser) parseMatchArm() (*MatchArm, error) {
+	name, err := p.expect(lexer.Ident, "a variant name", "in the match body")
+	if err != nil {
+		return nil, err
+	}
+
+	arm := &MatchArm{At: positionOf(name), Variant: name.Text}
+
+	if p.peek().Kind == lexer.LParen {
+		p.advance() // '('
+		if p.peek().Kind != lexer.RParen {
+			for {
+				binding, err := p.expect(lexer.Ident, "a binding name", "in the match arm")
+				if err != nil {
+					return nil, err
+				}
+				arm.Bindings = append(arm.Bindings, binding.Text)
+				arm.BindingsAt = append(arm.BindingsAt, positionOf(binding))
+
+				if p.peek().Kind != lexer.Comma {
+					break
+				}
+				p.advance() // ','
+				if p.peek().Kind == lexer.RParen {
+					return nil, p.errorAt(p.peek(), "trailing comma is not allowed in a match arm")
+				}
+			}
+		}
+		if _, err := p.expect(lexer.RParen, "')'", "after the match arm bindings"); err != nil {
+			return nil, err
+		}
+	}
+
+	body, err := p.parseBlock()
+	if err != nil {
+		return nil, err
+	}
+	arm.Body = body
+	return arm, nil
 }
 
 // parseImport parses an import declaration, "import \"path\";". The path is a
@@ -409,6 +609,8 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseFor()
 	case lexer.Return:
 		return p.parseReturn()
+	case lexer.Match:
+		return p.parseMatch()
 	}
 
 	if p.startsVariableDeclaration() {
@@ -895,6 +1097,9 @@ func (p *parser) parsePrimary() (Expr, error) {
 		if p.peekAt(1).Kind == lexer.LBrace {
 			return p.parseStructLiteral()
 		}
+		if p.peekAt(1).Kind == lexer.Dot && p.peekAt(2).Kind == lexer.Ident && p.peekAt(3).Kind == lexer.LBrace {
+			return p.parseVariantLiteral()
+		}
 		p.advance()
 		return &Identifier{At: positionOf(token), Name: token.Text}, nil
 
@@ -946,27 +1151,60 @@ func (p *parser) parseNewArray() (Expr, error) {
 func (p *parser) parseStructLiteral() (Expr, error) {
 	name := p.advance() // type name
 
-	open, err := p.expect(lexer.LBrace, "'{'", "to start the struct literal")
+	fields, open, err := p.parseFieldInitializers("a struct literal")
 	if err != nil {
 		return nil, err
 	}
-
-	literal := &StructLiteral{
-		OpenBrace: positionOf(open),
+	return &StructLiteral{
+		OpenBrace: open,
 		Type:      &TypeRef{At: positionOf(name), Name: name.Text},
+		Fields:    fields,
+	}, nil
+}
+
+// parseVariantLiteral parses a tagged-union variant literal,
+// "UnionName.Variant { field = value, ... }". The union type name is the current
+// identifier token.
+func (p *parser) parseVariantLiteral() (Expr, error) {
+	name := p.advance() // union type name
+	p.advance()         // '.'
+	variant := p.advance()
+
+	fields, open, err := p.parseFieldInitializers("a variant literal")
+	if err != nil {
+		return nil, err
+	}
+	return &VariantLiteral{
+		At:        positionOf(name),
+		Type:      &TypeRef{At: positionOf(name), Name: name.Text},
+		Variant:   variant.Text,
+		OpenBrace: open,
+		Fields:    fields,
+	}, nil
+}
+
+// parseFieldInitializers parses "{ name = value, ... }" and returns the
+// initializers together with the position of the opening brace. The caller has
+// not consumed the opening brace. "context" completes messages such as
+// "trailing comma is not allowed in a struct literal".
+func (p *parser) parseFieldInitializers(context string) ([]*FieldInit, Position, error) {
+	open, err := p.expect(lexer.LBrace, "'{'", "to start "+context)
+	if err != nil {
+		return nil, Position{}, err
 	}
 
 	if p.peek().Kind == lexer.RBrace {
 		p.advance()
-		return literal, nil
+		return nil, positionOf(open), nil
 	}
 
+	var fields []*FieldInit
 	for {
 		field, err := p.parseFieldInit()
 		if err != nil {
-			return nil, err
+			return nil, Position{}, err
 		}
-		literal.Fields = append(literal.Fields, field)
+		fields = append(fields, field)
 
 		if p.peek().Kind != lexer.Comma {
 			break
@@ -974,19 +1212,19 @@ func (p *parser) parseStructLiteral() (Expr, error) {
 		p.advance() // ','
 
 		if p.peek().Kind == lexer.RBrace {
-			return nil, p.errorAt(p.peek(), "trailing comma is not allowed in a struct literal")
+			return nil, Position{}, p.errorAt(p.peek(), "trailing comma is not allowed in %s", context)
 		}
 	}
 
-	if _, err := p.expect(lexer.RBrace, "'}'", "to close the struct literal"); err != nil {
-		return nil, err
+	if _, err := p.expect(lexer.RBrace, "'}'", "to close "+context); err != nil {
+		return nil, Position{}, err
 	}
-	return literal, nil
+	return fields, positionOf(open), nil
 }
 
-// parseFieldInit parses one "name = value" entry in a struct literal.
+// parseFieldInit parses one "name = value" entry in a struct or variant literal.
 func (p *parser) parseFieldInit() (*FieldInit, error) {
-	name, err := p.expect(lexer.Ident, "a field name", "in the struct literal")
+	name, err := p.expect(lexer.Ident, "a field name", "in the literal")
 	if err != nil {
 		return nil, err
 	}

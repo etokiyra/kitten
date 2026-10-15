@@ -27,6 +27,13 @@ const (
 
 	// KindArray is a dynamically sized array type. Its element type is Type.Element.
 	KindArray
+
+	// KindEnum is a user-defined enum type: a fixed set of payload-less cases.
+	KindEnum
+
+	// KindUnion is a user-defined tagged-union type: a set of variants, each of
+	// which may carry fields.
+	KindUnion
 )
 
 // Type is a resolved Kitten type.
@@ -49,8 +56,16 @@ type Type struct {
 	// Element is non-nil when Kind is KindArray and holds the element type.
 	Element *Type
 
-	// Module is the ID of the module that declared this struct type. It is 0
-	// for primitive and array types, and for a struct in the root module.
+	// Variants holds an enum's cases or a union's variants, in declaration
+	// order. It is empty for other kinds.
+	Variants []*Variant
+
+	// VariantIndex maps a variant name to its definition for enum and union
+	// types.
+	VariantIndex map[string]*Variant
+
+	// Module is the ID of the module that declared this type. It is 0 for
+	// primitive and array types, and for a type in the root module.
 	Module int
 }
 
@@ -80,6 +95,21 @@ func (t *Type) IsStruct() bool {
 // IsArray reports whether t is an array type.
 func (t *Type) IsArray() bool {
 	return t != nil && t.Kind == KindArray
+}
+
+// IsEnum reports whether t is an enum type.
+func (t *Type) IsEnum() bool {
+	return t != nil && t.Kind == KindEnum
+}
+
+// IsUnion reports whether t is a tagged-union type.
+func (t *Type) IsUnion() bool {
+	return t != nil && t.Kind == KindUnion
+}
+
+// IsVariant reports whether t has named variants: an enum or a tagged union.
+func (t *Type) IsVariant() bool {
+	return t.IsEnum() || t.IsUnion()
 }
 
 // The primitive type singletons.
@@ -126,4 +156,28 @@ type StructField struct {
 
 	// At is the position of the field declaration.
 	At parser.Position
+}
+
+// Variant is one case of an enum or one variant of a tagged union.
+type Variant struct {
+	// Name is the variant name.
+	Name string
+
+	// Index is the variant's tag value, assigned in declaration order.
+	Index int
+
+	// Fields are the variant's payload fields in declaration order. It is empty
+	// for an enum case and for a payload-less union variant.
+	Fields []*StructField
+
+	// FieldIndex maps a field name to its definition.
+	FieldIndex map[string]*StructField
+
+	// At is the position of the variant name.
+	At parser.Position
+}
+
+// HasFields reports whether the variant carries a payload.
+func (v *Variant) HasFields() bool {
+	return len(v.Fields) > 0
 }

@@ -19,7 +19,8 @@
 // returns a nil Result. It never panics, including on hand-built or incomplete
 // syntax trees.
 //
-// The checker implements the type, scope, function, return, struct, built-in,
-// visibility, and module rules recorded in SPEC.md. It does not generate code,
-// run the program, or perform any optimization; those are separate phases.
+// The checker implements the type, scope, function, return, struct, enum,
+// union, built-in, visibility, and module rules recorded in SPEC.md. It does not
+// generate code, run the program, or perform any optimization; those are
+// separate phases.
 package checker

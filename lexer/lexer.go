@@ -30,6 +30,9 @@ var keywords = map[string]Kind{
 	"import":  Import,
 	"public":  Public,
 	"private": Private,
+	"enum":    Enum,
+	"union":   Union,
+	"match":   Match,
 
 	"int":    TypeInt,
 	"float":  TypeFloat,

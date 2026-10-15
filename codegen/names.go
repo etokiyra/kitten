@@ -13,15 +13,23 @@ import (
 // names, or with each other. Kitten identifiers are ASCII letters, digits, and
 // underscores, so prefixing always yields a valid C identifier.
 const (
-	functionPrefix    = "ktn_fn_"
-	variablePrefix    = "ktn_var_"
-	structPrefix      = "ktn_s_"
-	fieldPrefix       = "ktn_f_"
-	constructorPrefix = "ktn_new_"
-	argumentPrefix    = "ktn_arg_"
+	functionPrefix     = "ktn_fn_"
+	variablePrefix     = "ktn_var_"
+	structPrefix       = "ktn_s_"
+	fieldPrefix        = "ktn_f_"
+	constructorPrefix  = "ktn_new_"
+	argumentPrefix     = "ktn_arg_"
+	enumPrefix         = "ktn_e_"
+	enumCasePrefix     = "ktn_ec_"
+	unionTagPrefix     = "ktn_uc_"
+	variantFieldPrefix = "ktn_v_"
+	matchPrefix        = "ktn_match_"
 
 	// objectName is the local used inside generated struct constructors.
 	objectName = "ktn_object"
+
+	// tagFieldName is the C member holding a union value's active variant tag.
+	tagFieldName = "ktn_tag"
 )
 
 // modulePrefix returns the C name prefix for a module. The root module (ID 0)
@@ -63,6 +71,34 @@ func constructorName(name string, module int) string {
 // generated constructor.
 func argumentName(name string) string { return argumentPrefix + name }
 
+// enumName maps a Kitten enum type to its C typedef name.
+func enumName(name string, module int) string {
+	return enumPrefix + modulePrefix(module) + name
+}
+
+// enumCaseName maps an enum case to its C constant name.
+func enumCaseName(enumType *checker.Type, caseName string) string {
+	return enumCasePrefix + modulePrefix(enumType.Module) + enumType.Name + "_" + caseName
+}
+
+// unionTagName maps a union variant to its C tag constant name.
+func unionTagName(unionType *checker.Type, variantName string) string {
+	return unionTagPrefix + modulePrefix(unionType.Module) + unionType.Name + "_" + variantName
+}
+
+// variantFieldName maps a union variant's field to its C member name in the flat
+// union layout. The variant name is part of the member so that variants may
+// reuse field names.
+func variantFieldName(variantName, fieldName string) string {
+	return variantFieldPrefix + variantName + "_" + fieldName
+}
+
+// variantConstructorName maps a union variant to the function that allocates and
+// initializes one instance carrying that variant.
+func variantConstructorName(unionType *checker.Type, variantName string) string {
+	return constructorPrefix + modulePrefix(unionType.Module) + unionType.Name + "_" + variantName
+}
+
 // cType maps a resolved Kitten type to its C representation:
 //
 //	int    -> int64_t        (signed 64-bit)
@@ -88,7 +124,9 @@ func cType(kittenType *checker.Type) (string, error) {
 		return "void", nil
 	case kittenType.Kind == checker.KindArray:
 		return "ktn_array *", nil
-	case kittenType.Kind == checker.KindStruct:
+	case kittenType.Kind == checker.KindEnum:
+		return enumName(kittenType.Name, kittenType.Module), nil
+	case kittenType.Kind == checker.KindUnion, kittenType.Kind == checker.KindStruct:
 		return structName(kittenType.Name, kittenType.Module) + " *", nil
 	default:
 		return "", fmt.Errorf("unsupported type %q", kittenType)

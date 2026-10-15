@@ -46,6 +46,9 @@ const (
 	Import
 	Public
 	Private
+	Enum
+	Union
+	Match
 
 	// Built-in type names.
 	TypeInt
@@ -115,6 +118,9 @@ var kindNames = map[Kind]string{
 	Import:  "Import",
 	Public:  "Public",
 	Private: "Private",
+	Enum:    "Enum",
+	Union:   "Union",
+	Match:   "Match",
 
 	TypeInt:    "TypeInt",
 	TypeFloat:  "TypeFloat",

@@ -370,6 +370,48 @@ fn main() {
 }
 `,
 		},
+		{
+			name: "enums and tagged unions",
+			source: `enum TokenKind {
+    Identifier,
+    Integer,
+    EndOfFile
+}
+union Expression {
+    Literal { int value; }
+    Pair { Expression left; Expression right; }
+    Missing
+}
+fn evaluate(Expression expression) -> int {
+    match (expression) {
+        Literal(value) { return value; }
+        Pair(left, right) { return evaluate(left) + evaluate(right); }
+        Missing { return 0; }
+    }
+}
+fn classify(TokenKind kind) -> string {
+    string text = "";
+    match (kind) {
+        Identifier { text = "id"; }
+        Integer { text = "num"; }
+        EndOfFile { text = "end"; }
+    }
+    return text;
+}
+fn main() {
+    TokenKind kind = TokenKind.Integer;
+    print(classify(kind), kind == TokenKind.Integer, kind != TokenKind.Identifier);
+    Expression expression = Expression.Pair {
+        left = Expression.Literal { value = 1 },
+        right = Expression.Missing
+    };
+    print(evaluate(expression));
+    Expression[] items = new Expression[1];
+    items[0] = Expression.Literal { value = 5 };
+    print(evaluate(items[0]));
+}
+`,
+		},
 	}
 
 	for _, testCase := range cases {
@@ -788,6 +830,158 @@ func TestErrorCases(t *testing.T) {
 			line:     2,
 			column:   5,
 			contains: "undefined type",
+		},
+		{
+			name:     "non-exhaustive match",
+			source:   "enum Kind {\n    A,\n    B\n}\nfn main() {\n    Kind kind = Kind.A;\n    match (kind) {\n        A { print(\"a\"); }\n    }\n}\n",
+			kind:     InvalidType,
+			line:     7,
+			column:   5,
+			contains: "does not handle variant",
+		},
+		{
+			name:     "duplicate match arm",
+			source:   "enum Kind {\n    A\n}\nfn main() {\n    Kind kind = Kind.A;\n    match (kind) {\n        A { print(\"a\"); }\n        A { print(\"b\"); }\n    }\n}\n",
+			kind:     DuplicateDeclaration,
+			line:     8,
+			column:   9,
+			contains: "matched more than once",
+		},
+		{
+			name:     "match arm binding count",
+			source:   "union Box {\n    Full { int value; }\n}\nfn main() {\n    Box box = Box.Full { value = 1 };\n    match (box) {\n        Full(a, b) { print(a); }\n    }\n}\n",
+			kind:     BadCall,
+			line:     7,
+			column:   9,
+			contains: "binds 2",
+		},
+		{
+			name:     "unknown variant in match",
+			source:   "union Box {\n    Full { int value; }\n}\nfn main() {\n    Box box = Box.Full { value = 1 };\n    match (box) {\n        Nope { print(\"x\"); }\n        Full(value) { print(value); }\n    }\n}\n",
+			kind:     UndefinedName,
+			line:     7,
+			column:   9,
+			contains: "has no variant",
+		},
+		{
+			name:     "duplicate match binding",
+			source:   "union Box {\n    Full { int value; int other; }\n}\nfn main() {\n    Box box = Box.Full { value = 1, other = 2 };\n    match (box) {\n        Full(value, value) { print(value); }\n    }\n}\n",
+			kind:     DuplicateDeclaration,
+			line:     7,
+			column:   21,
+			contains: "duplicate binding",
+		},
+		{
+			name:     "match on a non-variant",
+			source:   "fn main() {\n    int x = 1;\n    match (x) {\n        A { print(1); }\n    }\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   12,
+			contains: "match requires an enum or union value",
+		},
+		{
+			name:     "field access on a union",
+			source:   "union Box {\n    Full { int value; }\n}\nfn main() {\n    Box box = Box.Full { value = 1 };\n    print(box.value);\n}\n",
+			kind:     TypeMismatch,
+			line:     6,
+			column:   14,
+			contains: "use match",
+		},
+		{
+			name:     "union equality",
+			source:   "union Box {\n    Empty\n}\nfn main() {\n    Box a = Box.Empty;\n    Box b = Box.Empty;\n    bool same = a == b;\n}\n",
+			kind:     InvalidOperator,
+			line:     7,
+			column:   19,
+			contains: "not supported",
+		},
+		{
+			name:     "enum printed",
+			source:   "enum Kind {\n    A\n}\nfn main() {\n    print(Kind.A);\n}\n",
+			kind:     TypeMismatch,
+			line:     5,
+			column:   11,
+			contains: "cannot print",
+		},
+		{
+			name:     "enum converted to int",
+			source:   "enum Kind {\n    A\n}\nfn main() {\n    int value = Kind.A;\n}\n",
+			kind:     TypeMismatch,
+			line:     5,
+			column:   17,
+			contains: "expected int, found Kind",
+		},
+		{
+			name:     "duplicate enum case",
+			source:   "enum Kind {\n    A,\n    A\n}\nfn main() {\n}\n",
+			kind:     DuplicateDeclaration,
+			line:     3,
+			column:   5,
+			contains: "duplicate case",
+		},
+		{
+			name:     "duplicate union variant",
+			source:   "union Box {\n    Full { int value; }\n    Full { int other; }\n}\nfn main() {\n}\n",
+			kind:     DuplicateDeclaration,
+			line:     3,
+			column:   5,
+			contains: "duplicate variant",
+		},
+		{
+			name:     "duplicate variant field",
+			source:   "union Box {\n    Full {\n        int value;\n        int value;\n    }\n}\nfn main() {\n}\n",
+			kind:     DuplicateDeclaration,
+			line:     4,
+			column:   9,
+			contains: "duplicate field",
+		},
+		{
+			name:     "empty enum",
+			source:   "enum Kind {\n}\nfn main() {\n}\n",
+			kind:     InvalidType,
+			line:     1,
+			column:   1,
+			contains: "at least one case",
+		},
+		{
+			name:     "empty union",
+			source:   "union Box {\n}\nfn main() {\n}\n",
+			kind:     InvalidType,
+			line:     1,
+			column:   1,
+			contains: "at least one variant",
+		},
+		{
+			name:     "unknown field in variant literal",
+			source:   "union Box {\n    Full { int value; }\n}\nfn main() {\n    Box box = Box.Full { other = 1 };\n}\n",
+			kind:     UndefinedName,
+			line:     5,
+			column:   26,
+			contains: "has no field",
+		},
+		{
+			name:     "missing field in variant literal",
+			source:   "union Box {\n    Full {\n        int value;\n        int other;\n    }\n}\nfn main() {\n    Box box = Box.Full { value = 1 };\n}\n",
+			kind:     TypeMismatch,
+			line:     8,
+			column:   24,
+			contains: "missing field",
+		},
+		{
+			name:     "payload variant referenced without braces",
+			source:   "union Box {\n    Full { int value; }\n}\nfn main() {\n    Box box = Box.Full;\n}\n",
+			kind:     InvalidType,
+			line:     5,
+			column:   18,
+			contains: "must be constructed",
+		},
+		{
+			name:     "payload-less variant constructed with braces",
+			source:   "union Box {\n    Empty\n}\nfn main() {\n    Box box = Box.Empty { };\n}\n",
+			kind:     InvalidType,
+			line:     5,
+			column:   25,
+			contains: "written without braces",
 		},
 		{
 			name:     "increment on string",
@@ -1375,7 +1569,7 @@ public fn area(Rectangle rectangle) -> int {
 	)
 
 	// The root module's by-name view sees the imported public declarations.
-	if result.StructTypes["Rectangle"] == nil {
+	if result.Types["Rectangle"] == nil {
 		t.Errorf("Rectangle is not visible to the root module")
 	}
 	if result.Functions["area"] == nil {
@@ -1493,6 +1687,69 @@ func TestModuleLocalDuplicateIsRejected(t *testing.T) {
 }
 fn main() {
     print(1);
+}
+`,
+	)
+}
+
+func TestModulesResolvePublicVariants(t *testing.T) {
+	result := assertModulesOK(t,
+		`fn main() {
+    Kind kind = Kind.Integer;
+    Box box = Box.Full { value = 3 };
+    print(describe(kind), unwrap(box));
+}
+`,
+		`public enum Kind {
+    Integer,
+    Text
+}
+public union Box {
+    Full { int value; }
+    Empty
+}
+public fn describe(Kind kind) -> string {
+    match (kind) {
+        Integer { return "int"; }
+        Text { return "text"; }
+    }
+}
+public fn unwrap(Box box) -> int {
+    match (box) {
+        Full(value) { return value; }
+        Empty { return 0; }
+    }
+}
+`,
+	)
+
+	if result.Types["Kind"] == nil {
+		t.Errorf("Kind is not visible to the root module")
+	}
+	if result.Types["Box"] == nil {
+		t.Errorf("Box is not visible to the root module")
+	}
+}
+
+func TestModulePrivateEnumAccessIsRejected(t *testing.T) {
+	assertModuleError(t, PrivateAccess, "private to", `fn main() {
+    Kind kind = Kind.A;
+}
+`,
+		`private enum Kind {
+    A
+}
+`,
+	)
+}
+
+func TestModulePrivateUnionAccessIsRejected(t *testing.T) {
+	assertModuleError(t, PrivateAccess, "private to", `fn main() {
+    Box box = Box.Empty;
+}
+`,
+		`private union Box {
+    Empty
 }
 `,
 	)

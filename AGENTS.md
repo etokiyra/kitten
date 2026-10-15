@@ -63,7 +63,9 @@ NUL-terminated representation. Phase 3B delivered dynamic arrays: typed array
 declarations, `new Element[length]` creation, bounds-checked indexing,
 `length`, and GC-managed reference semantics. Phase 3C delivered file I/O
 (`read_file`), a module system with `import`, cross-module visibility, and
-multi-file compilation.
+multi-file compilation. Phase 3D delivered enums and tagged unions: named
+alternatives, variants with typed payloads, safe construction, and an exhaustive
+`match` statement for inspecting variants.
 
 Self-hosting, a native backend, maps, a complete standard library, and file
 writing are still intentionally unimplemented: do not start them without
@@ -75,7 +77,7 @@ explicit authorization.
 2. A working, tested native compiler for the current language, including the
    language foundations self-hosting needs. **In progress** (Phase 3A added
    dynamic strings; Phase 3B added dynamic arrays; Phase 3C added file I/O and
-   modules).
+   modules; Phase 3D added enums and tagged unions).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

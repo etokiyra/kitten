@@ -105,6 +105,17 @@ int64_t ktn_rt_array_length(const ktn_array *array);
 #define KTN_RT_MAX_FILE_SIZE ((size_t)256 * 1024 * 1024)
 
 /*
+ * Reports an unrecoverable runtime error to standard error and terminates the
+ * program with a nonzero exit status. It is used by the runtime itself and by
+ * generated code, for example when a match inspects an invalid variant tag or a
+ * null union reference.
+ *
+ * It never returns, which is declared so that generated switches with a
+ * fail-fast default case do not warn about falling off the end of a function.
+ */
+_Noreturn void ktn_rt_fail(const char *message);
+
+/*
  * Reads the entire contents of the regular file at path into a new,
  * GC-managed, NUL-terminated string and returns it. An empty file yields the
  * empty string.

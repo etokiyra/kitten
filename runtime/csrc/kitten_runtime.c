@@ -11,9 +11,10 @@
 /*
  * Reports an unrecoverable runtime error to standard error and terminates the
  * program. Used for conditions that cannot be recovered from, such as an
- * out-of-range array index or an allocation that would overflow.
+ * out-of-range array index, an allocation that would overflow, or inspecting a
+ * null union reference.
  */
-static void ktn_rt_fail(const char *message) {
+void ktn_rt_fail(const char *message) {
     fflush(stdout);
     fputs("kitten: ", stderr);
     fputs(message, stderr);

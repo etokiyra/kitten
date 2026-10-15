@@ -184,7 +184,7 @@ func TestUsageAndExitCodes(t *testing.T) {
 func TestFixturesEndToEnd(t *testing.T) {
 	requireToolchain(t)
 
-	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays"}
+	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays", "variants"}
 	for _, name := range fixtures {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -857,4 +857,81 @@ func writeSource(t *testing.T, path, content string) string {
 		t.Fatalf("writing %s: %v", path, err)
 	}
 	return path
+}
+
+func TestMatchOnNullUnionIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `union Box {
+    Full { int value; }
+    Empty
+}
+fn main() {
+    Box[] boxes = new Box[1];
+    Box box = boxes[0];
+    match (box) {
+        Full(value) { print(value); }
+        Empty { print("empty"); }
+    }
+}
+`
+	_, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "null union reference") {
+		t.Errorf("stderr = %q, want a null union reference message", stderr)
+	}
+}
+
+func TestVariantModulesInTemporaryProject(t *testing.T) {
+	requireToolchain(t)
+
+	project := t.TempDir()
+	writeSource(t, filepath.Join(project, "model.ktn"), `public enum Kind {
+    Integer,
+    Text
+}
+public union Value {
+    Number { int amount; }
+    Empty
+}
+public fn describe(Kind kind) -> string {
+    match (kind) {
+        Integer { return "int"; }
+        Text { return "text"; }
+    }
+}
+public fn amount(Value value) -> int {
+    match (value) {
+        Number(amount) { return amount; }
+        Empty { return 0; }
+    }
+}
+`)
+	mainPath := writeSource(t, filepath.Join(project, "main.ktn"), `import "model.ktn";
+fn main() {
+    Kind kind = Kind.Text;
+    Value value = Value.Number { amount = 7 };
+    print(describe(kind), amount(value));
+    print(amount(Value.Empty));
+}
+`)
+
+	executablePath := filepath.Join(t.TempDir(), "program")
+	var diagnostics bytes.Buffer
+	if err := buildExecutable(mainPath, executablePath, &diagnostics); err != nil {
+		t.Fatalf("building: %v\n%s", err, diagnostics.String())
+	}
+	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+		t.Fatalf("C compiler diagnostics:\n%s", warnings)
+	}
+
+	output, err := exec.Command(executablePath).Output()
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if string(output) != "text 7\n0\n" {
+		t.Errorf("output = %q, want %q", output, "text 7\n0\n")
+	}
 }

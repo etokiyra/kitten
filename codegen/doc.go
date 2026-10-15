@@ -10,9 +10,12 @@
 // given program and is written for the runtime in the sibling runtime package.
 //
 // Type mapping: int is int64_t, float is double, bool is bool, string is
-// const char *, a struct is a pointer to a GC-managed generated C struct, and
-// an array is a ktn_array pointer. Struct literals allocate through the runtime,
-// so struct values have reference semantics.
+// const char *, a struct or union is a pointer to a GC-managed generated C
+// struct, an enum is an int64_t typedef with one constant per case, and an array
+// is a ktn_array pointer. Struct and union literals allocate through the runtime,
+// so struct and union values have reference semantics, while enums are values.
+// Union payloads are read only through a bounds-safe switch generated for match,
+// never through unchecked field access.
 //
 // The package produces C source as a string. It performs no compilation and no
 // execution; those are the command-line driver's responsibility. Generate

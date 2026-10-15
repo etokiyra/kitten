@@ -72,6 +72,17 @@ type generator struct {
 	checked *checker.Result
 	buffer  *strings.Builder
 	indent  int
+
+	// temps numbers the temporaries generated for match statements, so that
+	// generated names are unique and deterministic.
+	temps int
+}
+
+// newTemp returns the next deterministic temporary variable name.
+func (g *generator) newTemp() string {
+	name := fmt.Sprintf("%s%d", matchPrefix, g.temps)
+	g.temps++
+	return name
 }
 
 // write appends text without indentation or a newline.
@@ -119,7 +130,13 @@ func (g *generator) generate() (string, error) {
 	g.line("#include %q", runtime.HeaderFileName)
 	g.line("")
 
-	if err := g.emitStructForwardDeclarations(); err != nil {
+	if err := g.emitTypeForwardDeclarations(); err != nil {
+		return "", err
+	}
+	if err := g.emitEnumDeclarations(); err != nil {
+		return "", err
+	}
+	if err := g.emitUnionTagDeclarations(); err != nil {
 		return "", err
 	}
 	if err := g.emitFunctionPrototypes(); err != nil {
@@ -128,7 +145,13 @@ func (g *generator) generate() (string, error) {
 	if err := g.emitStructDefinitions(); err != nil {
 		return "", err
 	}
-	if err := g.emitConstructors(); err != nil {
+	if err := g.emitUnionDefinitions(); err != nil {
+		return "", err
+	}
+	if err := g.emitStructConstructors(); err != nil {
+		return "", err
+	}
+	if err := g.emitUnionConstructors(); err != nil {
 		return "", err
 	}
 	if err := g.emitFunctionDefinitions(); err != nil {
@@ -193,6 +216,44 @@ func (g *generator) structDeclarations() []moduleStruct {
 	return declarations
 }
 
+// moduleEnum pairs an enum declaration with the ID of its module.
+type moduleEnum struct {
+	module      int
+	declaration *parser.EnumDecl
+}
+
+// moduleUnion pairs a union declaration with the ID of its module.
+type moduleUnion struct {
+	module      int
+	declaration *parser.UnionDecl
+}
+
+// enumDeclarations returns every enum declaration, in module and source order.
+func (g *generator) enumDeclarations() []moduleEnum {
+	var declarations []moduleEnum
+	for _, module := range g.modules {
+		for _, declaration := range module.Program.Declarations {
+			if enumDeclaration, ok := declaration.(*parser.EnumDecl); ok && enumDeclaration != nil {
+				declarations = append(declarations, moduleEnum{module: module.ID, declaration: enumDeclaration})
+			}
+		}
+	}
+	return declarations
+}
+
+// unionDeclarations returns every union declaration, in module and source order.
+func (g *generator) unionDeclarations() []moduleUnion {
+	var declarations []moduleUnion
+	for _, module := range g.modules {
+		for _, declaration := range module.Program.Declarations {
+			if unionDeclaration, ok := declaration.(*parser.UnionDecl); ok && unionDeclaration != nil {
+				declarations = append(declarations, moduleUnion{module: module.ID, declaration: unionDeclaration})
+			}
+		}
+	}
+	return declarations
+}
+
 // functionDeclarations returns every function declaration, in module and source
 // order.
 func (g *generator) functionDeclarations() []moduleFunction {
@@ -207,18 +268,73 @@ func (g *generator) functionDeclarations() []moduleFunction {
 	return declarations
 }
 
-// emitStructForwardDeclarations emits typedefs so that struct bodies may refer
-// to structs declared later, in this module or another.
-func (g *generator) emitStructForwardDeclarations() error {
-	declarations := g.structDeclarations()
+// emitTypeForwardDeclarations emits typedefs so that struct and union bodies may
+// refer to types declared later, in this module or another.
+func (g *generator) emitTypeForwardDeclarations() error {
+	emitted := false
+	for _, entry := range g.structDeclarations() {
+		name := structName(entry.declaration.Name, entry.module)
+		g.line("typedef struct %s %s;", name, name)
+		emitted = true
+	}
+	for _, entry := range g.unionDeclarations() {
+		name := structName(entry.declaration.Name, entry.module)
+		g.line("typedef struct %s %s;", name, name)
+		emitted = true
+	}
+	if emitted {
+		g.line("")
+	}
+	return nil
+}
+
+// emitEnumDeclarations emits, for each enum, a C typedef and one constant per
+// case. Enum values are stored as int64_t tags, and the constants are the tag
+// values in declaration order.
+func (g *generator) emitEnumDeclarations() error {
+	declarations := g.enumDeclarations()
 	if len(declarations) == 0 {
 		return nil
 	}
 	for _, entry := range declarations {
-		name := structName(entry.declaration.Name, entry.module)
-		g.line("typedef struct %s %s;", name, name)
+		enumType := g.checked.TypeDecls[entry.declaration]
+		if enumType == nil {
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("enum %q was not checked", entry.declaration.Name)}
+		}
+		g.line("typedef int64_t %s;", enumName(enumType.Name, entry.module))
+		g.line("enum {")
+		g.indent++
+		for _, variant := range enumType.Variants {
+			g.line("%s = %d,", enumCaseName(enumType, variant.Name), variant.Index)
+		}
+		g.indent--
+		g.line("};")
+		g.line("")
 	}
-	g.line("")
+	return nil
+}
+
+// emitUnionTagDeclarations emits, for each union, one constant per variant. A
+// union value stores its active variant's constant in its tag member.
+func (g *generator) emitUnionTagDeclarations() error {
+	declarations := g.unionDeclarations()
+	if len(declarations) == 0 {
+		return nil
+	}
+	for _, entry := range declarations {
+		unionType := g.checked.TypeDecls[entry.declaration]
+		if unionType == nil {
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("union %q was not checked", entry.declaration.Name)}
+		}
+		g.line("enum {")
+		g.indent++
+		for _, variant := range unionType.Variants {
+			g.line("%s = %d,", unionTagName(unionType, variant.Name), variant.Index)
+		}
+		g.indent--
+		g.line("};")
+		g.line("")
+	}
 	return nil
 }
 
@@ -275,7 +391,7 @@ func (g *generator) emitStructDefinitions() error {
 		return nil
 	}
 	for _, entry := range declarations {
-		structType := g.checked.StructDecls[entry.declaration]
+		structType := g.checked.TypeDecls[entry.declaration]
 		if structType == nil || structType.Struct == nil {
 			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", entry.declaration.Name)}
 		}
@@ -295,16 +411,98 @@ func (g *generator) emitStructDefinitions() error {
 	return nil
 }
 
-// emitConstructors emits one allocation-and-initialization function per struct.
-// A Kitten struct literal becomes a call to the matching constructor. GC_MALLOC
-// zeroes the object, so it is safely initialized before its fields are set.
-func (g *generator) emitConstructors() error {
+// emitUnionDefinitions emits one flat C struct per union.
+//
+// The struct holds the active variant's tag and every variant's fields as
+// separate members, with variant-prefixed names. A flat layout is used instead
+// of a C union so that reading a field is never undefined behavior: only the
+// active variant's members are read, always after checking the tag in generated
+// match statements.
+func (g *generator) emitUnionDefinitions() error {
+	declarations := g.unionDeclarations()
+	if len(declarations) == 0 {
+		return nil
+	}
+	for _, entry := range declarations {
+		unionType := g.checked.TypeDecls[entry.declaration]
+		if unionType == nil || !unionType.IsUnion() {
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("union %q was not checked", entry.declaration.Name)}
+		}
+
+		g.line("struct %s {", structName(entry.declaration.Name, entry.module))
+		g.indent++
+		g.line("int64_t %s;", tagFieldName)
+		for _, variant := range unionType.Variants {
+			for _, field := range variant.Fields {
+				fieldType, err := cType(field.Type)
+				if err != nil {
+					return &Error{Line: field.At.Line, Column: field.At.Column, Message: err.Error()}
+				}
+				g.line("%s %s;", fieldType, variantFieldName(variant.Name, field.Name))
+			}
+		}
+		g.indent--
+		g.line("};")
+		g.line("")
+	}
+	return nil
+}
+
+// emitUnionConstructors emits one allocation-and-initialization function per
+// union variant. A variant reference or literal becomes a call to the matching
+// constructor, which sets the tag before any payload field.
+func (g *generator) emitUnionConstructors() error {
+	declarations := g.unionDeclarations()
+	if len(declarations) == 0 {
+		return nil
+	}
+	for _, entry := range declarations {
+		unionType := g.checked.TypeDecls[entry.declaration]
+		if unionType == nil || !unionType.IsUnion() {
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("union %q was not checked", entry.declaration.Name)}
+		}
+
+		cStruct := structName(entry.declaration.Name, entry.module)
+		for _, variant := range unionType.Variants {
+			parameters := make([]string, 0, len(variant.Fields))
+			for _, field := range variant.Fields {
+				fieldType, err := cType(field.Type)
+				if err != nil {
+					return &Error{Line: field.At.Line, Column: field.At.Column, Message: err.Error()}
+				}
+				parameters = append(parameters, fieldType+" "+argumentName(field.Name))
+			}
+			if len(parameters) == 0 {
+				parameters = append(parameters, "void")
+			}
+
+			g.line("%s *%s(%s) {", cStruct, variantConstructorName(unionType, variant.Name), strings.Join(parameters, ", "))
+			g.indent++
+			g.line("%s *%s = (%s *)%s(sizeof(%s));", cStruct, objectName, cStruct, runtime.AllocFunction, cStruct)
+			g.line("%s->%s = %s;", objectName, tagFieldName, unionTagName(unionType, variant.Name))
+			for _, field := range variant.Fields {
+				g.line("%s->%s = %s;", objectName, variantFieldName(variant.Name, field.Name), argumentName(field.Name))
+			}
+			g.line("return %s;", objectName)
+			g.indent--
+			g.line("}")
+			g.line("")
+		}
+	}
+	return nil
+}
+
+// emitStructConstructors emits one allocation-and-initialization function per
+// struct. A Kitten struct literal becomes a call to the matching constructor.
+// GC_MALLOC zeroes the object, so it is safely initialized before its fields are
+// set.
+func (g *generator) emitStructConstructors() error {
 	declarations := g.structDeclarations()
 	if len(declarations) == 0 {
 		return nil
 	}
 	for _, entry := range declarations {
-		structType := g.checked.StructDecls[entry.declaration]
+		structType := g.checked.TypeDecls[entry.declaration]
 		if structType == nil || structType.Struct == nil {
 			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", entry.declaration.Name)}
 		}
