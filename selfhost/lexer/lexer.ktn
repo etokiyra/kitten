@@ -1,0 +1,504 @@
+// lexer.ktn - a lexer for Kitten, written in Kitten.
+//
+// This is the first substantial component of the eventual self-hosting
+// compiler, and it runs today under the Go bootstrap compiler. It reproduces
+// the behavior of the Go reference lexer in lexer/lexer.go, which remains the
+// production front end: the same token kinds, the same token text, the same
+// one-based line and column positions, the same first-error behavior, and the
+// same messages.
+//
+// The scanner is byte-oriented. A Kitten string is a NUL-terminated byte
+// sequence with byte length, byte indexing, and byte ranges (SPEC.md 20.6), so
+// this scanner never decodes UTF-8. The reference lexer scans a []rune instead
+// and therefore counts columns in code points. For ASCII input the two agree
+// exactly; for input containing bytes >= 128 the column numbers after the
+// non-ASCII bytes and the "unexpected character" message can differ. Every
+// difference is recorded in README.md next to this file.
+//
+// The scanner performs no parsing and no semantic analysis. It never reads
+// uninitialized memory and never indexes out of bounds: every byte access is
+// either guarded by a position check or performed through a bounds-checked
+// string index, whose failure would be a deterministic runtime error rather
+// than undefined behavior.
+
+import "tokens.ktn";
+
+// Scanner is the mutable state of one lexing pass.
+//
+// A struct is a reference type, so passing a Scanner to a function shares this
+// state and the callee's mutations are visible to the caller. That keeps the
+// scanning helpers small: each one can advance the position and the position
+// tracking without returning a bundle of updated fields.
+struct Scanner {
+    // source is the whole input. It is never modified.
+    string source;
+
+    // size is the byte length of source. It is computed once, so that scanning
+    // does not rescan the whole string for its length on every access.
+    int size;
+
+    // position is the byte offset of the next byte to read.
+    int position;
+
+    // line is the one-based line of the byte at position.
+    int line;
+
+    // column is the one-based column of the byte at position, counted in bytes.
+    int column;
+}
+
+// ScanResult is the outcome of scanning one token: either the token, or the
+// lexical error that stopped the scan.
+union ScanResult {
+    Ok { Token token; }
+    Failed { int line; int column; string message; }
+}
+
+// peek_at returns the byte offset bytes ahead of position, or -1 when that
+// offset is outside the input.
+//
+// A byte is always in 0..255, so -1 is a safe end-of-input sentinel: it cannot
+// be confused with a real byte. This is the one place where the byte-oriented
+// scanner is simpler than the reference lexer, which needs a rune sentinel that
+// cannot collide with any code point.
+fn peek_at(Scanner scanner, int offset) -> int {
+    int index = scanner.position + offset;
+    if (index < 0 || index >= scanner.size) {
+        return -1;
+    }
+    return scanner.source[index];
+}
+
+// peek returns the byte at position without consuming it, or -1 at end of input.
+fn peek(Scanner scanner) -> int {
+    return peek_at(scanner, 0);
+}
+
+// at_end reports whether every byte has been consumed.
+fn at_end(Scanner scanner) -> bool {
+    return scanner.position >= scanner.size;
+}
+
+// advance consumes and returns the byte at position, updating line and column.
+//
+// Callers must not call advance at end of input. Every call site is guarded by
+// a position check, and the underlying string index is bounds-checked in any
+// case, so a mistake would be a deterministic runtime error rather than an
+// out-of-bounds read.
+fn advance(Scanner scanner) -> int {
+    int byte = scanner.source[scanner.position];
+    scanner.position = scanner.position + 1;
+    if (byte == 10) {
+        // Newlines advance the line counter and reset the column counter. Every
+        // other byte, including a carriage return, advances the column only.
+        scanner.line = scanner.line + 1;
+        scanner.column = 1;
+    } else {
+        scanner.column = scanner.column + 1;
+    }
+    return byte;
+}
+
+// is_digit reports whether byte is a decimal digit.
+fn is_digit(int byte) -> bool {
+    return byte >= 48 && byte <= 57; // '0'..'9'
+}
+
+// is_identifier_start reports whether byte may begin an identifier.
+//
+// Only ASCII letters and the underscore qualify. A non-ASCII byte is not an
+// identifier byte, because this scanner does not decode UTF-8; the reference
+// lexer makes the same decision for every non-ASCII code point.
+fn is_identifier_start(int byte) -> bool {
+    return byte == 95 || (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90); // _ a-z A-Z
+}
+
+// is_identifier_part reports whether byte may appear after the first byte of an
+// identifier.
+fn is_identifier_part(int byte) -> bool {
+    return is_identifier_start(byte) || is_digit(byte);
+}
+
+// skip_line_comment consumes a // comment up to, but not including, the newline
+// that ends it. The newline is left for skip_trivia to consume, so that line
+// and column tracking stays in one place.
+fn skip_line_comment(Scanner scanner) {
+    while (!at_end(scanner) && peek(scanner) != 10) {
+        advance(scanner);
+    }
+}
+
+// skip_trivia consumes spaces, tabs, carriage returns, newlines, and // line
+// comments.
+//
+// Block comments are not part of the language (SPEC.md 8), so /* is not
+// special: the slash becomes a Slash token and the star a Star token.
+fn skip_trivia(Scanner scanner) {
+    bool scanning = true;
+    while (scanning) {
+        if (at_end(scanner)) {
+            scanning = false;
+        } else {
+            int byte = peek(scanner);
+            if (byte == 32 || byte == 9 || byte == 13 || byte == 10) {
+                advance(scanner);
+            } else if (byte == 47 && peek_at(scanner, 1) == 47) { // "//"
+                skip_line_comment(scanner);
+            } else {
+                scanning = false;
+            }
+        }
+    }
+}
+
+// keyword_kind returns the token kind of a word, or Ident when the word is not
+// reserved.
+//
+// The reserved words are exactly those listed in SPEC.md 5: the statement and
+// declaration keywords, the built-in type names, and the boolean literals.
+// "print" is deliberately not reserved, so it lexes as Ident, exactly as in the
+// reference lexer.
+fn keyword_kind(string text) -> TokenKind {
+    if (text == "struct") { return TokenKind.Struct; }
+    if (text == "if") { return TokenKind.If; }
+    if (text == "else") { return TokenKind.Else; }
+    if (text == "while") { return TokenKind.While; }
+    if (text == "for") { return TokenKind.For; }
+    if (text == "return") { return TokenKind.Return; }
+    if (text == "fn") { return TokenKind.Fn; }
+    if (text == "new") { return TokenKind.New; }
+    if (text == "import") { return TokenKind.Import; }
+    if (text == "public") { return TokenKind.Public; }
+    if (text == "private") { return TokenKind.Private; }
+    if (text == "enum") { return TokenKind.Enum; }
+    if (text == "union") { return TokenKind.Union; }
+    if (text == "match") { return TokenKind.Match; }
+    if (text == "map") { return TokenKind.Map; }
+    if (text == "int") { return TokenKind.TypeInt; }
+    if (text == "float") { return TokenKind.TypeFloat; }
+    if (text == "bool") { return TokenKind.TypeBool; }
+    if (text == "string") { return TokenKind.TypeString; }
+    if (text == "void") { return TokenKind.TypeVoid; }
+    if (text == "true") { return TokenKind.True; }
+    if (text == "false") { return TokenKind.False; }
+    return TokenKind.Ident;
+}
+
+// token_text returns the source spelling of the token that starts at start and
+// ends at the current position.
+fn token_text(Scanner scanner, int start) -> string {
+    return substring(scanner.source, start, scanner.position);
+}
+
+// ok_token builds a successful scan result, or a failed one when line/column
+// are reported back. This keeps the token construction in one place.
+fn ok_token(Scanner scanner, int start, TokenKind kind, int start_line, int start_column) -> ScanResult {
+    return ScanResult.Ok {
+        token = Token {
+            kind = kind,
+            text = token_text(scanner, start),
+            line = start_line,
+            column = start_column
+        }
+    };
+}
+
+// failed builds a lexical error result.
+fn failed(int line, int column, string message) -> ScanResult {
+    return ScanResult.Failed { line = line, column = column, message = message };
+}
+
+// scan_identifier consumes an identifier or keyword.
+fn scan_identifier(Scanner scanner, int start_line, int start_column) -> ScanResult {
+    int start = scanner.position;
+    while (!at_end(scanner) && is_identifier_part(scanner.source[scanner.position])) {
+        advance(scanner);
+    }
+    string text = token_text(scanner, start);
+    return ok_token(scanner, start, keyword_kind(text), start_line, start_column);
+}
+
+// scan_number consumes a decimal integer or floating-point literal.
+//
+// A decimal point is part of the literal only when it is immediately followed
+// by a decimal digit. Thus "1." is an integer followed by a dot and ".5" is a
+// dot followed by an integer. Hex, exponent, and suffix forms do not exist
+// (SPEC.md 6.1 and 6.2), so there is no such thing as a malformed number: a
+// digit sequence always scans as a literal, and any other character after it
+// begins the next token.
+fn scan_number(Scanner scanner, int start_line, int start_column) -> ScanResult {
+    int start = scanner.position;
+    while (!at_end(scanner) && is_digit(scanner.source[scanner.position])) {
+        advance(scanner);
+    }
+
+    TokenKind kind = TokenKind.Int;
+    if (peek(scanner) == 46 && is_digit(peek_at(scanner, 1))) { // '.' followed by a digit
+        kind = TokenKind.Float;
+        advance(scanner); // the decimal point
+        while (!at_end(scanner) && is_digit(scanner.source[scanner.position])) {
+            advance(scanner);
+        }
+    }
+    return ok_token(scanner, start, kind, start_line, start_column);
+}
+
+// scan_string consumes a double-quoted string literal, validating escapes.
+//
+// The token text is the original source spelling, including the quotation marks
+// and the escape sequences verbatim; the scanner performs no decoding. A raw
+// newline inside the literal is an error, so literals cannot span lines.
+fn scan_string(Scanner scanner, int start_line, int start_column) -> ScanResult {
+    int start = scanner.position;
+    advance(scanner); // opening quote
+
+    while (!at_end(scanner)) {
+        int byte = peek(scanner);
+        if (byte == 34) { // closing quote
+            advance(scanner);
+            return ok_token(scanner, start, TokenKind.String, start_line, start_column);
+        }
+        if (byte == 10) {
+            // The error points at the newline, which is not consumed, so its
+            // line and column are the literal's own line and the column of the
+            // offending byte.
+            return failed(scanner.line, scanner.column, "newline in string literal");
+        }
+        if (byte == 92) { // backslash
+            advance(scanner); // the backslash
+            if (at_end(scanner)) {
+                // A trailing backslash reaching end of input is an unterminated
+                // string, reported at the opening quote.
+                return failed(start_line, start_column, "unterminated string literal");
+            }
+            int escape_line = scanner.line;
+            int escape_column = scanner.column;
+            int escaped = advance(scanner);
+            bool supported = escaped == 110 || escaped == 116 || escaped == 34 || escaped == 92; // n t " backslash
+            if (!supported) {
+                // The error points at the escaped byte, not at the backslash.
+                return failed(escape_line, escape_column, "invalid escape sequence \\" + substring(scanner.source, scanner.position - 1, scanner.position));
+            }
+        } else {
+            advance(scanner);
+        }
+    }
+    return failed(start_line, start_column, "unterminated string literal");
+}
+
+// scan_operator consumes one operator or punctuation mark, preferring the
+// longest match so that multi-character operators such as "==" and "->" become
+// a single token. A byte that cannot begin a token is a lexical error at its
+// own position.
+fn scan_operator(Scanner scanner, int start_line, int start_column) -> ScanResult {
+    int start = scanner.position;
+    int first = advance(scanner);
+    TokenKind kind = TokenKind.Invalid;
+    bool matched = true;
+
+    if (first == 43) { // +
+        kind = TokenKind.Plus;
+        if (peek(scanner) == 43) {
+            advance(scanner);
+            kind = TokenKind.Inc;
+        } else if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.PlusAssign;
+        }
+    } else if (first == 45) { // -
+        kind = TokenKind.Minus;
+        if (peek(scanner) == 45) {
+            advance(scanner);
+            kind = TokenKind.Dec;
+        } else if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.MinusAssign;
+        } else if (peek(scanner) == 62) {
+            advance(scanner);
+            kind = TokenKind.Arrow;
+        }
+    } else if (first == 42) { // *
+        kind = TokenKind.Star;
+    } else if (first == 47) { // /
+        kind = TokenKind.Slash;
+    } else if (first == 37) { // %
+        kind = TokenKind.Percent;
+    } else if (first == 61) { // =
+        kind = TokenKind.Assign;
+        if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.Eq;
+        }
+    } else if (first == 33) { // !
+        kind = TokenKind.Not;
+        if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.Neq;
+        }
+    } else if (first == 60) { // <
+        kind = TokenKind.Lt;
+        if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.Lte;
+        }
+    } else if (first == 62) { // >
+        kind = TokenKind.Gt;
+        if (peek(scanner) == 61) {
+            advance(scanner);
+            kind = TokenKind.Gte;
+        }
+    } else if (first == 38) { // &
+        if (peek(scanner) == 38) {
+            advance(scanner);
+            kind = TokenKind.And;
+        } else {
+            matched = false;
+        }
+    } else if (first == 124) { // |
+        if (peek(scanner) == 124) {
+            advance(scanner);
+            kind = TokenKind.Or;
+        } else {
+            matched = false;
+        }
+    } else if (first == 40) {
+        kind = TokenKind.LParen;
+    } else if (first == 41) {
+        kind = TokenKind.RParen;
+    } else if (first == 123) {
+        kind = TokenKind.LBrace;
+    } else if (first == 125) {
+        kind = TokenKind.RBrace;
+    } else if (first == 91) {
+        kind = TokenKind.LBracket;
+    } else if (first == 93) {
+        kind = TokenKind.RBracket;
+    } else if (first == 44) {
+        kind = TokenKind.Comma;
+    } else if (first == 46) {
+        kind = TokenKind.Dot;
+    } else if (first == 59) {
+        kind = TokenKind.Semicolon;
+    } else if (first == 58) {
+        kind = TokenKind.Colon;
+    } else {
+        matched = false;
+    }
+
+    if (!matched) {
+        return failed(start_line, start_column, "unexpected character " + quoted_byte(scanner.source, start));
+    }
+    return ok_token(scanner, start, kind, start_line, start_column);
+}
+
+// hex_pair returns the two lowercase hexadecimal digits of a byte, the form Go
+// uses for the \xNN escape.
+fn hex_pair(int byte) -> string {
+    string digits = "0123456789abcdef";
+    int high = byte / 16;
+    int low = byte % 16;
+    return substring(digits, high, high + 1) + substring(digits, low, low + 1);
+}
+
+// quoted_byte renders the byte at index the way the reference lexer renders an
+// unexpected character, as a single-quoted Go rune literal.
+//
+// For a byte below 128 this reproduces Go's %q exactly, including the named
+// escapes and the \xNN form for other unprintable bytes. A byte at or above 128
+// is reported as \xNN, because this scanner does not decode UTF-8; the
+// reference lexer would report the decoded code point instead. That difference
+// is recorded in README.md.
+fn quoted_byte(string source, int index) -> string {
+    int byte = source[index];
+    if (byte == 39) { return "'\\''"; } // '
+    if (byte == 92) { return "'\\\\'"; } // backslash
+    if (byte == 7) { return "'\\a'"; }
+    if (byte == 8) { return "'\\b'"; }
+    if (byte == 9) { return "'\\t'"; }
+    if (byte == 10) { return "'\\n'"; }
+    if (byte == 11) { return "'\\v'"; }
+    if (byte == 12) { return "'\\f'"; }
+    if (byte == 13) { return "'\\r'"; }
+    if (byte >= 32 && byte <= 126) {
+        return "'" + substring(source, index, index + 1) + "'";
+    }
+    return "'\\x" + hex_pair(byte) + "'";
+}
+
+// scan_token skips trivia and returns the next token, or the lexical error that
+// stopped the scan.
+//
+// At end of input it returns the single EOF token whose position is the
+// position immediately after the last source byte, which is what the reference
+// lexer reports.
+fn scan_token(Scanner scanner) -> ScanResult {
+    skip_trivia(scanner);
+    if (at_end(scanner)) {
+        return ScanResult.Ok {
+            token = Token { kind = TokenKind.EOF, text = "", line = scanner.line, column = scanner.column }
+        };
+    }
+
+    int start_line = scanner.line;
+    int start_column = scanner.column;
+    int current = peek(scanner);
+    if (is_identifier_start(current)) {
+        return scan_identifier(scanner, start_line, start_column);
+    }
+    if (is_digit(current)) {
+        return scan_number(scanner, start_line, start_column);
+    }
+    if (current == 34) { // "
+        return scan_string(scanner, start_line, start_column);
+    }
+    return scan_operator(scanner, start_line, start_column);
+}
+
+// lex scans a whole source string and returns its tokens, or the first lexical
+// error.
+//
+// A successful result ends with exactly one EOF token, so a consumer can stop
+// at EOF and needs no separate end-of-input test. A failed result carries no
+// tokens, because the reference lexer stops at the first error.
+//
+// The token buffer is sized length(source) + 1. That bound is exact: every
+// token other than EOF consumes at least one byte, so a source of n bytes
+// produces at most n such tokens, and the EOF token needs one more slot. Only
+// count of those slots is ever written or read, so no uninitialized token is
+// observed.
+public fn lex(string source) -> LexResult {
+    Scanner scanner = Scanner { source = source, size = length(source), position = 0, line = 1, column = 1 };
+    Token[] tokens = new Token[scanner.size + 1];
+    int count = 0;
+
+    bool failed_scan = false;
+    int error_line = 1;
+    int error_column = 1;
+    string error_message = "";
+
+    bool finished = false;
+    while (!finished) {
+        ScanResult scanned = scan_token(scanner);
+        match (scanned) {
+            Ok(token) {
+                tokens[count] = token;
+                count++;
+                if (token.kind == TokenKind.EOF) {
+                    finished = true;
+                }
+            }
+            Failed(line, column, message) {
+                failed_scan = true;
+                error_line = line;
+                error_column = column;
+                error_message = message;
+                finished = true;
+            }
+        }
+    }
+
+    if (failed_scan) {
+        return LexResult.Failure { line = error_line, column = error_column, message = error_message };
+    }
+    return LexResult.Success { tokens = tokens, count = count };
+}

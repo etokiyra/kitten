@@ -219,7 +219,7 @@ Any other escape sequence is a lexical error. The token text preserves the
 original spelling, including the quotes and the escapes; the lexer performs no
 decoding. A string literal denotes an immutable NUL-terminated byte sequence.
 String representation and dynamic string operations are described in Section 20;
-indexing, slicing, and length are still **deferred**.
+byte length, byte indexing, and byte ranges are implemented there.
 
 An unterminated string, a newline inside a string, or an unsupported escape is
 reported as a lexical error at a specific `line:column`. A trailing backslash
@@ -525,6 +525,11 @@ outcome here.
 - Conversions between strings and other types, and code-point operations, are
   **deferred** (Section 20.7).
 - Whether string interpolation or raw/multiline strings exist.
+- The representation makes `length` and indexing linear in the string's length,
+  so scanning a source file with the Kitten-written lexer is quadratic in its
+  size (Section 25.5). A length-carrying representation, which would make both
+  constant-time, is **deferred**; it is not a language-visible change and no
+  program behavior depends on it.
 
 **Visibility and declarations**
 
@@ -583,6 +588,10 @@ outcome here.
 - Concurrency.
 - The precise behavior of the garbage collector and runtime, and the concrete
   Boehm GC configuration.
+- A way for a Kitten program to read its command-line arguments, to write to
+  standard error, and to choose its process exit status. None exists, so a
+  program cannot take a path from the command line and cannot report failure
+  except through a fatal runtime error (Section 25.4).
 
 **Lexical clarifications deferred**
 
@@ -600,8 +609,11 @@ outcome here.
   platform.
 - The `.ktn` fixtures lex, parse, check, compile, and execute; the end-to-end
   tests compare their output with the matching `.expected` files byte-for-byte.
-- Self-hosting, a native (LLVM or assembly) backend, dynamic strings, and the
-  standard library are not implemented (Section 19.8).
+- A lexer written in Kitten itself exists under `selfhost/lexer` and is compared
+  against the Go reference lexer by a differential test, but it is not part of
+  the production pipeline (Section 25).
+- Self-hosting, a native (LLVM or assembly) backend, and the standard library
+  are not implemented (Section 19.8).
 
 ---
 
@@ -1915,3 +1927,98 @@ The following are **not** implemented and must not be assumed:
    mutated.
 8. Growth doubles capacity and rehashes all entries; there is no shrinking and
    no removal.
+
+---
+
+## 25. Kitten-written lexer (experimental)
+
+This section records a component that is written in Kitten itself and runs under
+the Go bootstrap compiler. It is **not** the production front end: `kitten build`
+and `kitten run` continue to use the Go lexer in `lexer/`, and Sections 3–8
+remain the normative description of lexical structure. The section exists so that
+the artifact, its deliberate differences, and its known limits are documented
+rather than assumed.
+
+### 25.1 Location and role
+
+The sources are:
+
+- `selfhost/lexer/tokens.ktn` — the token vocabulary: the `TokenKind` enum, the
+  `Token` struct, the `LexResult` union, and the mapping from a kind to its name.
+- `selfhost/lexer/lexer.ktn` — the scanner and the public `lex` function.
+- `selfhost/lexer/main.ktn` — a driver program that reads a file and prints
+  tokens.
+
+`selfhost/lexer/README.md` describes how to build and run them. This is the first
+component of the eventual self-hosting compiler (Section 15); the parser, the
+checker, and the code generator are still written only in Go.
+
+### 25.2 Fidelity to the reference lexer
+
+The Kitten lexer reproduces the reference behavior described in Sections 3–8: the
+same token kinds, the same token text, the same one-based line and column
+positions, the same first-error behavior, and the same messages. A differential
+test in `cmd/kitten` compiles the Kitten lexer and compares it against the Go
+lexer over a corpus of hundreds of inputs; the corpus, the comparison rules, and
+the results are recorded in `selfhost/lexer/README.md`.
+
+### 25.3 Token storage
+
+A lexing pass stores its tokens in a `Token[]` whose length is
+`length(source) + 1`, together with a separate count of populated entries. The
+bound is exact: every token other than `EOF` consumes at least one source byte,
+so a source of *n* bytes produces at most *n* such tokens, and the single `EOF`
+token needs one more slot. Only the populated prefix is ever read, so no
+uninitialized token is observed, and no slot is written twice.
+
+### 25.4 Documented differences from the reference lexer
+
+- **Positions are counted in bytes.** The reference lexer scans a `[]rune` and
+  counts columns in code points (Section 3); the Kitten lexer scans bytes,
+  because Kitten strings are byte sequences with byte length, byte indexing, and
+  byte ranges (Section 20.6). For ASCII input the two agree exactly. For input
+  containing bytes at or above 128, the column numbers after those bytes differ,
+  and the "unexpected character" message names a byte (`'\xc3'`) where the
+  reference names a decoded code point.
+- **Embedded NUL bytes.** A Kitten string cannot contain a NUL byte
+  (Section 20.1), so a source file containing one is truncated at that byte by
+  `read_file`; the reference lexer would continue past it.
+- **No command-line arguments, standard error, or chosen exit status.** The
+  runtime exposes no way for a program to read its arguments, to write to
+  standard error, or to select a nonzero exit status; the only nonzero exit is a
+  fatal runtime error. The driver therefore reads the fixed relative path
+  `input.txt` and reports a lexical error on standard output. Argument access and
+  exit status are **deferred** (Section 16).
+
+None of these differences changes the language: they are properties of this
+experimental implementation, and the reference lexer remains authoritative.
+
+### 25.5 Performance
+
+`length` and string indexing are linear in a string's length, because the
+representation is NUL-terminated and stores no length (Section 20.6). The
+scanner indexes the source several times per byte, so its total work grows
+quadratically with the input size. Measured on the development machine, lexing
+the same generated source through the compiled Kitten program takes about 0.3 ms
+for 1 KB, 1.6 ms for 4 KB, 15 ms for 16 KB, and 250 ms for 64 KB, against about
+50 µs, 0.2 ms, 0.8 ms, and 3 ms for the Go reference lexer. A source file of the
+size the current compiler handles is therefore lexed in milliseconds, while
+scanning multi-hundred-kilobyte files is not practical.
+
+The bottleneck is string indexing, whose per-access cost is a scan of the whole
+string. Making `length` and indexing constant-time with a length-carrying
+representation is **deferred** to a separate optimization milestone and is
+deliberately not attempted here (Section 16). No program behavior depends on the
+representation change.
+
+### 25.6 Deferred
+
+The following are **not** implemented and must not be assumed:
+
+- Any part of the compiler other than the lexer: there is no Kitten-written
+  parser, checker, or code generator.
+- Parsing, or any check that the tokens form a valid program: the driver reports
+  tokens and lexical errors only.
+- Command-line arguments, standard error, and program-selected exit statuses.
+- Code-point (UTF-8) aware positions and messages.
+- Constant-time string length and indexing.

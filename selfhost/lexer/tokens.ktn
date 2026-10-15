@@ -1,0 +1,193 @@
+// tokens.ktn - the token vocabulary of the Kitten-written lexer.
+//
+// This module holds the data a lexer produces and nothing else: the token
+// kinds, the Token struct, the LexResult union, and the mapping from a kind to
+// its printable name. Keeping the vocabulary separate from the scanner lets
+// other modules use it without depending on the scanning logic.
+//
+// The kinds, the field names, and the printable names mirror the Go reference
+// lexer in lexer/token.go, which remains the production front end. The
+// reference is the specification for this vocabulary; see README.md.
+
+// TokenKind identifies the lexical category of a token.
+//
+// Every keyword, built-in type name, operator, and punctuation mark that a
+// parser may need to distinguish has its own kind, so a consumer never has to
+// re-inspect a token's text to work out which keyword or operator it is.
+public enum TokenKind {
+    // EOF marks the end of the input. A successful lexing pass always ends with
+    // exactly one EOF token, whose text is empty.
+    EOF,
+
+    // Invalid is reserved for future phases. The scanner never produces it;
+    // malformed input is reported as a lexical error instead.
+    Invalid,
+
+    // Ident is a user-defined identifier, including built-in function names such
+    // as "print", which are not reserved keywords.
+    Ident,
+
+    // Literals.
+    Int,
+    Float,
+    String,
+
+    // Keywords.
+    Struct,
+    If,
+    Else,
+    While,
+    For,
+    Return,
+    Fn,
+    New,
+    Import,
+    Public,
+    Private,
+    Enum,
+    Union,
+    Match,
+    Map,
+
+    // Built-in type names.
+    TypeInt,
+    TypeFloat,
+    TypeBool,
+    TypeString,
+    TypeVoid,
+
+    // Boolean literals.
+    True,
+    False,
+
+    // Operators.
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Assign,
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    And,
+    Or,
+    Not,
+    Inc,
+    Dec,
+    PlusAssign,
+    MinusAssign,
+    Arrow,
+
+    // Punctuation.
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Comma,
+    Dot,
+    Semicolon,
+    Colon
+}
+
+// Token is a single lexical unit produced by the scanner.
+public struct Token {
+    // kind is the lexical category of the token.
+    TokenKind kind;
+
+    // text is the original source spelling of the token, with no transformations
+    // applied. For a string literal it includes the surrounding quotation marks
+    // and any escape sequences exactly as written in the source.
+    string text;
+
+    // line is the one-based line on which the token starts.
+    int line;
+
+    // column is the one-based column at which the token starts. It is counted
+    // in bytes, not code points; see README.md.
+    int column;
+}
+
+// LexResult distinguishes a successful lexing pass from a lexical error.
+//
+// A successful pass carries the populated prefix of the token buffer and the
+// number of populated tokens; the buffer may be longer, so a consumer must use
+// count rather than the buffer's length. A failed pass carries the position and
+// the message of the first lexical error and no tokens, mirroring the reference
+// lexer, which stops at the first error.
+public union LexResult {
+    Success { Token[] tokens; int count; }
+    Failure { int line; int column; string message; }
+}
+
+// kind_name returns the stable, human-readable name of a token kind.
+//
+// The names are exactly the ones the Go reference lexer reports through
+// Kind.String, so that the two lexers can be compared as text.
+public fn kind_name(TokenKind kind) -> string {
+    match (kind) {
+        EOF { return "EOF"; }
+        Invalid { return "Invalid"; }
+        Ident { return "Ident"; }
+        Int { return "Int"; }
+        Float { return "Float"; }
+        String { return "String"; }
+        Struct { return "Struct"; }
+        If { return "If"; }
+        Else { return "Else"; }
+        While { return "While"; }
+        For { return "For"; }
+        Return { return "Return"; }
+        Fn { return "Fn"; }
+        New { return "New"; }
+        Import { return "Import"; }
+        Public { return "Public"; }
+        Private { return "Private"; }
+        Enum { return "Enum"; }
+        Union { return "Union"; }
+        Match { return "Match"; }
+        Map { return "Map"; }
+        TypeInt { return "TypeInt"; }
+        TypeFloat { return "TypeFloat"; }
+        TypeBool { return "TypeBool"; }
+        TypeString { return "TypeString"; }
+        TypeVoid { return "TypeVoid"; }
+        True { return "True"; }
+        False { return "False"; }
+        Plus { return "Plus"; }
+        Minus { return "Minus"; }
+        Star { return "Star"; }
+        Slash { return "Slash"; }
+        Percent { return "Percent"; }
+        Assign { return "Assign"; }
+        Eq { return "Eq"; }
+        Neq { return "Neq"; }
+        Lt { return "Lt"; }
+        Lte { return "Lte"; }
+        Gt { return "Gt"; }
+        Gte { return "Gte"; }
+        And { return "And"; }
+        Or { return "Or"; }
+        Not { return "Not"; }
+        Inc { return "Inc"; }
+        Dec { return "Dec"; }
+        PlusAssign { return "PlusAssign"; }
+        MinusAssign { return "MinusAssign"; }
+        Arrow { return "Arrow"; }
+        LParen { return "LParen"; }
+        RParen { return "RParen"; }
+        LBrace { return "LBrace"; }
+        RBrace { return "RBrace"; }
+        LBracket { return "LBracket"; }
+        RBracket { return "RBracket"; }
+        Comma { return "Comma"; }
+        Dot { return "Dot"; }
+        Semicolon { return "Semicolon"; }
+        Colon { return "Colon"; }
+    }
+}

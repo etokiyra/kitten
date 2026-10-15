@@ -40,15 +40,20 @@ them to match buggy behavior.
    interfaces and table-driven tests over clever or tightly coupled code.
 9. Use descriptive identifiers. Avoid unexplained single-letter variable names.
    Conventional short names are fine for loop indices and local coordinates.
+10. Components written in Kitten for the eventual self-hosting compiler live
+    under `selfhost/`. They are compiled and tested by the bootstrap compiler but
+    are not wired into `kitten build` or `kitten run`, which keep using the Go
+    implementation. Do not make the production pipeline depend on them without
+    explicit authorization.
 
 ## Process
 
-10. Make small, focused changes. One coherent change per commit, with a clear
+11. Make small, focused changes. One coherent change per commit, with a clear
     message.
-11. Do not begin future phases without explicit authorization. Do not implement
+12. Do not begin future phases without explicit authorization. Do not implement
     self-hosting, a native backend, or standard-library features without
     explicit authorization.
-12. Update documentation when established behavior changes: `SPEC.md` for
+13. Update documentation when established behavior changes: `SPEC.md` for
     language behavior, `AGENTS.md` for process and architecture.
 
 ## Current phase
@@ -68,7 +73,16 @@ alternatives, variants with typed payloads, safe construction, and an exhaustive
 `match` statement for inspecting variants. Phase 3E delivered typed maps:
 `map[string]V` with string keys, GC-managed reference semantics, and a hash
 table in the runtime. Phase 3F prepared for a Kitten-written lexer: string byte
-length, bounds-checked byte indexing, and byte ranges (`substring`).
+length, bounds-checked byte indexing, and byte ranges (`substring`). Phase 3G
+delivered the first real component written in Kitten: a lexer under
+`selfhost/lexer` that mirrors the Go reference lexer and is checked against it by
+a differential corpus of 772 inputs in `cmd/kitten`.
+
+The Kitten-written lexer is not part of the production pipeline: `kitten build`
+and `kitten run` still use the Go lexer, which remains authoritative. Its
+deliberate differences (byte-oriented positions, no command-line arguments or
+chosen exit status) and its quadratic scanning cost are documented in SPEC.md
+Section 25, `selfhost/lexer/README.md`, and Section 16.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -81,7 +95,8 @@ authorization.
    language foundations self-hosting needs. **In progress** (Phase 3A added
    dynamic strings; Phase 3B added dynamic arrays; Phase 3C added file I/O and
    modules; Phase 3D added enums and tagged unions; Phase 3E added typed maps;
-   Phase 3F added string byte access for a future lexer).
+   Phase 3F added string byte access; Phase 3G added a Kitten-written lexer
+   checked against the Go lexer, without replacing it).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

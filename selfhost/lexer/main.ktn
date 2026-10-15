@@ -1,0 +1,41 @@
+// main.ktn - the runnable driver for the Kitten-written lexer.
+//
+// It reads one source file, lexes it with lex(), and prints the result as one
+// line per token, or one line for the first lexical error:
+//
+//     token <kind> <line> <column> <byte-length> <text>
+//     error <line> <column> <message>
+//
+// The text is last, so it may itself contain spaces; its byte length is printed
+// before it so a reader can recover it exactly. The format is deterministic and
+// is what the differential harness in the Go bootstrap repository parses.
+//
+// Input selection: the Kitten runtime does not expose command-line arguments or
+// environment variables to a program (see README.md), so this program cannot
+// take a path from the command line. It reads the fixed relative path
+// "input.txt", which makes it parameterized by its working directory: a caller
+// chooses the input by choosing the directory to run in. The reference lexer's
+// own path handling is unaffected.
+//
+// A missing or unreadable input file is a fatal runtime error from read_file, as
+// documented in SPEC.md 22.2.
+
+import "tokens.ktn";
+import "lexer.ktn";
+
+fn main() {
+    string source = read_file("input.txt");
+    LexResult result = lex(source);
+
+    match (result) {
+        Success(tokens, count) {
+            for (int index = 0; index < count; index++) {
+                Token token = tokens[index];
+                print("token", kind_name(token.kind), token.line, token.column, length(token.text), token.text);
+            }
+        }
+        Failure(line, column, message) {
+            print("error", line, column, message);
+        }
+    }
+}
