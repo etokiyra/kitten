@@ -202,6 +202,26 @@ func (g *generator) varDeclaration(declaration *parser.VarDeclStmt) (string, err
 	return text, nil
 }
 
+// stringLiteralName renders a string literal as a reference to its pooled
+// static object, declaring that object if this is the literal's first use.
+//
+// Equal literals share one object, because the C spelling produced by
+// cStringLiteral is a one-to-one encoding of the literal's bytes.
+func (g *generator) stringLiteralName(literal *parser.StringLiteral) (string, error) {
+	escaped, length, err := cStringLiteral(literal.Text)
+	if err != nil {
+		return "", &Error{Line: literal.At.Line, Column: literal.At.Column, Message: err.Error()}
+	}
+	if name, ok := g.literalNames[escaped]; ok {
+		return "(&" + name + ")", nil
+	}
+
+	name := fmt.Sprintf("%s%d", literalPrefix, len(g.literals)+1)
+	g.literals = append(g.literals, stringLiteral{name: name, escaped: escaped, length: length})
+	g.literalNames[escaped] = name
+	return "(&" + name + ")", nil
+}
+
 // expression renders an expression as a C expression.
 func (g *generator) expression(expression parser.Expr) (string, error) {
 	switch e := expression.(type) {
@@ -215,11 +235,7 @@ func (g *generator) expression(expression parser.Expr) (string, error) {
 		}
 		return "false", nil
 	case *parser.StringLiteral:
-		literal, err := cStringLiteral(e.Text)
-		if err != nil {
-			return "", &Error{Line: e.At.Line, Column: e.At.Column, Message: err.Error()}
-		}
-		return literal, nil
+		return g.stringLiteralName(e)
 	case *parser.Identifier:
 		return variableName(e.Name), nil
 	case *parser.UnaryExpr:

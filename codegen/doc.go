@@ -10,7 +10,7 @@
 // given program and is written for the runtime in the sibling runtime package.
 //
 // Type mapping: int is int64_t, float is double, bool is bool, string is
-// const char *, a struct or union is a pointer to a GC-managed generated C
+// const ktn_string *, a struct or union is a pointer to a GC-managed generated C
 // struct, an enum is an int64_t typedef with one constant per case, an array is
 // a ktn_array pointer, and a map is a ktn_map pointer. Struct and union literals
 // and map creation allocate through the runtime, so struct, union, array, and map

@@ -7,8 +7,9 @@
 //
 //   - garbage-collector initialization and managed allocation, backed by the
 //     Boehm-Demers-Weiser conservative collector;
-//   - string operations: value equality, concatenation, append, byte length,
-//     byte indexing, and byte ranges;
+//   - strings: an immutable, length-carrying byte sequence represented by the
+//     ktn_string type, with constant-time length and indexing, value equality,
+//     concatenation, append, and byte ranges;
 //   - dynamic arrays: allocation, bounds-checked element access, and length;
 //   - string-keyed maps: a hash table with insert, lookup, membership, and
 //     length operations;
@@ -21,4 +22,7 @@
 //
 // The runtime is intentionally minimal. Exceptions, finalizers, and file
 // writing are not implemented.
+//
+// The package also records the runtime's ABI names, which are the identifiers
+// generated code calls.
 package runtime

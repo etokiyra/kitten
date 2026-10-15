@@ -515,21 +515,20 @@ outcome here.
 **Strings**
 
 - In-memory representation, mutability, indexing, and slicing. In this revision
-  a string is an immutable, NUL-terminated byte sequence represented as a
-  pointer to bytes; literals use static storage and constructed strings use
-  GC-managed storage (Sections 19 and 20). Byte indexing, byte length, and byte
-  ranges (`substring`) are implemented; strings remain immutable.
+  a string is an immutable, length-carrying byte sequence represented as a
+  pointer to the runtime's `ktn_string`, whose header and bytes are one object
+  for constructed strings and static storage for literals (Sections 19 and 20).
+  Byte indexing, byte length, and byte ranges (`substring`) are implemented, and
+  length and indexing are constant-time; strings remain immutable.
 - Runtime operations (length, concatenation, comparison). Concatenation (`+`,
   `+=`), value equality (`==`, `!=`), byte length, byte indexing, and byte
   ranges are implemented (Section 20).
 - Conversions between strings and other types, and code-point operations, are
   **deferred** (Section 20.7).
 - Whether string interpolation or raw/multiline strings exist.
-- The representation makes `length` and indexing linear in the string's length,
-  so scanning a source file with the Kitten-written lexer is quadratic in its
-  size (Section 25.5). A length-carrying representation, which would make both
-  constant-time, is **deferred**; it is not a language-visible change and no
-  program behavior depends on it.
+- Whether the representation should also support embedded NUL bytes. It does
+  not: the bytes stay NUL-terminated so they remain usable with C library
+  functions, and no operation can create one (Section 20.1).
 
 **Visibility and declarations**
 
@@ -585,6 +584,13 @@ outcome here.
 **Errors, concurrency, and runtime**
 
 - Error handling.
+- Reading a field of a struct reference that is null, which is what an
+  unassigned struct array element or struct field holds. Arrays, maps, and
+  `match` on a union all report null references as fatal runtime errors, but
+  struct field access does not check: it dereferences the reference, so
+  `new Label[1][0].text` faults instead of reporting an error. Making struct
+  field access reject a null reference is **deferred**; the current behavior is
+  a pre-existing limitation, not a property of the string representation.
 - Concurrency.
 - The precise behavior of the garbage collector and runtime, and the concrete
   Boehm GC configuration.
@@ -1031,7 +1037,7 @@ are expected to evolve.
 | `int` | `int64_t` (signed 64-bit) |
 | `float` | `double` (IEEE 754 binary64) |
 | `bool` | `bool` (`<stdbool.h>`) |
-| `string` | `const char *` (immutable, NUL-terminated byte string) |
+| `string` | `const ktn_string *` (an immutable, length-carrying byte string) |
 | `void` | `void` (function return position only) |
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
 | enum type `E` | `ktn_e_E` (a typedef for `int64_t`) |
@@ -1073,21 +1079,26 @@ is **deferred**.
 - `ktn_rt_init` initializes the Boehm–Demers–Weiser conservative collector. The
   generated C entry point calls it before any allocation.
 - `ktn_rt_alloc` allocates a zero-initialized, pointer-scanned object with the
-  collector. Struct allocation and string concatenation buffers go through it.
-  The collector reclaims objects automatically; Kitten code never frees memory
-  by hand.
+  collector. Struct allocation and constructed strings go through it. The
+  collector reclaims objects automatically; Kitten code never frees memory by
+  hand.
+- `ktn_string` is the runtime's string object: it stores a byte length and a
+  pointer to the bytes, which are still NUL-terminated (Section 20.1). A
+  constructed string is one GC-managed object holding its header and its bytes
+  together; a literal is a `static const ktn_string` whose bytes are static.
 - The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
   `ktn_rt_string_append`, `ktn_rt_string_length`, `ktn_rt_string_at`,
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_map_new`, `ktn_rt_map_set`, `ktn_rt_map_at`,
   `ktn_rt_map_has`, `ktn_rt_map_length`, `ktn_rt_read_file`, and the built-in
   print helpers.
-- Strings are pointers to bytes, so structs may still contain pointers (to
-  strings and to nested structs) and must be scanned; the runtime therefore
+- Strings are pointer-carrying objects, so structs may still contain pointers
+  (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
   buffers and map key, hash, and value buffers use the same scanning allocator,
   so arrays and maps of strings, structs, unions, and nested collections are
-  handled correctly.
+  handled correctly, and a string stored in any of them keeps its bytes alive
+  for as long as it is reachable.
 - Exceptions and finalizers are **not** implemented.
 
 ### 19.4 Built-in `print` behavior
@@ -1210,17 +1221,24 @@ the representation is the first working model and may evolve.
 
 ### 20.1 Representation
 
-- A `string` is an immutable, NUL-terminated sequence of bytes. The C
-  representation is `const char *` (Section 19.1).
-- A string literal denotes a string backed by static storage. The lexer supports
-  the escapes `\n`, `\t`, `\"`, and `\\` (Section 6.3); the code generator
-  decodes them and re-encodes the bytes safely for C.
-- A string produced by concatenation is backed by a freshly allocated,
-  exactly-sized, GC-managed buffer. It remains valid as long as Kitten code can
-  reach it, and it is never freed by hand.
+- A `string` is an immutable, length-carrying sequence of bytes. The C
+  representation is `const ktn_string *` (Section 19.1): the runtime's
+  `ktn_string` stores the number of bytes and a pointer to the bytes, which are
+  NUL-terminated as well so that they remain usable with C library functions.
+  Storing the length makes `length` and indexing constant-time (Section 20.6).
+- A string literal denotes a string backed by static storage: the code generator
+  emits one `static const ktn_string` per distinct literal, with the byte length
+  it computed from the decoded text and the bytes as a static C string. The lexer
+  supports the escapes `\n`, `\t`, `\"`, and `\\` (Section 6.3); the code
+  generator decodes them and re-encodes the bytes safely for C.
+- A string produced by concatenation or by `substring` is a freshly allocated,
+  exactly-sized, GC-managed `ktn_string` whose header and bytes are one object.
+  It remains valid as long as Kitten code can reach it, and it is never freed by
+  hand. Copying the pointer copies the string value, and because strings are
+  immutable the copies never diverge.
 - Strings are byte sequences, not necessarily valid text; concatenation and
   equality are byte operations.
-- **Embedded NUL bytes are not supported.** Because the representation is
+- **Embedded NUL bytes are not supported.** Because the bytes are
   NUL-terminated, a string cannot contain a NUL byte in the middle. Kitten
   provides no way to create one: there is no `\0` escape, and concatenation of
   NUL-free strings is NUL-free. This is a limitation of the representation, not
@@ -1291,10 +1309,10 @@ too. No operation mixes bytes and code points.
   `0 <= start <= end <= byte length`; any other range is a fatal runtime error.
   `substring(text, i, i)` is the empty string, and `substring(text, i, i + 1)`
   is the byte at `i` as a one-byte string.
-- Because the representation is NUL-terminated, computing a string's length
-  requires scanning it, so indexing and `length` are linear in the string's
-  length while a substring copies its range. A future representation that stores
-  the length would make these constant-time; see Section 20.7.
+- `length` and indexing are constant-time, because the length is stored with
+  the bytes; they do not scan the string. `substring` and concatenation copy the
+  bytes they produce, so they are linear in the size of their result, and they
+  allocate one object per result.
 
 ### 20.7 Deferred string operations
 
@@ -1995,21 +2013,34 @@ experimental implementation, and the reference lexer remains authoritative.
 
 ### 25.5 Performance
 
-`length` and string indexing are linear in a string's length, because the
-representation is NUL-terminated and stores no length (Section 20.6). The
-scanner indexes the source several times per byte, so its total work grows
-quadratically with the input size. Measured on the development machine, lexing
-the same generated source through the compiled Kitten program takes about 0.3 ms
-for 1 KB, 1.6 ms for 4 KB, 15 ms for 16 KB, and 250 ms for 64 KB, against about
-50 µs, 0.2 ms, 0.8 ms, and 3 ms for the Go reference lexer. A source file of the
-size the current compiler handles is therefore lexed in milliseconds, while
-scanning multi-hundred-kilobyte files is not practical.
+`length` and string indexing are constant-time, because the representation
+stores the byte length next to the bytes (Section 20.6), so the scanner's work
+grows **linearly** with the input size. Measured on the development machine by
+running the compiled driver (which prints every token) with process start-up
+subtracted, and the Go reference lexer on the same input:
 
-The bottleneck is string indexing, whose per-access cost is a scan of the whole
-string. Making `length` and indexing constant-time with a length-carrying
-representation is **deferred** to a separate optimization milestone and is
-deliberately not attempted here (Section 16). No program behavior depends on the
-representation change.
+| Source | Tokens | Go lexer | Kitten lexer |
+| --- | --- | --- | --- |
+| 1 KB | 253 | 0.08 ms | 0.3 ms |
+| 4 KB | 995 | 0.3 ms | 2.4 ms |
+| 16 KB | 3963 | 1.2 ms | 7.6 ms |
+| 64 KB | 15821 | 5.6 ms | 31 ms |
+| 256 KB | 63281 | 22 ms | 116 ms |
+
+A fourfold input increases the Kitten lexer's time by a factor of about four,
+which is linear within measurement noise. Scanning itself is now the smaller
+part of the cost: a run that only lexes and prints the token count takes about
+249 ms at 1 MB, while printing every token takes about 461 ms, so the driver's
+output accounts for nearly half of the time on large inputs. The remaining
+costs per token are its allocation (the token, the scan result, and the lexeme)
+and the collector's work over them; all are linear in the number of tokens.
+
+For comparison, the previous NUL-terminated representation, whose `length` and
+indexing each scanned the whole string, took about 379 ms for 64 KB and 7.6 s
+for 256 KB on the same machine, growing by a factor of about 13 to 20 for each
+fourfold input. The length-carrying representation is therefore about 14 times
+faster at 64 KB and about 65 times faster at 256 KB, and it removes the
+quadratic term rather than merely reducing it.
 
 ### 25.6 Deferred
 
@@ -2021,4 +2052,3 @@ The following are **not** implemented and must not be assumed:
   tokens and lexical errors only.
 - Command-line arguments, standard error, and program-selected exit statuses.
 - Code-point (UTF-8) aware positions and messages.
-- Constant-time string length and indexing.

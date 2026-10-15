@@ -41,6 +41,38 @@ func assertContains(t *testing.T, generated, substring string) {
 	}
 }
 
+// literalRef returns the C expression that refers to the pooled static object
+// holding the given Kitten string literal, which generated C declares as
+//
+//	static const ktn_string ktn_literal_N = { LENGTH, "TEXT" };
+//
+// Tests use it so that they can refer to a literal without depending on its
+// number in the pool. The argument is the literal as written in Kitten source,
+// including its quotation marks.
+func literalRef(t *testing.T, generated, kittenLiteral string) string {
+	t.Helper()
+
+	escaped, _, err := cStringLiteral(kittenLiteral)
+	if err != nil {
+		t.Fatalf("cStringLiteral(%q): %v", kittenLiteral, err)
+	}
+	for _, line := range strings.Split(generated, "\n") {
+		if !strings.HasPrefix(line, "static const ktn_string "+literalPrefix) {
+			continue
+		}
+		if !strings.Contains(line, escaped+" };") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			t.Fatalf("malformed literal declaration %q", line)
+		}
+		return "(&" + fields[3] + ")"
+	}
+	t.Fatalf("generated C has no pooled literal for %q\n--- generated ---\n%s", kittenLiteral, generated)
+	return ""
+}
+
 func TestGeneratedIncludesRuntimeHeader(t *testing.T) {
 	generated := generateSource(t, "fn main() {\n}\n")
 	assertContains(t, generated, `#include "kitten_runtime.h"`)
@@ -65,7 +97,7 @@ fn main() {
 	assertContains(t, generated, "int64_t ktn_var_a")
 	assertContains(t, generated, "double ktn_var_b")
 	assertContains(t, generated, "bool ktn_var_c")
-	assertContains(t, generated, "const char * ktn_var_d")
+	assertContains(t, generated, "const ktn_string * ktn_var_d")
 	assertContains(t, generated, "ktn_s_Point * ktn_var_p")
 	assertContains(t, generated, "struct ktn_s_Point {")
 	assertContains(t, generated, "int64_t ktn_f_x;")
@@ -105,7 +137,7 @@ func TestPrintExpansion(t *testing.T) {
     print("text", 1, 2.5, true);
 }
 `)
-	assertContains(t, generated, `ktn_rt_print_string("text")`)
+	assertContains(t, generated, `ktn_rt_print_string(`+literalRef(t, generated, `"text"`)+`)`)
 	assertContains(t, generated, "ktn_rt_print_space()")
 	assertContains(t, generated, "ktn_rt_print_int(1)")
 	assertContains(t, generated, "ktn_rt_print_float(2.5)")
@@ -120,8 +152,10 @@ func TestStringEqualityUsesRuntimeHelper(t *testing.T) {
     print(same, different);
 }
 `)
-	assertContains(t, generated, `ktn_rt_string_equal("a", "b")`)
-	assertContains(t, generated, `!ktn_rt_string_equal("a", "b")`)
+	first := literalRef(t, generated, `"a"`)
+	second := literalRef(t, generated, `"b"`)
+	assertContains(t, generated, `ktn_rt_string_equal(`+first+`, `+second+`)`)
+	assertContains(t, generated, `!ktn_rt_string_equal(`+first+`, `+second+`)`)
 }
 
 func TestStringConcatenationUsesRuntimeHelper(t *testing.T) {
@@ -134,9 +168,9 @@ func TestStringConcatenationUsesRuntimeHelper(t *testing.T) {
     print(literal, variables, mixed);
 }
 `)
-	assertContains(t, generated, `ktn_rt_string_concat("a", "b")`)
+	assertContains(t, generated, `ktn_rt_string_concat(`+literalRef(t, generated, `"a"`)+`, `+literalRef(t, generated, `"b"`)+`)`)
 	assertContains(t, generated, "ktn_rt_string_concat(ktn_var_first, ktn_var_second)")
-	assertContains(t, generated, `ktn_rt_string_concat(ktn_var_first, "!")`)
+	assertContains(t, generated, `ktn_rt_string_concat(ktn_var_first, `+literalRef(t, generated, `"!"`)+`)`)
 }
 
 func TestStringCompoundAssignmentLowersToAppend(t *testing.T) {
@@ -145,15 +179,25 @@ func TestStringCompoundAssignmentLowersToAppend(t *testing.T) {
     text += "b";
 }
 `)
-	assertContains(t, generated, `ktn_rt_string_append(&(ktn_var_text), "b")`)
+	assertContains(t, generated, `ktn_rt_string_append(&(ktn_var_text), `+literalRef(t, generated, `"b"`)+`)`)
 }
 
-func TestStringTypeMappingIsConstPointer(t *testing.T) {
-	generated := generateSource(t, `fn main() {
-    string text = "a";
+func TestStringTypeMappingIsLengthCarryingPointer(t *testing.T) {
+	generated := generateSource(t, `fn name() -> string {
+    return "a";
+}
+fn main() {
+    string text = name();
 }
 `)
-	assertContains(t, generated, "const char * ktn_var_text")
+	// A string is a pointer to the runtime's length-carrying string type, and
+	// the literal it is initialized from is a static object of that type whose
+	// length the compiler computed from the decoded bytes.
+	assertContains(t, generated, "const ktn_string * ktn_var_text")
+	assertContains(t, generated, "static const ktn_string "+literalPrefix)
+	assertContains(t, generated, `{ 1, "a" };`)
+	assertContains(t, generated, "const ktn_string * ktn_fn_name(void)")
+	assertContains(t, generated, "const ktn_string * ktn_fn_name(void) {")
 }
 
 func TestArrayCreationAndIndexing(t *testing.T) {
@@ -204,7 +248,7 @@ func TestStringArrayAppendTakesSlotAddress(t *testing.T) {
 `)
 	// The append receives the address of the element slot, so the index is
 	// evaluated once.
-	assertContains(t, generated, `ktn_rt_string_append(&((*((const char * *)ktn_rt_array_at(ktn_var_words, 0)))), "x")`)
+	assertContains(t, generated, `ktn_rt_string_append(&((*((const ktn_string * *)ktn_rt_array_at(ktn_var_words, 0)))), `+literalRef(t, generated, `"x"`)+`)`)
 }
 
 func TestForwardReferencesAreEmittedBeforeUse(t *testing.T) {
@@ -534,7 +578,7 @@ func TestCStringLiteral(t *testing.T) {
 	for _, testCase := range cases {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			got, err := cStringLiteral(testCase.input)
+			got, _, err := cStringLiteral(testCase.input)
 			if testCase.wantErr {
 				if err == nil {
 					t.Fatalf("cStringLiteral(%q) = %q, want an error", testCase.input, got)
@@ -548,6 +592,60 @@ func TestCStringLiteral(t *testing.T) {
 				t.Errorf("cStringLiteral(%q) = %q, want %q", testCase.input, got, testCase.want)
 			}
 		})
+	}
+}
+
+// TestCStringLiteralLength checks that the length returned alongside the
+// escaped C spelling is the number of decoded bytes, which is what a pooled
+// literal stores as its length.
+func TestCStringLiteralLength(t *testing.T) {
+	cases := []struct {
+		input  string
+		length int
+	}{
+		{input: `""`, length: 0},
+		{input: `"a"`, length: 1},
+		{input: `"hello"`, length: 5},
+		{input: `"a\nb"`, length: 3},
+		{input: `"a\tb"`, length: 3},
+		{input: `"a\"b"`, length: 3},
+		{input: `"a\\b"`, length: 3},
+		{input: `"é"`, length: 2},
+		{input: `"日本語"`, length: 9},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.input, func(t *testing.T) {
+			_, got, err := cStringLiteral(testCase.input)
+			if err != nil {
+				t.Fatalf("cStringLiteral(%q) returned error: %v", testCase.input, err)
+			}
+			if got != testCase.length {
+				t.Errorf("cStringLiteral(%q) length = %d, want %d", testCase.input, got, testCase.length)
+			}
+		})
+	}
+}
+
+// TestStringLiteralPoolIsShared checks that equal literals share one static
+// object and that distinct literals get distinct objects, and that the
+// declaration records the decoded byte length.
+func TestStringLiteralPoolIsShared(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    string first = "same";
+    string second = "same";
+    string other = "other";
+    print(first, second, other);
+}
+`)
+	if count := strings.Count(generated, "static const ktn_string "+literalPrefix); count != 2 {
+		t.Errorf("generated C declares %d literals, want 2 for 3 uses of 2 distinct literals", count)
+	}
+	assertContains(t, generated, `{ 4, "same" };`)
+	assertContains(t, generated, `{ 5, "other" };`)
+	if strings.Count(generated, literalRef(t, generated, `"same"`)) != 2 {
+		t.Errorf("the shared literal is not referenced exactly twice")
 	}
 }
 
@@ -632,7 +730,7 @@ private fn helper() -> int {
 		t.Fatalf("generating: %v", err)
 	}
 	assertContains(t, generated, "int64_t ktn_fn_helper(void)")
-	assertContains(t, generated, "const char * ktn_fn_1_helper(void)")
+	assertContains(t, generated, "const ktn_string * ktn_fn_1_helper(void)")
 }
 
 func TestEntryPointMustBeInTheRootModule(t *testing.T) {
@@ -714,10 +812,10 @@ fn main() {
 	assertContains(t, generated, "struct ktn_s_Box {")
 	assertContains(t, generated, "int64_t ktn_tag;")
 	assertContains(t, generated, "int64_t ktn_v_Full_value;")
-	assertContains(t, generated, "const char * ktn_v_Full_label;")
+	assertContains(t, generated, "const ktn_string * ktn_v_Full_label;")
 	assertContains(t, generated, "ktn_uc_Box_Full = 0,")
 	assertContains(t, generated, "ktn_uc_Box_Empty = 1,")
-	assertContains(t, generated, `ktn_new_Box_Full(1, "x")`)
+	assertContains(t, generated, `ktn_new_Box_Full(1, `+literalRef(t, generated, `"x"`)+`)`)
 	assertContains(t, generated, "switch (ktn_match_0->ktn_tag)")
 	assertContains(t, generated, "case ktn_uc_Box_Full:")
 	assertContains(t, generated, "ktn_var_value = ktn_match_0->ktn_v_Full_value;")
@@ -831,10 +929,10 @@ func TestMapGeneration(t *testing.T) {
 }
 `)
 	assertContains(t, generated, "ktn_map * ktn_var_table = ktn_rt_map_new(sizeof(int64_t))")
-	assertContains(t, generated, `ktn_rt_map_set(ktn_var_table, "a", &(int64_t){ 1 })`)
-	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, "b"))) += 2`)
-	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, "a")))`)
-	assertContains(t, generated, `ktn_rt_map_has(ktn_var_table, "z")`)
+	assertContains(t, generated, `ktn_rt_map_set(ktn_var_table, `+literalRef(t, generated, `"a"`)+`, &(int64_t){ 1 })`)
+	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, `+literalRef(t, generated, `"b"`)+`))) += 2`)
+	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, `+literalRef(t, generated, `"a"`)+`)))`)
+	assertContains(t, generated, `ktn_rt_map_has(ktn_var_table, `+literalRef(t, generated, `"z"`)+`)`)
 	assertContains(t, generated, "ktn_rt_map_length(ktn_var_table)")
 }
 
@@ -851,7 +949,7 @@ fn main() {
     print(length(labels), length(kinds), length(entries), length(groups), length(flags), length(ratios));
 }
 `)
-	assertContains(t, generated, "ktn_rt_map_new(sizeof(const char *))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(const ktn_string *))")
 	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_e_Kind))")
 	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_s_Entry *))")
 	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_array *))")
@@ -873,7 +971,7 @@ fn main() {
     print(count(empty(), "a"));
 }
 `)
-	assertContains(t, generated, "int64_t ktn_fn_count(ktn_map * ktn_var_table, const char * ktn_var_key)")
+	assertContains(t, generated, "int64_t ktn_fn_count(ktn_map * ktn_var_table, const ktn_string * ktn_var_key)")
 	assertContains(t, generated, "ktn_map * ktn_fn_empty(void)")
 }
 
@@ -906,8 +1004,8 @@ fn main() {
     print(length("abc"), "abc"[1], first_word("hi there"));
 }
 `)
-	assertContains(t, generated, `ktn_rt_string_length("abc")`)
-	assertContains(t, generated, `ktn_rt_string_at("abc", 1)`)
+	assertContains(t, generated, `ktn_rt_string_length(`+literalRef(t, generated, `"abc"`)+`)`)
+	assertContains(t, generated, `ktn_rt_string_at(`+literalRef(t, generated, `"abc"`)+`, 1)`)
 	assertContains(t, generated, `ktn_var_size = ktn_rt_string_length(ktn_var_source)`)
 	assertContains(t, generated, `ktn_rt_substring(ktn_var_source, 0, ktn_var_position)`)
 	// String indexing is a byte read, not an l-value.

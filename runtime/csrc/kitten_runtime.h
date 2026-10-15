@@ -40,54 +40,81 @@ void ktn_rt_init(void);
 void *ktn_rt_alloc(size_t size);
 
 /*
- * Value equality for Kitten strings, which are immutable NUL-terminated byte
- * strings. Comparison is by content, never by pointer identity. A null pointer
- * is treated as the empty string, so the zero value of a string behaves as "".
+ * An immutable Kitten string: a byte length together with the bytes.
+ *
+ * length is the number of bytes, excluding the NUL terminator that always
+ * follows them. data points at those bytes, so the representation keeps both a
+ * stored length, which makes length and indexing constant-time, and
+ * NUL-termination, which keeps the bytes usable with C library functions.
+ *
+ * A string value in generated code is a `const ktn_string *`. A null pointer is
+ * the empty string, so the zero value of a string behaves as "" and an
+ * unassigned string field or array element is safe to read.
+ *
+ * Strings are immutable, so `data` is not written through once a string is
+ * observable; construction sites write the freshly allocated bytes before the
+ * value can be reached. A statically known literal is a static `const
+ * ktn_string` whose bytes are a static string, and a constructed string is a
+ * single GC-managed object holding its header and its bytes together, so the
+ * bytes can never outlive or be separated from the length that describes them.
+ *
+ * Embedded NUL bytes are not supported: the representation is NUL-terminated,
+ * Kitten provides no way to create one, and the language's string operations
+ * are byte operations over NUL-free strings.
  */
-bool ktn_rt_string_equal(const char *left, const char *right);
+typedef struct ktn_string {
+    int64_t length;
+    const char *data;
+} ktn_string;
+
+/*
+ * Value equality for Kitten strings. Comparison is by content, never by pointer
+ * identity, and lengths are compared before any bytes are examined. A null
+ * pointer is treated as the empty string.
+ */
+bool ktn_rt_string_equal(const ktn_string *left, const ktn_string *right);
 
 /*
  * Returns a new string that is left followed by right. The result is a fresh,
- * exactly-sized, GC-managed buffer, so it stays valid as long as Kitten code
- * can reach it and never needs a manual free. A null operand is treated as the
+ * exactly-sized, GC-managed object, so it stays valid as long as Kitten code can
+ * reach it and never needs a manual free. A null operand is treated as the
  * empty string, so concatenating empty strings yields an empty string.
- *
- * The representation is NUL-terminated, so embedded NUL bytes are not
- * supported; the language cannot create them.
  */
-const char *ktn_rt_string_concat(const char *left, const char *right);
+const ktn_string *ktn_rt_string_concat(const ktn_string *left, const ktn_string *right);
 
 /*
  * Appends value to the string stored in *slot, by assigning *slot the
  * concatenation of its current value and value. It takes the address of the
  * slot so that the target is evaluated exactly once at the call site.
  */
-void ktn_rt_string_append(const char **slot, const char *value);
+void ktn_rt_string_append(const ktn_string **slot, const ktn_string *value);
 
 /*
- * Returns the number of bytes in a string, not counting the terminator. A null
- * pointer is the empty string, so its length is 0.
+ * Returns the number of bytes in a string, not counting the terminator. Reading
+ * the stored length makes this constant-time. A null pointer is the empty
+ * string, so its length is 0.
  */
-int64_t ktn_rt_string_length(const char *value);
+int64_t ktn_rt_string_length(const ktn_string *value);
 
 /*
  * Returns the byte at index as an integer in 0..255.
  *
  * Indexing is byte-oriented, not code-point-oriented: the byte at a given byte
  * offset is returned, so a multi-byte UTF-8 character occupies several indices.
- * The index is bounds-checked; a negative index, or an index at or beyond the
- * byte length, is a fatal runtime error rather than an out-of-bounds read.
+ * The stored length makes this constant-time. The index is bounds-checked; a
+ * negative index, or an index at or beyond the byte length, is a fatal runtime
+ * error rather than an out-of-bounds read.
  */
-int64_t ktn_rt_string_at(const char *value, int64_t index);
+int64_t ktn_rt_string_at(const ktn_string *value, int64_t index);
 
 /*
  * Returns a new string holding the bytes in [start, end).
  *
  * The range is bounds-checked and must satisfy
  * 0 <= start <= end <= byte length; any other range is a fatal runtime error.
- * The result is a fresh, exactly-sized, GC-managed, NUL-terminated buffer.
+ * The result is a fresh, exactly-sized, GC-managed object.
  */
-const char *ktn_rt_substring(const char *value, int64_t start, int64_t end);
+const ktn_string *ktn_rt_substring(const ktn_string *value, int64_t start, int64_t end);
 
 /*
  * A dynamically sized array.
@@ -127,16 +154,17 @@ int64_t ktn_rt_array_length(const ktn_array *array);
  *
  * length is the number of entries; capacity is the number of slots in the hash
  * table, always a power of two or zero; value_size is the size in bytes of one
- * value. keys, hashes, and values are GC-managed arrays of capacity slots. A
- * null key marks an empty slot, so stored keys are never null. Maps are
- * references: assigning one map to another copies the reference, and both names
- * then share the same table.
+ * value. keys, hashes, and values are GC-managed arrays of capacity slots. keys
+ * holds pointers to strings, so a null entry marks an empty slot and stored keys
+ * are never null; because the array is pointer-scanned, a stored key stays alive
+ * as long as the map does. Maps are references: assigning one map to another
+ * copies the reference, and both names then share the same table.
  */
 typedef struct ktn_map {
     int64_t length;
     int64_t capacity;
     int64_t value_size;
-    const char **keys;
+    const ktn_string **keys;
     uint64_t *hashes;
     void *values;
 } ktn_map;
@@ -151,21 +179,22 @@ ktn_map *ktn_rt_map_new(int64_t value_size);
 /*
  * Stores value under key, inserting the entry when the key is absent and
  * updating it when the key is present. value points to value_size bytes to copy
- * into the entry, so a map can hold any value type without type punning.
+ * into the entry, so a map can hold any value type without type punning. The map
+ * retains the key, not a copy of it, so the key stays alive through the map.
  */
-void ktn_rt_map_set(ktn_map *map, const char *key, const void *value);
+void ktn_rt_map_set(ktn_map *map, const ktn_string *key, const void *value);
 
 /*
  * Returns a pointer to the value stored under key. Looking up a key that is
  * absent, or using a null map reference, is a fatal runtime error rather than
  * undefined behavior or a fabricated value.
  */
-void *ktn_rt_map_at(const ktn_map *map, const char *key);
+void *ktn_rt_map_at(const ktn_map *map, const ktn_string *key);
 
 /*
  * Reports whether key is present in the map.
  */
-bool ktn_rt_map_has(const ktn_map *map, const char *key);
+bool ktn_rt_map_has(const ktn_map *map, const ktn_string *key);
 
 /*
  * Returns the number of entries in the map.
@@ -192,8 +221,7 @@ _Noreturn void ktn_rt_fail(const char *message);
 
 /*
  * Reads the entire contents of the regular file at path into a new,
- * GC-managed, NUL-terminated string and returns it. An empty file yields the
- * empty string.
+ * GC-managed string and returns it. An empty file yields the empty string.
  *
  * The path is a Kitten string. Failure is fatal: a missing or unreadable file,
  * a path that is not a seekable regular file, a file larger than
@@ -203,9 +231,9 @@ _Noreturn void ktn_rt_fail(const char *message);
  * Because strings are NUL-terminated, content after the first NUL byte in the
  * file is not represented. The returned string is a snapshot of the file at the
  * time of the read; if the file shrinks while it is being read, fewer bytes are
- * returned.
+ * returned and the stored length is adjusted to match.
  */
-const char *ktn_rt_read_file(const char *path);
+const ktn_string *ktn_rt_read_file(const ktn_string *path);
 
 /*
  * Built-in print helpers. Each writes a single value. Callers separate
@@ -215,7 +243,7 @@ const char *ktn_rt_read_file(const char *path);
 void ktn_rt_print_int(int64_t value);
 void ktn_rt_print_float(double value);
 void ktn_rt_print_bool(bool value);
-void ktn_rt_print_string(const char *value);
+void ktn_rt_print_string(const ktn_string *value);
 void ktn_rt_print_space(void);
 void ktn_rt_print_newline(void);
 

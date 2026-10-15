@@ -131,40 +131,43 @@ positions, and error messages for ASCII input — matches exactly on the corpus.
 
 ## Performance
 
-`length` and string indexing are linear in the string's length, because the
-representation is NUL-terminated and stores no length (SPEC.md 20.6). The
-scanner indexes the source several times per byte, so its total work is
+`length` and string indexing are constant-time, because a Kitten string stores
+its byte length next to its bytes (SPEC.md 20.6), so the scanner's work is
 
-    Θ(n²)        n = source bytes
+    Θ(n)        n = source bytes
 
-Measured with `TestKittenLexerScaling`, which logs its numbers
-(`go test -count=1 -v -run TestKittenLexerScaling ./cmd/kitten/`), on the
-development machine and with process start-up (about 1.3 ms) subtracted:
+plus the per-token cost of allocating a token, a scan result, and a lexeme, which
+is also linear in the number of tokens. Measured with `TestKittenLexerScaling`,
+which logs its numbers (`go test -count=1 -v -run TestKittenLexerScaling
+./cmd/kitten/`), on the development machine and with process start-up (about
+1.3 ms) subtracted:
 
 | Source | Tokens | Go lexer | Kitten lexer | Growth for a 4× input |
 | --- | --- | --- | --- | --- |
-| 1 KB | 253 | 0.05 ms | 0.3 ms | — |
-| 4 KB | 995 | 0.2 ms | 1.6 ms | ×5 |
-| 16 KB | 3963 | 0.8 ms | 15 ms | ×9 |
-| 64 KB | 15821 | 3 ms | 250 ms | ×16 |
+| 1 KB | 253 | 0.08 ms | 0.3 ms | — |
+| 4 KB | 995 | 0.3 ms | 2.4 ms | ×9 (measurement noise dominates) |
+| 16 KB | 3963 | 1.2 ms | 7.6 ms | ×3.1 |
+| 64 KB | 15821 | 5.6 ms | 31 ms | ×4.1 |
+| 256 KB | 63281 | 22 ms | 116 ms | ×3.8 |
 
-A bare loop that reads `source[index]` once per byte already accounts for about
-80 ms of the 64 KB case, which is the evidence that string indexing — not token
-storage, substring extraction, or allocation — is the bottleneck: each index is
-a scan of the whole string.
+A fourfold input costs about four times as much, which is linear. For
+comparison, before the representation stored a length, the same program took
+about 379 ms for 64 KB and 7.6 s for 256 KB on the same machine, with a growth
+factor of about 13 to 20 per fourfold input: the old implementation was
+quadratic, and the change made it about 14× faster at 64 KB and about 65× faster
+at 256 KB.
 
-**Recommendation.** A single source file of the size this compiler handles (a few
-kilobytes) is lexed in a couple of milliseconds, so the current design is usable
-for the next self-hosting step. Scanning multi-hundred-kilobyte files is not
-practical: at 64 KB the scan costs 250 ms, and the quadratic term grows from
-there. A separate optimization milestone — not attempted here — should give
-strings a stored length so that `length` and indexing become constant-time; the
-scanner would then be linear without any change to its logic. This is a
-representation change with no language-visible effect (SPEC.md 16 and 25.5).
+Scanning is no longer the dominant cost. At 1 MB, lexing and printing only the
+token count takes about 249 ms, while printing every token takes about 461 ms, so
+the driver's output is nearly half the time. Within the lexer, the remaining
+per-token cost is allocation — the token, the scan result, and the lexeme — and
+the collector's work over those objects, both proportional to the number of
+tokens.
 
 ## What is deliberately not here
 
 - A parser, checker, or code generator: this is a lexer only.
 - Code-point-aware positions and messages.
 - Command-line arguments, standard error, and program-selected exit statuses.
-- Any optimization of the string representation.
+- Any further optimization: the remaining cost is per-token allocation and the
+  driver's printing, both linear, not scanning.

@@ -76,13 +76,18 @@ table in the runtime. Phase 3F prepared for a Kitten-written lexer: string byte
 length, bounds-checked byte indexing, and byte ranges (`substring`). Phase 3G
 delivered the first real component written in Kitten: a lexer under
 `selfhost/lexer` that mirrors the Go reference lexer and is checked against it by
-a differential corpus of 772 inputs in `cmd/kitten`.
+a differential corpus of 772 inputs in `cmd/kitten`. Phase 3H gave strings a
+stored byte length alongside the bytes, so `length` and indexing are
+constant-time while the bytes stay NUL-terminated; the observable string
+semantics did not change, and the Kitten-written lexer now scans linearly.
 
 The Kitten-written lexer is not part of the production pipeline: `kitten build`
 and `kitten run` still use the Go lexer, which remains authoritative. Its
 deliberate differences (byte-oriented positions, no command-line arguments or
-chosen exit status) and its quadratic scanning cost are documented in SPEC.md
-Section 25, `selfhost/lexer/README.md`, and Section 16.
+chosen exit status) are documented in SPEC.md Section 25 and
+`selfhost/lexer/README.md`. Phase 3H gave strings a stored byte length, so
+`length` and indexing are constant-time and the Kitten lexer scans linearly;
+that change is documented in SPEC.md Sections 19, 20, and 25.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -96,7 +101,8 @@ authorization.
    dynamic strings; Phase 3B added dynamic arrays; Phase 3C added file I/O and
    modules; Phase 3D added enums and tagged unions; Phase 3E added typed maps;
    Phase 3F added string byte access; Phase 3G added a Kitten-written lexer
-   checked against the Go lexer, without replacing it).
+   checked against the Go lexer, without replacing it; Phase 3H made strings
+   length-carrying so that scanning is linear).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

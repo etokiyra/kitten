@@ -666,9 +666,13 @@ func measureReferenceLexer(t *testing.T, source string, repetitions int) time.Du
 // growing inputs, and checks that the two agree on the largest one.
 //
 // The measurements are logged rather than asserted: they document the cost of
-// scanning with NUL-terminated strings, whose length and indexing are linear in
-// the string, and they are the evidence behind the recommendation in
+// scanning, and they are the evidence behind the performance notes in
 // selfhost/lexer/README.md. Run it with -v to see the numbers.
+//
+// String length and indexing are constant-time since the representation stores
+// the byte length, so the scanner's scanning work grows linearly with the input.
+// A growth factor of about 4 for a 4x input therefore indicates linear behavior;
+// the factors reported below are that plus allocation and collector overhead.
 func TestKittenLexerScaling(t *testing.T) {
 	requireToolchain(t)
 
@@ -683,7 +687,7 @@ func TestKittenLexerScaling(t *testing.T) {
 	t.Logf("process start-up baseline (empty input): %s", startup.Round(time.Microsecond))
 
 	previous := time.Duration(0)
-	for _, size := range []int{1 << 10, 1 << 12, 1 << 14, 1 << 16} {
+	for _, size := range []int{1 << 10, 1 << 12, 1 << 14, 1 << 16, 1 << 18} {
 		source := repeatToSize(line, size)
 
 		kittenElapsed := measureKittenLexer(t, executable, directory, source, repetitions)

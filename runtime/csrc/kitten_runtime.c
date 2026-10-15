@@ -26,9 +26,9 @@ void ktn_rt_fail(const char *message) {
  * Reports an unrecoverable error that concerns a path, including the operating
  * system message for a saved errno value.
  */
-static void ktn_rt_fail_path(const char *action, const char *path, int error) {
+static void ktn_rt_fail_path(const char *action, const ktn_string *path, int error) {
     char message[1024];
-    snprintf(message, sizeof(message), "%s '%s': %s", action, path, strerror(error));
+    snprintf(message, sizeof(message), "%s '%s': %s", action, path->data, strerror(error));
     ktn_rt_fail(message);
 }
 
@@ -41,72 +41,125 @@ void *ktn_rt_alloc(size_t size) {
 }
 
 /*
- * The zero value of a string is the empty string, so a null pointer is treated
- * as "". This makes unassigned string array elements safe to read.
+ * The static empty string. The zero value of a string is a null pointer, so
+ * normalization maps every null string to this object, whose data is the static
+ * empty C string. This makes unassigned string array elements and struct fields
+ * safe to read.
  */
-static const char *ktn_rt_string_value(const char *value) {
-    return value == NULL ? "" : value;
+static const ktn_string ktn_rt_empty_string = { 0, "" };
+
+/*
+ * Returns value, or the static empty string when value is null.
+ *
+ * Every runtime function that reads a string normalizes first, so no caller has
+ * to check for a null reference and no function has to read through a null
+ * pointer.
+ */
+static const ktn_string *ktn_rt_string_value(const ktn_string *value) {
+    return value == NULL ? &ktn_rt_empty_string : value;
 }
 
-bool ktn_rt_string_equal(const char *left, const char *right) {
-    return strcmp(ktn_rt_string_value(left), ktn_rt_string_value(right)) == 0;
-}
-
-const char *ktn_rt_string_concat(const char *left, const char *right) {
-    left = ktn_rt_string_value(left);
-    right = ktn_rt_string_value(right);
-
-    size_t left_length = strlen(left);
-    size_t right_length = strlen(right);
-
-    /*
-     * Guard the allocation size against overflow. Two strings this large cannot
-     * both exist in memory, so this is defensive, but it keeps the size
-     * computation well defined instead of allocating too little.
-     */
-    if (left_length > SIZE_MAX - right_length - 1) {
-        ktn_rt_fail("string concatenation result is too large");
+/*
+ * Allocates a new string of exactly length bytes and returns it.
+ *
+ * The header is fully initialized: length is set, data points at the length
+ * bytes that immediately follow it, and a NUL terminator is written one past
+ * them, so the value is always a valid C string even while it is being filled.
+ * The collector zeroes the allocation, so the bytes are a defined all-zero
+ * sequence rather than indeterminate storage, and the bytes are written by the
+ * caller through ktn_rt_string_bytes before the string becomes observable.
+ */
+static ktn_string *ktn_rt_string_allocate(int64_t length) {
+    if (length < 0) {
+        ktn_rt_fail("string length cannot be negative");
+    }
+    if ((uint64_t)length > (uint64_t)SIZE_MAX - sizeof(ktn_string) - 1) {
+        ktn_rt_fail("string is too large");
     }
 
-    size_t result_length = left_length + right_length;
-    char *result = (char *)ktn_rt_alloc(result_length + 1);
-    memcpy(result, left, left_length);
-    memcpy(result + left_length, right, right_length + 1);
+    ktn_string *result = (ktn_string *)ktn_rt_alloc(sizeof(ktn_string) + (size_t)length + 1);
+    result->length = length;
+    char *bytes = (char *)(result + 1);
+    bytes[length] = '\0';
+    result->data = bytes;
     return result;
 }
 
-void ktn_rt_string_append(const char **slot, const char *value) {
+/*
+ * Returns the bytes of a string that was just allocated, for filling in.
+ *
+ * A string's bytes are immutable once the string is observable, but the bytes
+ * of a freshly allocated object are written during construction. Only
+ * construction sites, which hold the object just returned by
+ * ktn_rt_string_allocate, call this.
+ */
+static char *ktn_rt_string_bytes(ktn_string *value) {
+    return (char *)value->data;
+}
+
+bool ktn_rt_string_equal(const ktn_string *left, const ktn_string *right) {
+    left = ktn_rt_string_value(left);
+    right = ktn_rt_string_value(right);
+
+    if (left->length != right->length) {
+        return false;
+    }
+    if (left->length == 0) {
+        return true;
+    }
+    return memcmp(left->data, right->data, (size_t)left->length) == 0;
+}
+
+const ktn_string *ktn_rt_string_concat(const ktn_string *left, const ktn_string *right) {
+    left = ktn_rt_string_value(left);
+    right = ktn_rt_string_value(right);
+
+    /*
+     * Guard the combined length against overflow. Two strings this large cannot
+     * both exist in memory, so this is defensive, but it keeps the size
+     * computation well defined instead of allocating too little.
+     */
+    if (left->length > INT64_MAX - right->length) {
+        ktn_rt_fail("string concatenation result is too large");
+    }
+
+    int64_t length = left->length + right->length;
+    ktn_string *result = ktn_rt_string_allocate(length);
+    char *bytes = ktn_rt_string_bytes(result);
+    memcpy(bytes, left->data, (size_t)left->length);
+    memcpy(bytes + left->length, right->data, (size_t)right->length);
+    return result;
+}
+
+void ktn_rt_string_append(const ktn_string **slot, const ktn_string *value) {
     *slot = ktn_rt_string_concat(*slot, value);
 }
 
-int64_t ktn_rt_string_length(const char *value) {
-    return (int64_t)strlen(ktn_rt_string_value(value));
+int64_t ktn_rt_string_length(const ktn_string *value) {
+    return ktn_rt_string_value(value)->length;
 }
 
-int64_t ktn_rt_string_at(const char *value, int64_t index) {
-    const char *checked = ktn_rt_string_value(value);
-    size_t length = strlen(checked);
-    if (index < 0 || (uint64_t)index >= (uint64_t)length) {
+int64_t ktn_rt_string_at(const ktn_string *value, int64_t index) {
+    const ktn_string *checked = ktn_rt_string_value(value);
+    if (index < 0 || index >= checked->length) {
         char message[128];
-        snprintf(message, sizeof(message), "string index %lld is out of range for length %lld", (long long)index, (long long)length);
+        snprintf(message, sizeof(message), "string index %lld is out of range for length %lld", (long long)index, (long long)checked->length);
         ktn_rt_fail(message);
     }
-    return (int64_t)(unsigned char)checked[index];
+    return (int64_t)(unsigned char)checked->data[index];
 }
 
-const char *ktn_rt_substring(const char *value, int64_t start, int64_t end) {
-    const char *checked = ktn_rt_string_value(value);
-    size_t length = strlen(checked);
-    if (start < 0 || end < start || (uint64_t)end > (uint64_t)length) {
+const ktn_string *ktn_rt_substring(const ktn_string *value, int64_t start, int64_t end) {
+    const ktn_string *checked = ktn_rt_string_value(value);
+    if (start < 0 || end < start || end > checked->length) {
         char message[160];
-        snprintf(message, sizeof(message), "substring range %lld..%lld is out of range for length %lld", (long long)start, (long long)end, (long long)length);
+        snprintf(message, sizeof(message), "substring range %lld..%lld is out of range for length %lld", (long long)start, (long long)end, (long long)checked->length);
         ktn_rt_fail(message);
     }
 
-    size_t count = (size_t)(end - start);
-    char *result = (char *)ktn_rt_alloc(count + 1);
-    memcpy(result, checked + start, count);
-    result[count] = '\0';
+    int64_t count = end - start;
+    ktn_string *result = ktn_rt_string_allocate(count);
+    memcpy(ktn_rt_string_bytes(result), checked->data + start, (size_t)count);
     return result;
 }
 
@@ -155,16 +208,15 @@ int64_t ktn_rt_array_length(const ktn_array *array) {
 }
 
 /*
- * FNV-1a hash of a NUL-terminated string, computed over its bytes so that two
- * distinct strings with the same contents hash identically.
+ * FNV-1a hash of a string, computed over its bytes so that two distinct strings
+ * with the same contents hash identically.
  */
-static uint64_t ktn_rt_string_hash(const char *value) {
+static uint64_t ktn_rt_string_hash(const ktn_string *value) {
     uint64_t hash = 14695981039346656037ULL; /* FNV-1a 64-bit offset basis */
-    const unsigned char *bytes = (const unsigned char *)value;
-    while (*bytes != '\0') {
-        hash ^= (uint64_t)*bytes;
+    const unsigned char *bytes = (const unsigned char *)value->data;
+    for (int64_t index = 0; index < value->length; index++) {
+        hash ^= (uint64_t)bytes[index];
         hash *= 1099511628211ULL; /* FNV-1a 64-bit prime */
-        bytes++;
     }
     return hash;
 }
@@ -177,18 +229,18 @@ static uint64_t ktn_rt_string_hash(const char *value) {
  * is absent. The probe is bounded by the capacity so that a corrupted table
  * cannot loop forever.
  */
-static int64_t ktn_rt_map_find(const ktn_map *map, const char *key, uint64_t hash) {
+static int64_t ktn_rt_map_find(const ktn_map *map, const ktn_string *key, uint64_t hash) {
     if (map->capacity == 0) {
         return -1;
     }
     size_t mask = (size_t)map->capacity - 1;
     size_t index = (size_t)hash & mask;
     for (int64_t probes = 0; probes < map->capacity; probes++) {
-        const char *existing = map->keys[index];
+        const ktn_string *existing = map->keys[index];
         if (existing == NULL) {
             return -1;
         }
-        if (map->hashes[index] == hash && strcmp(existing, key) == 0) {
+        if (map->hashes[index] == hash && ktn_rt_string_equal(existing, key)) {
             return (int64_t)index;
         }
         index = (index + 1) & mask;
@@ -197,7 +249,7 @@ static int64_t ktn_rt_map_find(const ktn_map *map, const char *key, uint64_t has
 }
 
 /* Stores key and a copy of the value's bytes into the first empty slot. */
-static void ktn_rt_map_place(ktn_map *map, const char *key, uint64_t hash, const void *value) {
+static void ktn_rt_map_place(ktn_map *map, const ktn_string *key, uint64_t hash, const void *value) {
     size_t mask = (size_t)map->capacity - 1;
     size_t index = (size_t)hash & mask;
     for (int64_t probes = 0; probes < map->capacity; probes++) {
@@ -226,7 +278,7 @@ static void ktn_rt_map_reserve(ktn_map *map) {
     }
     int64_t capacity = map->capacity == 0 ? 8 : map->capacity * 2;
 
-    if ((uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(const char *) ||
+    if ((uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(const ktn_string *) ||
         (uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(uint64_t) ||
         (uint64_t)capacity > (uint64_t)SIZE_MAX / (uint64_t)map->value_size) {
         ktn_rt_fail("map allocation is too large");
@@ -234,14 +286,14 @@ static void ktn_rt_map_reserve(ktn_map *map) {
 
     /* Keep the old table reachable while the new one is built, so the collector
      * does not reclaim keys or pointer values that are still being copied. */
-    const char **old_keys = map->keys;
+    const ktn_string **old_keys = map->keys;
     uint64_t *old_hashes = map->hashes;
     void *old_values = map->values;
     int64_t old_capacity = map->capacity;
 
     map->capacity = capacity;
     map->length = 0;
-    map->keys = (const char **)ktn_rt_alloc((size_t)capacity * sizeof(const char *));
+    map->keys = (const ktn_string **)ktn_rt_alloc((size_t)capacity * sizeof(const ktn_string *));
     map->hashes = (uint64_t *)ktn_rt_alloc((size_t)capacity * sizeof(uint64_t));
     map->values = ktn_rt_alloc((size_t)capacity * (size_t)map->value_size);
 
@@ -267,7 +319,7 @@ ktn_map *ktn_rt_map_new(int64_t value_size) {
     return map;
 }
 
-void ktn_rt_map_set(ktn_map *map, const char *key, const void *value) {
+void ktn_rt_map_set(ktn_map *map, const ktn_string *key, const void *value) {
     if (map == NULL) {
         ktn_rt_fail("map assignment on a null map reference");
     }
@@ -277,7 +329,7 @@ void ktn_rt_map_set(ktn_map *map, const char *key, const void *value) {
 
     /* Normalize a null key to the static empty string so that stored keys are
      * never null and an empty key can be distinguished from an empty slot. */
-    const char *checked = ktn_rt_string_value(key);
+    const ktn_string *checked = ktn_rt_string_value(key);
     uint64_t hash = ktn_rt_string_hash(checked);
 
     int64_t index = ktn_rt_map_find(map, checked, hash);
@@ -290,25 +342,25 @@ void ktn_rt_map_set(ktn_map *map, const char *key, const void *value) {
     ktn_rt_map_place(map, checked, hash, value);
 }
 
-void *ktn_rt_map_at(const ktn_map *map, const char *key) {
+void *ktn_rt_map_at(const ktn_map *map, const ktn_string *key) {
     if (map == NULL) {
         ktn_rt_fail("map lookup on a null map reference");
     }
-    const char *checked = ktn_rt_string_value(key);
+    const ktn_string *checked = ktn_rt_string_value(key);
     int64_t index = ktn_rt_map_find(map, checked, ktn_rt_string_hash(checked));
     if (index < 0) {
         char message[256];
-        snprintf(message, sizeof(message), "map has no entry for key \"%.*s\"", 160, checked);
+        snprintf(message, sizeof(message), "map has no entry for key \"%.*s\"", 160, checked->data);
         ktn_rt_fail(message);
     }
     return (char *)map->values + (size_t)index * (size_t)map->value_size;
 }
 
-bool ktn_rt_map_has(const ktn_map *map, const char *key) {
+bool ktn_rt_map_has(const ktn_map *map, const ktn_string *key) {
     if (map == NULL) {
         ktn_rt_fail("has on a null map reference");
     }
-    const char *checked = ktn_rt_string_value(key);
+    const ktn_string *checked = ktn_rt_string_value(key);
     return ktn_rt_map_find(map, checked, ktn_rt_string_hash(checked)) >= 0;
 }
 
@@ -319,28 +371,26 @@ int64_t ktn_rt_map_length(const ktn_map *map) {
     return map->length;
 }
 
-const char *ktn_rt_read_file(const char *path) {
-    if (path == NULL) {
-        ktn_rt_fail("read_file: path is null");
-    }
+const ktn_string *ktn_rt_read_file(const ktn_string *path) {
+    const ktn_string *checked = ktn_rt_string_value(path);
 
-    FILE *file = fopen(path, "rb");
+    FILE *file = fopen(checked->data, "rb");
     if (file == NULL) {
         int error = errno;
-        ktn_rt_fail_path("read_file: cannot open", path, error);
+        ktn_rt_fail_path("read_file: cannot open", checked, error);
     }
 
     if (fseek(file, 0, SEEK_END) != 0) {
         int error = errno;
         fclose(file);
-        ktn_rt_fail_path("read_file: cannot determine the size of", path, error);
+        ktn_rt_fail_path("read_file: cannot determine the size of", checked, error);
     }
 
     long length = ftell(file);
     if (length < 0) {
         int error = errno;
         fclose(file);
-        ktn_rt_fail_path("read_file: cannot determine the size of", path, error);
+        ktn_rt_fail_path("read_file: cannot determine the size of", checked, error);
     }
     if ((unsigned long)length > KTN_RT_MAX_FILE_SIZE) {
         fclose(file);
@@ -350,20 +400,23 @@ const char *ktn_rt_read_file(const char *path) {
     if (fseek(file, 0, SEEK_SET) != 0) {
         int error = errno;
         fclose(file);
-        ktn_rt_fail_path("read_file: cannot rewind", path, error);
+        ktn_rt_fail_path("read_file: cannot rewind", checked, error);
     }
 
-    char *buffer = (char *)ktn_rt_alloc((size_t)length + 1);
-    size_t read = fread(buffer, 1, (size_t)length, file);
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    size_t read = fread(ktn_rt_string_bytes(result), 1, (size_t)length, file);
     if (ferror(file)) {
         int error = errno;
         fclose(file);
-        ktn_rt_fail_path("read_file: cannot read", path, error);
+        ktn_rt_fail_path("read_file: cannot read", checked, error);
     }
 
-    buffer[read] = '\0';
+    /* A file that shrank while it was being read yields the bytes actually read,
+     * so the stored length is adjusted to match the bytes present. */
+    result->length = (int64_t)read;
+    ktn_rt_string_bytes(result)[read] = '\0';
     fclose(file);
-    return buffer;
+    return result;
 }
 
 void ktn_rt_print_int(int64_t value) {
@@ -378,8 +431,11 @@ void ktn_rt_print_bool(bool value) {
     fputs(value ? "true" : "false", stdout);
 }
 
-void ktn_rt_print_string(const char *value) {
-    fputs(ktn_rt_string_value(value), stdout);
+void ktn_rt_print_string(const ktn_string *value) {
+    const ktn_string *checked = ktn_rt_string_value(value);
+    if (checked->length > 0) {
+        fwrite(checked->data, 1, (size_t)checked->length, stdout);
+    }
 }
 
 void ktn_rt_print_space(void) {

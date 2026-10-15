@@ -24,6 +24,7 @@ const (
 	unionTagPrefix     = "ktn_uc_"
 	variantFieldPrefix = "ktn_v_"
 	matchPrefix        = "ktn_match_"
+	literalPrefix      = "ktn_literal_"
 
 	// objectName is the local used inside generated struct constructors.
 	objectName = "ktn_object"
@@ -101,13 +102,20 @@ func variantConstructorName(unionType *checker.Type, variantName string) string 
 
 // cType maps a resolved Kitten type to its C representation:
 //
-//	int    -> int64_t        (signed 64-bit)
-//	float  -> double         (IEEE 754 binary64)
-//	bool   -> bool           (stdbool.h)
-//	string -> const char *   (immutable NUL-terminated byte string)
-//	void   -> void           (function return position only)
-//	struct -> struct pointer (GC-managed reference)
-//	array  -> ktn_array *    (GC-managed dynamic array)
+//	int    -> int64_t             (signed 64-bit)
+//	float  -> double              (IEEE 754 binary64)
+//	bool   -> bool                (stdbool.h)
+//	string -> const ktn_string *  (immutable, length-carrying byte string)
+//	void   -> void                (function return position only)
+//	struct -> struct pointer      (GC-managed reference)
+//	array  -> ktn_array *         (GC-managed dynamic array)
+//
+// A Kitten string is a pointer to the runtime's ktn_string, which stores the
+// byte length next to the bytes, so length and indexing are constant-time and
+// the bytes are still NUL-terminated. The pointer is const-qualified because
+// strings are immutable; a static literal is a `static const ktn_string` and a
+// constructed string is a GC-managed ktn_string that the runtime fills before
+// returning it.
 func cType(kittenType *checker.Type) (string, error) {
 	switch {
 	case kittenType == nil:
@@ -119,7 +127,7 @@ func cType(kittenType *checker.Type) (string, error) {
 	case kittenType == checker.BoolType:
 		return "bool", nil
 	case kittenType == checker.StringType:
-		return "const char *", nil
+		return "const ktn_string *", nil
 	case kittenType == checker.VoidType:
 		return "void", nil
 	case kittenType.Kind == checker.KindArray:

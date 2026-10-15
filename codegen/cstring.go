@@ -8,7 +8,7 @@ import (
 )
 
 // cStringLiteral converts a Kitten string literal token into a safe C string
-// literal.
+// literal and its byte length.
 //
 // The Kitten token text includes the surrounding quotation marks and the
 // escapes exactly as written, so this function decodes those escapes with the
@@ -16,10 +16,14 @@ import (
 // copying the source text) guarantees the generated C is well-formed: quotes,
 // backslashes, control characters, question marks, and non-ASCII bytes are all
 // escaped explicitly, so no source text can break out of the C literal.
-func cStringLiteral(kittenLiteral string) (string, error) {
+//
+// The returned length is the number of decoded bytes, excluding the NUL
+// terminator that C appends to the literal, and is what the generated string
+// object stores as its length.
+func cStringLiteral(kittenLiteral string) (escaped string, length int, err error) {
 	decoded, err := lexer.DecodeString(kittenLiteral)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	var builder strings.Builder
@@ -51,5 +55,5 @@ func cStringLiteral(kittenLiteral string) (string, error) {
 		}
 	}
 	builder.WriteByte('"')
-	return builder.String(), nil
+	return builder.String(), len(decoded), nil
 }
