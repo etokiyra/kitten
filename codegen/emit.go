@@ -238,6 +238,8 @@ func (g *generator) expression(expression parser.Expr) (string, error) {
 		return g.variantLiteral(e)
 	case *parser.NewArrayExpr:
 		return g.newArrayExpression(e)
+	case *parser.NewMapExpr:
+		return g.newMapExpression(e)
 	case *parser.IndexExpr:
 		return g.indexExpression(e)
 	default:
@@ -313,6 +315,39 @@ func (g *generator) assignExpression(expression *parser.AssignExpr) (string, err
 	if expression == nil || expression.Target == nil || expression.Value == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete assignment"}
 	}
+
+	// A plain assignment to a map entry inserts or updates it. It must not go
+	// through the reading accessor, which fails when the key is absent.
+	if expression.Operator == "=" {
+		if index, ok := expression.Target.(*parser.IndexExpr); ok && index.Target != nil && index.Index != nil {
+			mapType, err := g.expressionType(index.Target)
+			if err != nil {
+				return "", err
+			}
+			if mapType.IsMap() {
+				valueCType, err := cType(mapType.Value)
+				if err != nil {
+					return "", &Error{Line: expression.OperatorAt.Line, Column: expression.OperatorAt.Column, Message: err.Error()}
+				}
+				mapExpression, err := g.expression(index.Target)
+				if err != nil {
+					return "", err
+				}
+				keyExpression, err := g.expression(index.Index)
+				if err != nil {
+					return "", err
+				}
+				valueExpression, err := g.expression(expression.Value)
+				if err != nil {
+					return "", err
+				}
+				// The runtime copies the value bytes, so the value is passed by
+				// address through a compound literal.
+				return fmt.Sprintf("%s(%s, %s, &(%s){ %s })", runtime.MapSetFunction, mapExpression, keyExpression, valueCType, valueExpression), nil
+			}
+		}
+	}
+
 	target, err := g.expression(expression.Target)
 	if err != nil {
 		return "", err
@@ -456,11 +491,29 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 	case checker.BuiltinPrint:
 		return g.printExpression(expression)
 	case checker.BuiltinLength:
+		argumentType, err := g.expressionType(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		lengthFunction := runtime.ArrayLengthFunction
+		if argumentType.IsMap() {
+			lengthFunction = runtime.MapLengthFunction
+		}
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s(%s)", runtime.ArrayLengthFunction, argument), nil
+		return fmt.Sprintf("%s(%s)", lengthFunction, argument), nil
+	case checker.BuiltinMapHas:
+		mapExpression, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		keyExpression, err := g.expression(expression.Arguments[1])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s, %s)", runtime.MapHasFunction, mapExpression, keyExpression), nil
 	case checker.BuiltinReadFile:
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {
@@ -536,19 +589,45 @@ func (g *generator) newArrayExpression(expression *parser.NewArrayExpr) (string,
 	return fmt.Sprintf("%s(%s, sizeof(%s))", runtime.ArrayNewFunction, length, elementCType), nil
 }
 
-// indexExpression renders "target[index]". The runtime accessor performs the
-// bounds check and returns a pointer to the element, which the generated code
-// dereferences. Because it is a C l-value, compound assignment and increment
-// evaluate the target and index exactly once.
+// newMapExpression renders "new map[Key]Value" as a runtime allocation of an
+// empty map whose values are stored inline at the value type's size.
+func (g *generator) newMapExpression(expression *parser.NewMapExpr) (string, error) {
+	if expression == nil || expression.Map == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "incomplete map creation"}
+	}
+	mapType, err := g.declaredType(expression.Map)
+	if err != nil {
+		return "", err
+	}
+	if !mapType.IsMap() {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: fmt.Sprintf("%s is not a map type", mapType)}
+	}
+	valueCType, err := cType(mapType.Value)
+	if err != nil {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: err.Error()}
+	}
+	return fmt.Sprintf("%s(sizeof(%s))", runtime.MapNewFunction, valueCType), nil
+}
+
+// indexExpression renders "target[index]".
+//
+// For an array, the runtime accessor performs the bounds check and returns a
+// pointer to the element. For a map, it returns a pointer to the value and fails
+// when the key is absent. In both cases the result is a C l-value, so compound
+// assignment and increment evaluate the target and index exactly once.
 func (g *generator) indexExpression(expression *parser.IndexExpr) (string, error) {
 	if expression == nil || expression.Target == nil || expression.Index == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete index expression"}
 	}
-	elementType, err := g.expressionType(expression)
+	targetType, err := g.expressionType(expression.Target)
 	if err != nil {
 		return "", err
 	}
-	elementCType, err := cType(elementType)
+	resultType, err := g.expressionType(expression)
+	if err != nil {
+		return "", err
+	}
+	resultCType, err := cType(resultType)
 	if err != nil {
 		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: err.Error()}
 	}
@@ -560,7 +639,12 @@ func (g *generator) indexExpression(expression *parser.IndexExpr) (string, error
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(*((%s *)%s(%s, %s)))", elementCType, runtime.ArrayAtFunction, target, index), nil
+
+	accessor := runtime.ArrayAtFunction
+	if targetType.IsMap() {
+		accessor = runtime.MapAtFunction
+	}
+	return fmt.Sprintf("(*((%s *)%s(%s, %s)))", resultCType, accessor, target, index), nil
 }
 
 // emitMatch writes a match statement.

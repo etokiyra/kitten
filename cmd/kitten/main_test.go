@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,7 +185,7 @@ func TestUsageAndExitCodes(t *testing.T) {
 func TestFixturesEndToEnd(t *testing.T) {
 	requireToolchain(t)
 
-	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays", "variants"}
+	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays", "variants", "maps"}
 	for _, name := range fixtures {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -933,5 +934,118 @@ fn main() {
 	}
 	if string(output) != "text 7\n0\n" {
 		t.Errorf("output = %q, want %q", output, "text 7\n0\n")
+	}
+}
+
+func TestMapMissingKeyIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    map[string]int table = new map[string]int;
+    table["present"] = 1;
+    print(has(table, "absent"));
+    print(table["absent"]);
+}
+`
+	stdout, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "no entry for key") {
+		t.Errorf("stderr = %q, want a missing-key message", stderr)
+	}
+	if stdout != "false\n" {
+		t.Errorf("stdout = %q, want output produced before the failing lookup", stdout)
+	}
+}
+
+func TestMapHandlesHashCollisions(t *testing.T) {
+	requireToolchain(t)
+
+	// "aa" and "ai" both hash to slot 7 in a freshly grown table (FNV-1a modulo
+	// 8), so they collide and force linear probing.
+	source := `fn main() {
+    map[string]int table = new map[string]int;
+    table["aa"] = 1;
+    table["ai"] = 2;
+    print(length(table), table["aa"], table["ai"], has(table, "ab"));
+    table["aa"] = 11;
+    print(table["aa"], table["ai"], length(table));
+}
+`
+	stdout, _, exitCode := runCompiledProgram(t, source)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "2 1 2 false\n11 2 2\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+func TestMapGrowthPreservesEntries(t *testing.T) {
+	requireToolchain(t)
+
+	const keyCount = 100
+	var builder strings.Builder
+	builder.WriteString("fn main() {\n")
+	builder.WriteString("    map[string]int table = new map[string]int;\n")
+	for index := 0; index < keyCount; index++ {
+		fmt.Fprintf(&builder, "    table[\"key%d\"] = %d;\n", index, index)
+	}
+	builder.WriteString("    int total = 0;\n")
+	for index := 0; index < keyCount; index++ {
+		fmt.Fprintf(&builder, "    total += table[\"key%d\"];\n", index)
+	}
+	builder.WriteString("    print(length(table), total, has(table, \"key42\"), has(table, \"key100\"));\n")
+	builder.WriteString("}\n")
+
+	stdout, stderr, exitCode := runCompiledProgram(t, builder.String())
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d (stderr %q)", exitCode, stderr)
+	}
+	want := "100 4950 true false\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+func TestMapModulesInTemporaryProject(t *testing.T) {
+	requireToolchain(t)
+
+	project := t.TempDir()
+	writeSource(t, filepath.Join(project, "symbols.ktn"), `public struct Symbol {
+    int line;
+}
+public fn line_of(map[string]Symbol table, string name) -> int {
+    if (has(table, name)) {
+        return table[name].line;
+    }
+    return -1;
+}
+`)
+	mainPath := writeSource(t, filepath.Join(project, "main.ktn"), `import "symbols.ktn";
+fn main() {
+    map[string]Symbol symbols = new map[string]Symbol;
+    symbols["parse"] = Symbol { line = 42 };
+    print(line_of(symbols, "parse"), line_of(symbols, "missing"), length(symbols));
+}
+`)
+
+	executablePath := filepath.Join(t.TempDir(), "program")
+	var diagnostics bytes.Buffer
+	if err := buildExecutable(mainPath, executablePath, &diagnostics); err != nil {
+		t.Fatalf("building: %v\n%s", err, diagnostics.String())
+	}
+	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+		t.Fatalf("C compiler diagnostics:\n%s", warnings)
+	}
+
+	output, err := exec.Command(executablePath).Output()
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if string(output) != "42 -1 1\n" {
+		t.Errorf("output = %q, want %q", output, "42 -1 1\n")
 	}
 }

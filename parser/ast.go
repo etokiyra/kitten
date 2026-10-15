@@ -111,22 +111,29 @@ func (*ImportDecl) declNode() {}
 //
 // A named type has Name set and Element nil. An array type has Element set to
 // its element type and Name empty, so `int[]` is an array whose element is
-// `int`, and `int[][]` nests. The parser does not verify that a named type
-// exists.
+// `int`, and `int[][]` nests. A map type has both MapKey and MapValue set, for
+// `map[MapKey]MapValue`. The parser does not verify that a named type exists.
 type TypeRef struct {
 	At      Position
 	Name    string
 	Element *TypeRef
+
+	// MapKey and MapValue are both non-nil for a map type.
+	MapKey   *TypeRef
+	MapValue *TypeRef
 }
 
 // Pos reports where the type name begins.
 func (t *TypeRef) Pos() Position { return t.At }
 
-// String renders the type as written: a name, or an element type followed by
-// "[]".
+// String renders the type as written: a name, an element type followed by "[]",
+// or "map[Key]Value".
 func (t *TypeRef) String() string {
 	if t == nil {
 		return "<invalid>"
+	}
+	if t.MapValue != nil {
+		return "map[" + t.MapKey.String() + "]" + t.MapValue.String()
 	}
 	if t.Element != nil {
 		return t.Element.String() + "[]"
@@ -547,6 +554,17 @@ type NewArrayExpr struct {
 // Pos reports where the "new" keyword begins.
 func (e *NewArrayExpr) Pos() Position { return e.At }
 
+// NewMapExpr creates an empty map, written "new map[Key]Value". Map is the map
+// type reference, with its key and value type references set. At reports the
+// position of the "new" keyword.
+type NewMapExpr struct {
+	At  Position
+	Map *TypeRef
+}
+
+// Pos reports where the "new" keyword begins.
+func (e *NewMapExpr) Pos() Position { return e.At }
+
 // IndexExpr reads or writes one element of an array, written "Target[Index]".
 //
 // At reports the position of the "[" and Pos reports where the target begins,
@@ -573,4 +591,5 @@ func (*MemberExpr) exprNode()     {}
 func (*StructLiteral) exprNode()  {}
 func (*VariantLiteral) exprNode() {}
 func (*NewArrayExpr) exprNode()   {}
+func (*NewMapExpr) exprNode()     {}
 func (*IndexExpr) exprNode()      {}

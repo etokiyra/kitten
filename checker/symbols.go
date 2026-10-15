@@ -47,6 +47,9 @@ const (
 
 	// BuiltinReadFile reads a whole file into a string.
 	BuiltinReadFile
+
+	// BuiltinMapHas reports whether a map contains a key.
+	BuiltinMapHas
 )
 
 // Function is a resolved function signature, either user-defined or built-in.

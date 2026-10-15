@@ -170,6 +170,7 @@ type moduleInfo struct {
 type checker struct {
 	builtins   map[string]*Function
 	arrayTypes map[*Type]*Type
+	mapTypes   map[mapTypeIdentity]*Type
 	result     *Result
 
 	// modules are the modules being checked and current is the module whose
@@ -217,6 +218,7 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 	c := &checker{
 		builtins:        builtinFunctions(),
 		arrayTypes:      map[*Type]*Type{},
+		mapTypes:        map[mapTypeIdentity]*Type{},
 		publicTypes:     map[string]*Type{},
 		publicFunctions: map[string]*Function{},
 		result: &Result{
@@ -290,6 +292,11 @@ func builtinFunctions() map[string]*Function {
 			ParameterTypes: []*Type{StringType},
 			ReturnType:     StringType,
 			Builtin:        BuiltinReadFile,
+		},
+		"has": {
+			Name:       "has",
+			ReturnType: BoolType,
+			Builtin:    BuiltinMapHas,
 		},
 	}
 }
@@ -633,6 +640,26 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "missing type reference"}
 	}
 
+	if reference.MapValue != nil {
+		keyType, err := c.resolveType(reference.MapKey)
+		if err != nil {
+			return nil, err
+		}
+		valueType, err := c.resolveType(reference.MapValue)
+		if err != nil {
+			return nil, err
+		}
+		if keyType != StringType {
+			return nil, c.errorAt(InvalidType, reference.MapKey.Pos(), "map keys must be string, found %s", keyType)
+		}
+		if valueType.IsVoid() {
+			return nil, c.errorAt(InvalidType, reference.MapValue.Pos(), "map value type cannot be void")
+		}
+		resolved := c.mapType(keyType, valueType)
+		c.result.TypeRefs[reference] = resolved
+		return resolved, nil
+	}
+
 	if reference.Element != nil {
 		element, err := c.resolveType(reference.Element)
 		if err != nil {
@@ -729,6 +756,24 @@ func (c *checker) arrayType(element *Type) *Type {
 	}
 	resolved := &Type{Kind: KindArray, Name: element.Name + "[]", Element: element}
 	c.arrayTypes[element] = resolved
+	return resolved
+}
+
+// mapTypeIdentity identifies a map type by its key and value types.
+type mapTypeIdentity struct {
+	key   *Type
+	value *Type
+}
+
+// mapType returns the interned map type with the given key and value types, so
+// that the same key and value types always yield the same *Type.
+func (c *checker) mapType(key, value *Type) *Type {
+	identity := mapTypeIdentity{key: key, value: value}
+	if existing, ok := c.mapTypes[identity]; ok {
+		return existing
+	}
+	resolved := &Type{Kind: KindMap, Name: "map[" + key.Name + "]" + value.Name, Key: key, Value: value}
+	c.mapTypes[identity] = resolved
 	return resolved
 }
 

@@ -371,6 +371,45 @@ fn main() {
 `,
 		},
 		{
+			name: "typed maps",
+			source: `enum Kind {
+    Integer,
+    Text
+}
+struct Entry {
+    int weight;
+}
+fn count_of(map[string]int table, string key) -> int {
+    if (has(table, key)) {
+        return table[key];
+    }
+    return 0;
+}
+fn main() {
+    map[string]int table = new map[string]int;
+    table["a"] = 1;
+    table["a"] = 2;
+    table["b"] = 3;
+    print(length(table), has(table, "a"), has(table, "z"));
+    print(count_of(table, "b"), count_of(table, "z"));
+    table[""] = 4;
+    map[string]int alias = table;
+    alias["a"] = 5;
+    print(table["a"], table[""]);
+    map[string]Kind kinds = new map[string]Kind;
+    kinds["one"] = Kind.Integer;
+    print(kinds["one"] == Kind.Integer);
+    map[string]Entry entries = new map[string]Entry;
+    entries["box"] = Entry { weight = 1 };
+    print(entries["box"].weight);
+    map[string]int[] groups = new map[string]int[];
+    groups["g"] = new int[1];
+    groups["g"][0] = 7;
+    print(groups["g"][0]);
+}
+`,
+		},
+		{
 			name: "enums and tagged unions",
 			source: `enum TokenKind {
     Identifier,
@@ -982,6 +1021,86 @@ func TestErrorCases(t *testing.T) {
 			line:     5,
 			column:   25,
 			contains: "written without braces",
+		},
+		{
+			name:     "non-string map key",
+			source:   "fn main() {\n    map[int]int table = new map[int]int;\n}\n",
+			kind:     InvalidType,
+			line:     2,
+			column:   9,
+			contains: "map keys must be string",
+		},
+		{
+			name:     "void map value",
+			source:   "fn main() {\n    map[string]void table;\n}\n",
+			kind:     InvalidType,
+			line:     2,
+			column:   16,
+			contains: "map value type cannot be void",
+		},
+		{
+			name:     "undefined map value type",
+			source:   "fn main() {\n    map[string]Widget table;\n}\n",
+			kind:     UndefinedName,
+			line:     2,
+			column:   16,
+			contains: "undefined type",
+		},
+		{
+			name:     "map index with a non-string key",
+			source:   "fn main() {\n    map[string]int table = new map[string]int;\n    print(table[0]);\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   17,
+			contains: "map key must be string",
+		},
+		{
+			name:     "has with a non-map",
+			source:   "fn main() {\n    print(has(1, \"k\"));\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   15,
+			contains: "expects a map",
+		},
+		{
+			name:     "has with a non-string key",
+			source:   "fn main() {\n    map[string]int table = new map[string]int;\n    print(has(table, 1));\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   22,
+			contains: "map key must be string",
+		},
+		{
+			name:     "has with the wrong argument count",
+			source:   "fn main() {\n    map[string]int table = new map[string]int;\n    print(has(table));\n}\n",
+			kind:     BadCall,
+			line:     3,
+			column:   14,
+			contains: "expects 2 arguments",
+		},
+		{
+			name:     "map equality",
+			source:   "fn main() {\n    map[string]int a = new map[string]int;\n    map[string]int b = new map[string]int;\n    print(a == b);\n}\n",
+			kind:     InvalidOperator,
+			line:     4,
+			column:   13,
+			contains: "not supported",
+		},
+		{
+			name:     "print a map",
+			source:   "fn main() {\n    map[string]int table = new map[string]int;\n    print(table);\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   11,
+			contains: "cannot print",
+		},
+		{
+			name:     "map type mismatch",
+			source:   "fn main() {\n    map[string]int a = new map[string]int;\n    map[string]float b = a;\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   26,
+			contains: "found map[string]int",
 		},
 		{
 			name:     "increment on string",
@@ -1750,6 +1869,27 @@ func TestModulePrivateUnionAccessIsRejected(t *testing.T) {
 `,
 		`private union Box {
     Empty
+}
+`,
+	)
+}
+
+func TestModulesResolveMapValueTypes(t *testing.T) {
+	assertModulesOK(t,
+		`fn main() {
+    map[string]Box boxes = new map[string]Box;
+    boxes["a"] = Box { value = 1 };
+    print(total(boxes), has(boxes, "a"));
+}
+`,
+		`public struct Box {
+    int value;
+}
+public fn total(map[string]Box boxes) -> int {
+    if (has(boxes, "a")) {
+        return boxes["a"].value;
+    }
+    return 0;
 }
 `,
 	)

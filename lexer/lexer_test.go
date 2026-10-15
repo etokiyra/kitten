@@ -77,6 +77,7 @@ func TestKeywords(t *testing.T) {
 		{"enum", Enum},
 		{"union", Union},
 		{"match", Match},
+		{"map", Map},
 	}
 
 	for _, testCase := range cases {

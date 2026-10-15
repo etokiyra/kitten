@@ -124,6 +124,8 @@ func cType(kittenType *checker.Type) (string, error) {
 		return "void", nil
 	case kittenType.Kind == checker.KindArray:
 		return "ktn_array *", nil
+	case kittenType.Kind == checker.KindMap:
+		return "ktn_map *", nil
 	case kittenType.Kind == checker.KindEnum:
 		return enumName(kittenType.Name, kittenType.Module), nil
 	case kittenType.Kind == checker.KindUnion, kittenType.Kind == checker.KindStruct:

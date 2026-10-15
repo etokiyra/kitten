@@ -821,3 +821,74 @@ fn main() {
 		t.Errorf("variant generation is not deterministic")
 	}
 }
+
+func TestMapGeneration(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    map[string]int table = new map[string]int;
+    table["a"] = 1;
+    table["b"] += 2;
+    print(table["a"], has(table, "z"), length(table));
+}
+`)
+	assertContains(t, generated, "ktn_map * ktn_var_table = ktn_rt_map_new(sizeof(int64_t))")
+	assertContains(t, generated, `ktn_rt_map_set(ktn_var_table, "a", &(int64_t){ 1 })`)
+	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, "b"))) += 2`)
+	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, "a")))`)
+	assertContains(t, generated, `ktn_rt_map_has(ktn_var_table, "z")`)
+	assertContains(t, generated, "ktn_rt_map_length(ktn_var_table)")
+}
+
+func TestMapValueSizesInGeneratedC(t *testing.T) {
+	generated := generateSource(t, `enum Kind { A }
+struct Entry { int weight; }
+fn main() {
+    map[string]string labels = new map[string]string;
+    map[string]Kind kinds = new map[string]Kind;
+    map[string]Entry entries = new map[string]Entry;
+    map[string]int[] groups = new map[string]int[];
+    map[string]bool flags = new map[string]bool;
+    map[string]float ratios = new map[string]float;
+    print(length(labels), length(kinds), length(entries), length(groups), length(flags), length(ratios));
+}
+`)
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(const char *))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_e_Kind))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_s_Entry *))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(ktn_array *))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(bool))")
+	assertContains(t, generated, "ktn_rt_map_new(sizeof(double))")
+}
+
+func TestMapTypeMapping(t *testing.T) {
+	generated := generateSource(t, `fn count(map[string]int table, string key) -> int {
+    if (has(table, key)) {
+        return table[key];
+    }
+    return 0;
+}
+fn empty() -> map[string]int {
+    return new map[string]int;
+}
+fn main() {
+    print(count(empty(), "a"));
+}
+`)
+	assertContains(t, generated, "int64_t ktn_fn_count(ktn_map * ktn_var_table, const char * ktn_var_key)")
+	assertContains(t, generated, "ktn_map * ktn_fn_empty(void)")
+}
+
+func TestMapGenerationIsDeterministic(t *testing.T) {
+	source := `enum Kind { A }
+struct Entry { int weight; }
+fn main() {
+    map[string]Entry entries = new map[string]Entry;
+    entries["a"] = Entry { weight = 1 };
+    print(entries["a"].weight, has(entries, "b"), length(entries));
+}
+`
+	first := generateSource(t, source)
+	second := generateSource(t, source)
+	if first != second {
+		t.Errorf("map generation is not deterministic")
+	}
+}

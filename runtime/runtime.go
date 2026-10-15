@@ -49,6 +49,22 @@ const (
 	// ArrayLengthFunction returns the number of elements in an array.
 	ArrayLengthFunction = "ktn_rt_array_length"
 
+	// MapNewFunction allocates an empty map with a given value size.
+	MapNewFunction = "ktn_rt_map_new"
+
+	// MapSetFunction inserts or updates a map entry.
+	MapSetFunction = "ktn_rt_map_set"
+
+	// MapAtFunction returns a pointer to a map value, failing when the key is
+	// absent.
+	MapAtFunction = "ktn_rt_map_at"
+
+	// MapHasFunction reports whether a map contains a key.
+	MapHasFunction = "ktn_rt_map_has"
+
+	// MapLengthFunction returns the number of entries in a map.
+	MapLengthFunction = "ktn_rt_map_length"
+
 	// ReadFileFunction reads a whole file into a new string.
 	ReadFileFunction = "ktn_rt_read_file"
 

@@ -49,6 +49,7 @@ const (
 	Enum
 	Union
 	Match
+	Map
 
 	// Built-in type names.
 	TypeInt
@@ -121,6 +122,7 @@ var kindNames = map[Kind]string{
 	Enum:    "Enum",
 	Union:   "Union",
 	Match:   "Match",
+	Map:     "Map",
 
 	TypeInt:    "TypeInt",
 	TypeFloat:  "TypeFloat",

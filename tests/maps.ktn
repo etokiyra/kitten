@@ -1,0 +1,100 @@
+enum Kind {
+    Integer,
+    Text
+}
+
+struct Entry {
+    int weight;
+}
+
+union Value {
+    Number { int amount; }
+    Label { string text; }
+    EmptyValue
+}
+
+fn count_of(map[string]int table, string key) -> int {
+    if (has(table, key)) {
+        return table[key];
+    }
+    return 0;
+}
+
+fn make_map() -> map[string]int {
+    map[string]int result = new map[string]int;
+    result["a"] = 1;
+    result["b"] = 2;
+    return result;
+}
+
+fn main() {
+    map[string]int table = new map[string]int;
+    print(length(table), has(table, "a"));
+
+    table["a"] = 1;
+    table["b"] = 2;
+    table["a"] = 10;
+    print(table["a"], table["b"], length(table));
+
+    print(has(table, "a"), has(table, "missing"));
+
+    table["b"] += 5;
+    table["a"]++;
+    print(table["a"], table["b"], length(table));
+
+    print(count_of(table, "b"), count_of(table, "missing"));
+
+    table[""] = 7;
+    print(has(table, ""), table[""], length(table));
+
+    string part = "ke";
+    table[part + "y"] = 99;
+    print(table["key"], has(table, "key"));
+
+    map[string]int alias = table;
+    alias["a"] = 0;
+    print(table["a"]);
+
+    map[string]int made = make_map();
+    print(made["a"], made["b"], length(made));
+
+    map[string]Kind kinds = new map[string]Kind;
+    kinds["one"] = Kind.Integer;
+    print(kinds["one"] == Kind.Integer, kinds["one"] == Kind.Text);
+
+    map[string]Entry entries = new map[string]Entry;
+    entries["box"] = Entry { weight = 42 };
+    print(entries["box"].weight);
+
+    map[string]Value values = new map[string]Value;
+    values["n"] = Value.Number { amount = 3 };
+    values["l"] = Value.Label { text = "hi" };
+    match (values["n"]) {
+        Number(amount) { print(amount); }
+        Label(text) { print(text); }
+        EmptyValue { print(0); }
+    }
+    match (values["l"]) {
+        Number(amount) { print(amount); }
+        Label(text) { print(text); }
+        EmptyValue { print(0); }
+    }
+
+    map[string]int[] groups = new map[string]int[];
+    groups["g"] = new int[2];
+    groups["g"][0] = 5;
+    groups["g"][1] = 6;
+    print(groups["g"][0], length(groups["g"]));
+
+    map[string]float ratios = new map[string]float;
+    ratios["half"] = 0.5;
+    print(ratios["half"]);
+
+    map[string]bool flags = new map[string]bool;
+    flags["on"] = true;
+    print(flags["on"], length(flags));
+
+    map[string]string labels = new map[string]string;
+    labels["name"] = "kitten";
+    print(labels["name"], length(labels));
+}

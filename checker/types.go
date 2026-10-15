@@ -34,6 +34,10 @@ const (
 	// KindUnion is a user-defined tagged-union type: a set of variants, each of
 	// which may carry fields.
 	KindUnion
+
+	// KindMap is a map from string keys to values. Its key type is Type.Key and
+	// its value type is Type.Value.
+	KindMap
 )
 
 // Type is a resolved Kitten type.
@@ -63,6 +67,12 @@ type Type struct {
 	// VariantIndex maps a variant name to its definition for enum and union
 	// types.
 	VariantIndex map[string]*Variant
+
+	// Key is non-nil when Kind is KindMap and holds the key type.
+	Key *Type
+
+	// Value is non-nil when Kind is KindMap and holds the value type.
+	Value *Type
 
 	// Module is the ID of the module that declared this type. It is 0 for
 	// primitive and array types, and for a type in the root module.
@@ -110,6 +120,11 @@ func (t *Type) IsUnion() bool {
 // IsVariant reports whether t has named variants: an enum or a tagged union.
 func (t *Type) IsVariant() bool {
 	return t.IsEnum() || t.IsUnion()
+}
+
+// IsMap reports whether t is a map type.
+func (t *Type) IsMap() bool {
+	return t != nil && t.Kind == KindMap
 }
 
 // The primitive type singletons.

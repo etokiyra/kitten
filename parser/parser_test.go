@@ -136,6 +136,8 @@ func renderExpression(expression Expr) string {
 		return "(" + strings.Join(parts, " ") + ")"
 	case *NewArrayExpr:
 		return fmt.Sprintf("(new %s %s)", node.Element.String(), renderExpression(node.Length))
+	case *NewMapExpr:
+		return fmt.Sprintf("(newmap %s)", node.Map.String())
 	case *IndexExpr:
 		return fmt.Sprintf("(index %s %s)", renderExpression(node.Target), renderExpression(node.Index))
 	default:
@@ -966,6 +968,20 @@ func TestParseErrors(t *testing.T) {
 			column:   33,
 			contains: "to close a variant literal",
 		},
+		{
+			name:     "map type without a bracket",
+			source:   "fn main() {\n    map int table;\n}\n",
+			line:     2,
+			column:   9,
+			contains: "expected '['",
+		},
+		{
+			name:     "map type without a closing bracket",
+			source:   "fn main() {\n    map[string table;\n}\n",
+			line:     2,
+			column:   16,
+			contains: "expected ']'",
+		},
 	}
 
 	for _, testCase := range cases {
@@ -1264,5 +1280,80 @@ func TestMatchStatement(t *testing.T) {
 	empty := statement.Arms[1]
 	if empty.Variant != "Empty" || len(empty.Bindings) != 0 {
 		t.Errorf("arm 1 = %q with bindings %v, want Empty with none", empty.Variant, empty.Bindings)
+	}
+}
+
+func TestMapExpressionSyntax(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{"new map[string]int", "(newmap map[string]int)"},
+		{"new map[string]string", "(newmap map[string]string)"},
+		{"new map[string]int[]", "(newmap map[string]int[])"},
+		{"new map[string]map[string]int", "(newmap map[string]map[string]int)"},
+		{"table[key]", "(index table key)"},
+		{"table[\"a\"]", `(index table "a")`},
+		{"table[a + \"b\"]", `(index table (+ a "b"))`},
+		{"table[key] + 1", "(+ (index table key) 1)"},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.source, func(t *testing.T) {
+			got := renderExpression(parseExpressionSource(t, testCase.source))
+			if got != testCase.want {
+				t.Errorf("%q rendered as %q, want %q", testCase.source, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestMapTypeDeclaration(t *testing.T) {
+	program, err := ParseSource("fn main() {\n    map[string]int table = new map[string]int;\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	declaration := firstFunction(t, program).Body.Statements[0].(*VarDeclStmt)
+	if declaration.Type.String() != "map[string]int" {
+		t.Errorf("declared type = %q, want map[string]int", declaration.Type.String())
+	}
+	if declaration.Type.MapKey == nil || declaration.Type.MapKey.Name != "string" {
+		t.Fatalf("declared key type = %+v, want string", declaration.Type.MapKey)
+	}
+	if declaration.Type.MapValue == nil || declaration.Type.MapValue.Name != "int" {
+		t.Fatalf("declared value type = %+v, want int", declaration.Type.MapValue)
+	}
+
+	creation, ok := declaration.Initializer.(*NewMapExpr)
+	if !ok {
+		t.Fatalf("initializer is %T, want *NewMapExpr", declaration.Initializer)
+	}
+	if creation.Map.String() != "map[string]int" {
+		t.Errorf("creation type = %q, want map[string]int", creation.Map.String())
+	}
+}
+
+func TestNestedMapTypeDeclaration(t *testing.T) {
+	program, err := ParseSource("fn main() {\n    map[string]int[] groups;\n    map[string]map[string]int nested;\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	statements := firstFunction(t, program).Body.Statements
+
+	groups := statements[0].(*VarDeclStmt)
+	if groups.Type.String() != "map[string]int[]" {
+		t.Errorf("groups type = %q, want map[string]int[]", groups.Type.String())
+	}
+	if groups.Type.MapValue.Element == nil || groups.Type.MapValue.Element.Name != "int" {
+		t.Errorf("groups value type = %q, want int[]", groups.Type.MapValue.String())
+	}
+
+	nested := statements[1].(*VarDeclStmt)
+	if nested.Type.String() != "map[string]map[string]int" {
+		t.Errorf("nested type = %q, want map[string]map[string]int", nested.Type.String())
+	}
+	if nested.Type.MapValue.MapValue == nil {
+		t.Errorf("nested value type is not a map")
 	}
 }

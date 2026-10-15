@@ -558,9 +558,12 @@ func (p *parser) parseType() (*TypeRef, error) {
 	return base, nil
 }
 
-// parseBaseType parses a single type name without array suffixes.
+// parseBaseType parses a single type name without array suffixes, or a map type.
 func (p *parser) parseBaseType() (*TypeRef, error) {
 	token := p.peek()
+	if token.Kind == lexer.Map {
+		return p.parseMapType()
+	}
 	switch token.Kind {
 	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.Ident:
 		p.advance()
@@ -568,6 +571,30 @@ func (p *parser) parseBaseType() (*TypeRef, error) {
 	default:
 		return nil, p.errorAt(token, "expected a type, found %s", describe(token))
 	}
+}
+
+// parseMapType parses "map[KeyType]ValueType". The "map" keyword is the current
+// token. The value type is parsed as a full type, so "map[string]int[]" maps
+// strings to arrays of int.
+func (p *parser) parseMapType() (*TypeRef, error) {
+	keyword := p.advance() // 'map'
+
+	if _, err := p.expect(lexer.LBracket, "'['", "after 'map'"); err != nil {
+		return nil, err
+	}
+	key, err := p.parseType()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(lexer.RBracket, "']'", "after the map key type"); err != nil {
+		return nil, err
+	}
+	value, err := p.parseType()
+	if err != nil {
+		return nil, err
+	}
+
+	return &TypeRef{At: positionOf(keyword), MapKey: key, MapValue: value}, nil
 }
 
 // parseBlock parses a brace-delimited block of statements.
@@ -642,10 +669,10 @@ func (p *parser) startsVariableDeclaration() bool {
 	return p.peekAt(offset).Kind == lexer.Ident
 }
 
-// isTypeKeyword reports whether a token kind is a built-in type name.
+// isTypeKeyword reports whether a token kind begins a built-in type name.
 func isTypeKeyword(kind lexer.Kind) bool {
 	switch kind {
-	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid:
+	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.Map:
 		return true
 	default:
 		return false
@@ -1091,7 +1118,7 @@ func (p *parser) parsePrimary() (Expr, error) {
 		return &BoolLiteral{At: positionOf(token), Value: false}, nil
 
 	case lexer.New:
-		return p.parseNewArray()
+		return p.parseNew()
 
 	case lexer.Ident:
 		if p.peekAt(1).Kind == lexer.LBrace {
@@ -1119,13 +1146,21 @@ func (p *parser) parsePrimary() (Expr, error) {
 	}
 }
 
-// parseNewArray parses array creation, "new ElementType[Length]".
+// parseNew parses array or map creation.
 //
-// The element type may itself be an array type written with "[]", so
-// "new int[][3]" creates an array of three int[] elements. Only the outermost
-// bracket pair carries a length.
-func (p *parser) parseNewArray() (Expr, error) {
+// "new ElementType[Length]" creates an array whose element type may itself be an
+// array type written with "[]", so "new int[][3]" creates three int[] elements.
+// "new map[Key]Value" creates an empty map.
+func (p *parser) parseNew() (Expr, error) {
 	keyword := p.advance() // 'new'
+
+	if p.peek().Kind == lexer.Map {
+		mapType, err := p.parseMapType()
+		if err != nil {
+			return nil, err
+		}
+		return &NewMapExpr{At: positionOf(keyword), Map: mapType}, nil
+	}
 
 	element, err := p.parseType()
 	if err != nil {

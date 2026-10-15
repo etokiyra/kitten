@@ -98,6 +98,56 @@ void *ktn_rt_array_at(const ktn_array *array, int64_t index);
 int64_t ktn_rt_array_length(const ktn_array *array);
 
 /*
+ * A map from string keys to values of a fixed size.
+ *
+ * length is the number of entries; capacity is the number of slots in the hash
+ * table, always a power of two or zero; value_size is the size in bytes of one
+ * value. keys, hashes, and values are GC-managed arrays of capacity slots. A
+ * null key marks an empty slot, so stored keys are never null. Maps are
+ * references: assigning one map to another copies the reference, and both names
+ * then share the same table.
+ */
+typedef struct ktn_map {
+    int64_t length;
+    int64_t capacity;
+    int64_t value_size;
+    const char **keys;
+    uint64_t *hashes;
+    void *values;
+} ktn_map;
+
+/*
+ * Allocates an empty map whose values are value_size bytes each. Keys are
+ * compared by string content, so two distinct strings with the same contents
+ * address the same entry. Map allocation uses the garbage collector.
+ */
+ktn_map *ktn_rt_map_new(int64_t value_size);
+
+/*
+ * Stores value under key, inserting the entry when the key is absent and
+ * updating it when the key is present. value points to value_size bytes to copy
+ * into the entry, so a map can hold any value type without type punning.
+ */
+void ktn_rt_map_set(ktn_map *map, const char *key, const void *value);
+
+/*
+ * Returns a pointer to the value stored under key. Looking up a key that is
+ * absent, or using a null map reference, is a fatal runtime error rather than
+ * undefined behavior or a fabricated value.
+ */
+void *ktn_rt_map_at(const ktn_map *map, const char *key);
+
+/*
+ * Reports whether key is present in the map.
+ */
+bool ktn_rt_map_has(const ktn_map *map, const char *key);
+
+/*
+ * Returns the number of entries in the map.
+ */
+int64_t ktn_rt_map_length(const ktn_map *map);
+
+/*
  * The largest file, in bytes, that ktn_rt_read_file will read. Larger files are
  * rejected instead of allocated, so a program cannot be made to allocate an
  * unbounded buffer from a file on disk.

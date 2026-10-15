@@ -9,6 +9,8 @@
 //     Boehm-Demers-Weiser conservative collector;
 //   - string operations: value equality, concatenation, and append;
 //   - dynamic arrays: allocation, bounds-checked element access, and length;
+//   - string-keyed maps: a hash table with insert, lookup, membership, and
+//     length operations;
 //   - whole-file reading; and
 //   - helpers for the built-in print function.
 //
@@ -16,6 +18,6 @@
 // them alongside generated code and compiles them together. The package
 // performs no compilation or execution itself.
 //
-// The runtime is intentionally minimal. Maps, exceptions, finalizers, and file
+// The runtime is intentionally minimal. Exceptions, finalizers, and file
 // writing are not implemented.
 package runtime

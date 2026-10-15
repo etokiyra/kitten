@@ -108,7 +108,7 @@ Recognized token kinds (implementation names):
 | Names | `Ident` |
 | Literals | `Int`, `Float`, `String` |
 | Boolean literals | `True`, `False` |
-| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Import`, `Public`, `Private`, `Enum`, `Union`, `Match` |
+| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Import`, `Public`, `Private`, `Enum`, `Union`, `Match`, `Map` |
 | Type names | `TypeInt`, `TypeFloat`, `TypeBool`, `TypeString`, `TypeVoid` |
 | Operators | `Plus`, `Minus`, `Star`, `Slash`, `Percent`, `Assign`, `Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `And`, `Or`, `Not`, `Inc`, `Dec`, `PlusAssign`, `MinusAssign`, `Arrow` |
 | Punctuation | `LParen`, `RParen`, `LBrace`, `RBrace`, `LBracket`, `RBracket`, `Comma`, `Dot`, `Semicolon`, `Colon` |
@@ -143,6 +143,7 @@ identifiers:
 struct if else while for return
 fn new import public private
 enum union match
+map
 int float bool string void
 true false
 ```
@@ -543,8 +544,9 @@ outcome here.
 - Function overloading and method semantics.
 - Default and variadic parameters.
 - Generics and other advanced type-system features. Square brackets `[` `]` are
-  used for arrays (Section 21) and remain reserved for a possible future `[T]`
-  generic syntax.
+  used for arrays (Section 21) and map types (Section 24), and remain reserved
+  for a possible future `[T]` generic syntax. Maps are not generic: keys are
+  always `string`.
 - Whether `::` or any namespacing operator is ever introduced (currently it is
   not an operator).
 
@@ -637,8 +639,9 @@ case             = IDENT ;
 union            = "union" IDENT "{" { variant } "}" ;
 variant          = IDENT [ "{" { field } "}" ] ;
 
-type             = base_type { "[]" } ;
+type             = map_type | base_type { "[]" } ;
 base_type        = "int" | "float" | "bool" | "string" | "void" | IDENT ;
+map_type         = "map" "[" type "]" type ;
 
 block            = "{" { statement } "}" ;
 
@@ -681,8 +684,10 @@ primary          = INT | FLOAT | STRING | "true" | "false"
                  | struct_literal
                  | variant_literal
                  | array_creation
+                 | map_creation
                  | "(" expression ")" ;
 array_creation   = "new" type "[" expression "]" ;
+map_creation     = "new" "map" "[" type "]" type ;
 struct_literal   = IDENT "{" [ field_inits ] "}" ;
 variant_literal  = IDENT "." IDENT "{" [ field_inits ] "}" ;
 field_inits      = field_init { "," field_init } ;
@@ -812,9 +817,9 @@ Notes:
 - Relational operators are numeric-only; comparing `bool` or `string` values
   with `<` is an error.
 - Equality is defined for the primitive types and enums. Comparing two struct
-  values, two array values, or two union values with `==` is an error. Comparing
-  two `string` values compares their contents, never their addresses, and
-  comparing two enum values compares their cases (Section 23).
+  values, two array values, two union values, or two map values with `==` is an
+  error. Comparing two `string` values compares their contents, never their
+  addresses, and comparing two enum values compares their cases (Section 23).
 - There is no unary `+` operator: the grammar in Section 17 does not include it.
 - The checker does not diagnose constant division by zero and does not guarantee
   overflow behavior; those are **deferred**.
@@ -904,7 +909,7 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Three functions are provided by the language: `print`, `length`, and
+Four functions are provided by the language: `print`, `length`, `has`, and
 `read_file`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
@@ -913,17 +918,26 @@ the same name shadows the built-in.
 
 - It accepts **one or more** arguments, and every argument must be `int`,
   `float`, `bool`, or `string`. Calling it with no arguments, or with a struct,
-  array, enum, or union value, is an error.
+  array, enum, union, or map value, is an error.
 - Its return type is `void`, so a call to `print` cannot be used as a value.
 - The output format is defined in Section 13 and the runtime in Section 19.4.
 
 **`length`**
 
-- `length(array)` takes exactly one argument, which must be an array, and returns
-  its number of elements as an `int` (Section 21).
-- Calling it with no arguments, more than one argument, or a non-array argument
-  is an error.
+- `length(collection)` takes exactly one argument, which must be an array or a
+  map, and returns its number of elements as an `int` (Sections 21 and 24).
+- Calling it with no arguments, more than one argument, or a non-collection
+  argument is an error.
 - Its return type is `int`, and it is not variadic.
+
+**`has`**
+
+- `has(map, key)` takes exactly two arguments: a map and a key of the map's key
+  type. It returns `true` when the key is present and `false` otherwise
+  (Section 24).
+- Passing a non-map first argument, a key of the wrong type, or the wrong number
+  of arguments is an error.
+- Its return type is `bool`.
 
 **`read_file`**
 
@@ -967,6 +981,8 @@ malformed or incomplete syntax trees.
 11. Checker errors are fail-fast: only the first error is reported.
 12. There is no implicit `main`; the entry point is validated at build time and
     must be in the root module (Sections 19 and 22).
+13. Maps are reference types whose only creator is assignment to a new key; a
+    missing-key lookup is fatal (Section 24).
 
 ---
 
@@ -988,6 +1004,7 @@ are expected to evolve.
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
 | enum type `E` | `ktn_e_E` (a typedef for `int64_t`) |
 | union type `U` | `ktn_s_U *` (a GC-managed object reference) |
+| map type `map[string]V` | `ktn_map *` (a GC-managed hash table) |
 | array type `T[]` | `ktn_array *` (a GC-managed dynamic array) |
 
 Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
@@ -1029,13 +1046,16 @@ is **deferred**.
   by hand.
 - The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
   `ktn_rt_string_append`, `ktn_rt_array_new`, `ktn_rt_array_at`,
-  `ktn_rt_array_length`, `ktn_rt_read_file`, and the built-in print helpers.
+  `ktn_rt_array_length`, `ktn_rt_map_new`, `ktn_rt_map_set`, `ktn_rt_map_at`,
+  `ktn_rt_map_has`, `ktn_rt_map_length`, `ktn_rt_read_file`, and the built-in
+  print helpers.
 - Strings are pointers to bytes, so structs may still contain pointers (to
   strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
-  buffers use the same scanning allocator, so arrays of strings, structs, and
-  nested arrays are handled correctly.
-- Maps, exceptions, and finalizers are **not** implemented.
+  buffers and map key, hash, and value buffers use the same scanning allocator,
+  so arrays and maps of strings, structs, unions, and nested collections are
+  handled correctly.
+- Exceptions and finalizers are **not** implemented.
 
 ### 19.4 Built-in `print` behavior
 
@@ -1142,6 +1162,8 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     (Section 22.2).
 15. Enums are value types compared by case; unions are GC-managed references
     inspected only with an exhaustive `match` (Section 23).
+16. Maps are GC-managed references with string keys, an inline value, and a
+    fatal missing-key lookup (Section 24).
 
 ---
 
@@ -1693,3 +1715,134 @@ The following are **not** implemented and must not be assumed:
    convertible to integers.
 7. Union values use a flat C struct rather than a C `union`, trading memory for
    well-defined behavior.
+
+---
+
+## 24. Maps (provisional)
+
+This section records the implemented string-keyed map. It is **provisional**:
+the feature is the first working design and may evolve.
+
+### 24.1 Type
+
+- A map type is written `map[Key]Value`. The key type must be `string`; any
+  other key type is an error.
+- The value type may be any type except `void`: the primitive types, `string`,
+  enums, structs, unions, arrays, and other maps. A `void` value type is an
+  error.
+- Map types match exactly. `map[string]int` and `map[string]float` are different
+  types, and there are no implicit conversions between them.
+- A map value is a **reference** to a GC-managed hash table, like a struct or a
+  union. Assigning one map to another copies the reference.
+
+### 24.2 Creation
+
+`new map[Key]Value` creates an empty map:
+
+```text
+map[string]int counts = new map[string]int;
+```
+
+A freshly created map has length 0. A null map reference is never produced by
+creation; where a map is zero-initialized (for example an unassigned array
+element), its reference is null, and every map operation on a null reference is
+a fatal runtime error.
+
+### 24.3 Assignment: the only way to create an entry
+
+```text
+counts["total"] = 1;      // inserts a new entry
+counts["total"] = 2;      // updates the existing entry, length unchanged
+```
+
+- `map[key] = value` inserts the entry when the key is absent and updates it when
+  the key is present. The value type must match the map's value type exactly.
+- This is the **only** operation that creates an entry.
+- The map expression must be a mutable l-value, exactly as for an array element.
+
+### 24.4 Reading and missing keys
+
+```text
+int total = counts["total"];   // fatal when "total" is absent
+```
+
+- `map[key]` reads the stored value and requires the key to be present. A
+  missing key is a **fatal runtime error** ("map has no entry for key ..."), not
+  a fabricated or uninitialized value. This is the deliberate consequence of the
+  language having no optional or result type.
+- A program checks membership before reading when a key may be absent.
+- Compound assignment (`+=`, `-=`) and increment/decrement on a map entry are
+  read-modify-writes, so they require the key to be present, just like a read.
+- The map expression and the key expression are each evaluated exactly once.
+
+### 24.5 Membership and length
+
+- `has(map, key) -> bool` reports whether the key is present. It never fails for
+  an absent key.
+- `length(map) -> int` returns the number of entries.
+
+### 24.6 Keys and equality
+
+- Keys are compared by string **content**, not by pointer identity, so two
+  distinct strings with identical contents address the same entry.
+- A key may be the empty string; it is an ordinary key.
+- Map keys and values are **retained, not copied**: the map stores a reference
+  to the key string and copies the value's bytes. Kitten strings are immutable
+  and garbage collected, so a stored key can never be mutated and stays alive as
+  long as the map reaches it.
+- Maps cannot be compared with `==` or `!=`; map equality is not supported.
+- Maps cannot be printed.
+
+### 24.7 Aliasing
+
+Maps are references, so assignment and function passing copy the reference. A
+mutation through one name is visible through every name that refers to the same
+map, and a map stored in a struct field or array element is shared the same way.
+
+### 24.8 Runtime representation
+
+- A map is a C `ktn_map` value: an entry count, a capacity, a value size, and
+  garbage-collected arrays of keys, hashes, and value bytes.
+- The runtime uses **open addressing with linear probing** over a power-of-two
+  table. Keys are hashed with FNV-1a over their bytes. Entries are never removed,
+  so the first empty slot proves a key is absent.
+- The table grows when inserting one more entry would exceed a three-quarters
+  load factor, doubling its capacity and rehashing every existing entry, so no
+  entry is lost.
+- Values are stored inline as exactly `value_size` bytes each, where the size is
+  the value type's C size. The compiler passes `sizeof(ValueCType)`, so no
+  unsafe type punning is used and pointer-containing values (strings, structs,
+  unions, arrays, nested maps) are traced correctly by the collector.
+- Allocation sizes are checked for overflow; a negative or zero value size, an
+  allocation that would overflow, or a table that is too large is a fatal
+  runtime error.
+- No manual memory management is required from Kitten programs.
+
+### 24.9 Deferred
+
+The following are **not** implemented and must not be assumed:
+
+- Iteration over a map's entries or keys.
+- Removing entries, clearing a map, or copying a map.
+- Non-string keys.
+- Ordered iteration, stable ordering, or any ordering guarantee.
+- Optional or result types, and therefore recoverable missing-key handling.
+- Map equality, hashing, or printing.
+- Any performance guarantee beyond the implemented hashing scheme: the
+  implementation has no deletion and no tombstones, and no benchmark establishes
+  a bound.
+
+### 24.10 Provisional decisions recorded
+
+1. Keys are `string` only; the key type is still written in the type for clarity
+   and future extension.
+2. `new map[K]V` creates an empty map, mirroring `new T[n]` for arrays.
+3. `map[key] = value` is the only operation that creates an entry.
+4. Reading a missing key is a fatal runtime error; `has` is the membership test.
+5. Maps are GC-managed references with shared mutation.
+6. Values are stored inline by size, so any non-`void` value type is supported
+   without type punning.
+7. Keys are retained by reference; the byte contents are never copied and never
+   mutated.
+8. Growth doubles capacity and rehashes all entries; there is no shrinking and
+   no removal.

@@ -65,11 +65,13 @@ declarations, `new Element[length]` creation, bounds-checked indexing,
 (`read_file`), a module system with `import`, cross-module visibility, and
 multi-file compilation. Phase 3D delivered enums and tagged unions: named
 alternatives, variants with typed payloads, safe construction, and an exhaustive
-`match` statement for inspecting variants.
+`match` statement for inspecting variants. Phase 3E delivered typed maps:
+`map[string]V` with string keys, GC-managed reference semantics, and a hash
+table in the runtime.
 
-Self-hosting, a native backend, maps, a complete standard library, and file
-writing are still intentionally unimplemented: do not start them without
-explicit authorization.
+Self-hosting, a native backend, a complete standard library, and file writing
+are still intentionally unimplemented: do not start them without explicit
+authorization.
 
 ## Roadmap
 
@@ -77,7 +79,7 @@ explicit authorization.
 2. A working, tested native compiler for the current language, including the
    language foundations self-hosting needs. **In progress** (Phase 3A added
    dynamic strings; Phase 3B added dynamic arrays; Phase 3C added file I/O and
-   modules; Phase 3D added enums and tagged unions).
+   modules; Phase 3D added enums and tagged unions; Phase 3E added typed maps).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

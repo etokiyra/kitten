@@ -123,6 +123,171 @@ int64_t ktn_rt_array_length(const ktn_array *array) {
     return array->length;
 }
 
+/*
+ * FNV-1a hash of a NUL-terminated string, computed over its bytes so that two
+ * distinct strings with the same contents hash identically.
+ */
+static uint64_t ktn_rt_string_hash(const char *value) {
+    uint64_t hash = 14695981039346656037ULL; /* FNV-1a 64-bit offset basis */
+    const unsigned char *bytes = (const unsigned char *)value;
+    while (*bytes != '\0') {
+        hash ^= (uint64_t)*bytes;
+        hash *= 1099511628211ULL; /* FNV-1a 64-bit prime */
+        bytes++;
+    }
+    return hash;
+}
+
+/*
+ * Returns the index of the slot holding key, or -1 when the key is absent.
+ *
+ * The table uses open addressing with linear probing over a power-of-two
+ * capacity. Entries are never removed, so the first empty slot proves the key
+ * is absent. The probe is bounded by the capacity so that a corrupted table
+ * cannot loop forever.
+ */
+static int64_t ktn_rt_map_find(const ktn_map *map, const char *key, uint64_t hash) {
+    if (map->capacity == 0) {
+        return -1;
+    }
+    size_t mask = (size_t)map->capacity - 1;
+    size_t index = (size_t)hash & mask;
+    for (int64_t probes = 0; probes < map->capacity; probes++) {
+        const char *existing = map->keys[index];
+        if (existing == NULL) {
+            return -1;
+        }
+        if (map->hashes[index] == hash && strcmp(existing, key) == 0) {
+            return (int64_t)index;
+        }
+        index = (index + 1) & mask;
+    }
+    return -1;
+}
+
+/* Stores key and a copy of the value's bytes into the first empty slot. */
+static void ktn_rt_map_place(ktn_map *map, const char *key, uint64_t hash, const void *value) {
+    size_t mask = (size_t)map->capacity - 1;
+    size_t index = (size_t)hash & mask;
+    for (int64_t probes = 0; probes < map->capacity; probes++) {
+        if (map->keys[index] == NULL) {
+            map->keys[index] = key;
+            map->hashes[index] = hash;
+            memcpy((char *)map->values + index * (size_t)map->value_size, value, (size_t)map->value_size);
+            map->length++;
+            return;
+        }
+        index = (index + 1) & mask;
+    }
+    ktn_rt_fail("map is full");
+}
+
+/*
+ * Grows the table when inserting one more entry would exceed a 3/4 load factor.
+ * All existing entries are rehashed into the new table, so no entry is lost.
+ */
+static void ktn_rt_map_reserve(ktn_map *map) {
+    if (map->capacity != 0 && (map->length + 1) * 4 <= map->capacity * 3) {
+        return;
+    }
+    if (map->capacity > INT64_MAX / 2) {
+        ktn_rt_fail("map is too large");
+    }
+    int64_t capacity = map->capacity == 0 ? 8 : map->capacity * 2;
+
+    if ((uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(const char *) ||
+        (uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(uint64_t) ||
+        (uint64_t)capacity > (uint64_t)SIZE_MAX / (uint64_t)map->value_size) {
+        ktn_rt_fail("map allocation is too large");
+    }
+
+    /* Keep the old table reachable while the new one is built, so the collector
+     * does not reclaim keys or pointer values that are still being copied. */
+    const char **old_keys = map->keys;
+    uint64_t *old_hashes = map->hashes;
+    void *old_values = map->values;
+    int64_t old_capacity = map->capacity;
+
+    map->capacity = capacity;
+    map->length = 0;
+    map->keys = (const char **)ktn_rt_alloc((size_t)capacity * sizeof(const char *));
+    map->hashes = (uint64_t *)ktn_rt_alloc((size_t)capacity * sizeof(uint64_t));
+    map->values = ktn_rt_alloc((size_t)capacity * (size_t)map->value_size);
+
+    for (int64_t index = 0; index < old_capacity; index++) {
+        if (old_keys[index] != NULL) {
+            ktn_rt_map_place(map, old_keys[index], old_hashes[index],
+                             (const char *)old_values + (size_t)index * (size_t)map->value_size);
+        }
+    }
+}
+
+ktn_map *ktn_rt_map_new(int64_t value_size) {
+    if (value_size <= 0) {
+        ktn_rt_fail("map value size must be positive");
+    }
+    ktn_map *map = (ktn_map *)ktn_rt_alloc(sizeof(ktn_map));
+    map->length = 0;
+    map->capacity = 0;
+    map->value_size = value_size;
+    map->keys = NULL;
+    map->hashes = NULL;
+    map->values = NULL;
+    return map;
+}
+
+void ktn_rt_map_set(ktn_map *map, const char *key, const void *value) {
+    if (map == NULL) {
+        ktn_rt_fail("map assignment on a null map reference");
+    }
+    if (value == NULL) {
+        ktn_rt_fail("map value is missing");
+    }
+
+    /* Normalize a null key to the static empty string so that stored keys are
+     * never null and an empty key can be distinguished from an empty slot. */
+    const char *checked = ktn_rt_string_value(key);
+    uint64_t hash = ktn_rt_string_hash(checked);
+
+    int64_t index = ktn_rt_map_find(map, checked, hash);
+    if (index >= 0) {
+        memcpy((char *)map->values + (size_t)index * (size_t)map->value_size, value, (size_t)map->value_size);
+        return;
+    }
+
+    ktn_rt_map_reserve(map);
+    ktn_rt_map_place(map, checked, hash, value);
+}
+
+void *ktn_rt_map_at(const ktn_map *map, const char *key) {
+    if (map == NULL) {
+        ktn_rt_fail("map lookup on a null map reference");
+    }
+    const char *checked = ktn_rt_string_value(key);
+    int64_t index = ktn_rt_map_find(map, checked, ktn_rt_string_hash(checked));
+    if (index < 0) {
+        char message[256];
+        snprintf(message, sizeof(message), "map has no entry for key \"%.*s\"", 160, checked);
+        ktn_rt_fail(message);
+    }
+    return (char *)map->values + (size_t)index * (size_t)map->value_size;
+}
+
+bool ktn_rt_map_has(const ktn_map *map, const char *key) {
+    if (map == NULL) {
+        ktn_rt_fail("has on a null map reference");
+    }
+    const char *checked = ktn_rt_string_value(key);
+    return ktn_rt_map_find(map, checked, ktn_rt_string_hash(checked)) >= 0;
+}
+
+int64_t ktn_rt_map_length(const ktn_map *map) {
+    if (map == NULL) {
+        ktn_rt_fail("length of a null map reference");
+    }
+    return map->length;
+}
+
 const char *ktn_rt_read_file(const char *path) {
     if (path == NULL) {
         ktn_rt_fail("read_file: path is null");

@@ -47,6 +47,8 @@ func (c *checker) checkExpression(expression parser.Expr, scope *Scope) (*Type, 
 		return c.checkStructLiteral(e, scope)
 	case *parser.VariantLiteral:
 		return c.checkVariantLiteral(e, scope)
+	case *parser.NewMapExpr:
+		return c.checkNewMap(e, scope)
 	case *parser.NewArrayExpr:
 		return c.checkNewArray(e, scope)
 	case *parser.IndexExpr:
@@ -207,7 +209,7 @@ func (c *checker) checkEquality(operator string, left, right *Type, at parser.Po
 	if left != right {
 		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
 	}
-	if left.IsStruct() || left.IsArray() || left.IsUnion() {
+	if left.IsStruct() || left.IsArray() || left.IsUnion() || left.IsMap() {
 		return nil, c.errorAt(InvalidOperator, at, "operator %q is not supported for values of type %s", operator, left)
 	}
 	return BoolType, nil
@@ -468,6 +470,8 @@ func (c *checker) checkCall(expression *parser.CallExpr, scope *Scope) (*Type, e
 		return c.checkVariadicCall(expression, function, scope)
 	case BuiltinLength:
 		return c.checkLengthCall(expression, function, scope)
+	case BuiltinMapHas:
+		return c.checkMapHasCall(expression, function, scope)
 	}
 
 	if len(expression.Arguments) != len(function.ParameterTypes) {
@@ -589,9 +593,9 @@ func (c *checker) checkIndex(expression *parser.IndexExpr, scope *Scope) (*Type,
 }
 
 // checkIndexOperands checks the index of an indexing expression whose target
-// already has type targetType, and returns the element type.
+// already has type targetType, and returns the element or value type.
 func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *Type, scope *Scope) (*Type, error) {
-	if !targetType.IsArray() {
+	if !targetType.IsArray() && !targetType.IsMap() {
 		return nil, c.errorAt(TypeMismatch, expression.At, "cannot index a value of type %s", targetType)
 	}
 	if expression.Index == nil {
@@ -601,6 +605,14 @@ func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *T
 	if err != nil {
 		return nil, err
 	}
+
+	if targetType.IsMap() {
+		if indexType != targetType.Key {
+			return nil, c.errorAt(TypeMismatch, expression.Index.Pos(), "map key must be %s, found %s", targetType.Key, indexType)
+		}
+		return targetType.Value, nil
+	}
+
 	if indexType != IntType {
 		return nil, c.errorAt(TypeMismatch, expression.Index.Pos(), "array index must be int, found %s", indexType)
 	}
@@ -608,7 +620,7 @@ func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *T
 }
 
 // checkLengthCall checks a call to the built-in length, which takes exactly one
-// array argument and returns its length as an int.
+// array or map argument and returns the number of elements as an int.
 func (c *checker) checkLengthCall(expression *parser.CallExpr, function *Function, scope *Scope) (*Type, error) {
 	if len(expression.Arguments) != 1 {
 		return nil, c.errorAt(BadCall, expression.OpenParen, "function %q expects 1 argument, got %d", function.Name, len(expression.Arguments))
@@ -618,10 +630,52 @@ func (c *checker) checkLengthCall(expression *parser.CallExpr, function *Functio
 	if err != nil {
 		return nil, err
 	}
-	if !argumentType.IsArray() {
-		return nil, c.errorAt(TypeMismatch, argument.Pos(), "length expects an array, found %s", argumentType)
+	if !argumentType.IsArray() && !argumentType.IsMap() {
+		return nil, c.errorAt(TypeMismatch, argument.Pos(), "length expects an array or map, found %s", argumentType)
 	}
 	return IntType, nil
+}
+
+// checkMapHasCall checks a call to the built-in has, which takes a map and a key
+// and reports whether the key is present.
+func (c *checker) checkMapHasCall(expression *parser.CallExpr, function *Function, scope *Scope) (*Type, error) {
+	if len(expression.Arguments) != 2 {
+		return nil, c.errorAt(BadCall, expression.OpenParen, "function %q expects 2 arguments, got %d", function.Name, len(expression.Arguments))
+	}
+
+	mapArgument := expression.Arguments[0]
+	mapType, err := c.checkExpr(mapArgument, scope)
+	if err != nil {
+		return nil, err
+	}
+	if !mapType.IsMap() {
+		return nil, c.errorAt(TypeMismatch, mapArgument.Pos(), "%q expects a map as its first argument, found %s", function.Name, mapType)
+	}
+
+	keyArgument := expression.Arguments[1]
+	keyType, err := c.checkExpr(keyArgument, scope)
+	if err != nil {
+		return nil, err
+	}
+	if keyType != mapType.Key {
+		return nil, c.errorAt(TypeMismatch, keyArgument.Pos(), "map key must be %s, found %s", mapType.Key, keyType)
+	}
+	return BoolType, nil
+}
+
+// checkNewMap checks map creation, "new map[Key]Value".
+func (c *checker) checkNewMap(expression *parser.NewMapExpr, scope *Scope) (*Type, error) {
+	if expression == nil || expression.Map == nil {
+		return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "map creation is missing its type")
+	}
+	mapType, err := c.resolveType(expression.Map)
+	if err != nil {
+		return nil, err
+	}
+	if !mapType.IsMap() {
+		return nil, c.errorAt(InvalidType, expression.Map.Pos(), "%s is not a map type", mapType)
+	}
+	return mapType, nil
 }
 
 // checkStructLiteral checks a struct literal expression.
@@ -719,6 +773,8 @@ func describeExpression(expression parser.Expr) string {
 		return "a variant literal"
 	case *parser.NewArrayExpr:
 		return "an array creation"
+	case *parser.NewMapExpr:
+		return "a map creation"
 	case *parser.IndexExpr:
 		return "an indexed element"
 	case nil:
