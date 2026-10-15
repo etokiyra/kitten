@@ -83,13 +83,22 @@ semantics did not change, and the Kitten-written lexer now scans linearly. Phase
 4A added the next self-hosted component: a parser under `selfhost/parser`, driven
 by `selfhost/parse.ktn`, that reproduces the Go reference parser's grammar,
 precedence, tree, and diagnostics, and is checked against it by a differential
-corpus of 262 inputs in `cmd/kitten`.
+corpus of 262 inputs in `cmd/kitten`. Phase 4B added a semantic checker under
+`selfhost/checker`, driven by `selfhost/check.ktn`, that reproduces the Go
+checker's passes, rules, and diagnostics. Phase 4C exposed the checker's resolved
+semantic model — the types, symbols, variants, and declarations a generator reads
+— for a future code generator. Phase 4D.1 began the C code generator written in
+Kitten: its C naming, C type mapping, string-literal escaping, and bounded output
+accumulation under `selfhost/codegen`, exposed by `selfhost/codegen.ktn` and
+checked against the Go generator in `cmd/kitten`.
 
-Neither self-hosted component is part of the production pipeline: `kitten build`
-and `kitten run` still use the Go lexer and parser, which remain authoritative.
-Their deliberate differences (byte-oriented positions, no command-line arguments
-or chosen exit status) are documented in SPEC.md Sections 25 and 26,
-`selfhost/lexer/README.md`, and `selfhost/parser/README.md`.
+None of the self-hosted components is part of the production pipeline: `kitten
+build` and `kitten run` still use the Go lexer, parser, checker, and generator,
+which remain authoritative. Their deliberate differences (byte-oriented
+positions, no command-line arguments or chosen exit status, and no emitter yet)
+are documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
+`selfhost/parser/README.md`, `selfhost/checker/README.md`, and
+`selfhost/codegen/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -108,7 +117,9 @@ authorization.
    parser checked against the Go parser, without replacing it; Phase 4B added a
    Kitten-written semantic checker checked against the Go checker, without
    replacing it; Phase 4C exposed the checker's resolved semantic model for a
-   future code generator).
+   future code generator; Phase 4D.1 began the Kitten-written C generator with
+   its naming, C type mapping, string escaping, and bounded output accumulation,
+   without an emitter yet).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

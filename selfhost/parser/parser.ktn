@@ -277,7 +277,12 @@ fn hex_pair(int byte) -> string {
 // unterminated literal, so any other byte - including a backslash before an
 // unsupported escape - is copied verbatim and the result is exactly what the
 // reference decoder produces for a token that reached the parser.
-fn decode_string(string literal) -> string {
+//
+// It is public because a code generator must decode a literal before re-encoding
+// its bytes for C, exactly as the reference generator calls the reference
+// lexer's exported DecodeString. Decoding lives here rather than being
+// reimplemented, so that the two encodings cannot drift.
+public fn decode_string(string literal) -> string {
     int size = length(literal);
     string result = "";
     int index = 1;

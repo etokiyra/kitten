@@ -2334,12 +2334,126 @@ cross-module cases, every fixture, and the self-hosted sources.
 ### 27.6 Deferred
 
 - **Code generation.** The semantic result of Section 27.2.1 carries every fact
-  the reference generator reads, but nothing generates C yet. A Kitten-written
-  generator is the next component; the contract it may rely on is documented in
-  `selfhost/checker/README.md`.
+  the reference generator reads. The first layer of a Kitten-written generator —
+  naming, the C type mapping, escaping, and output accumulation — is described in
+  Section 28; the emitter that consumes this result does not exist yet. The
+  contract it may rely on is documented in `selfhost/checker/README.md`.
 - A module loader written in Kitten: the driver checks the modules a caller
   supplies.
 - Command-line arguments, standard error, and a program-selected exit status
   (Section 16).
 - Recovery from an error: the parser and the checker both report the first error
   and stop.
+
+---
+
+## 28. Kitten-written C generator (experimental)
+
+Section 19 describes the compilation model, and Section 27 describes the
+Kitten-written checker that resolves a program. This section describes the first
+part of the Kitten-written code generator: the layer that turns resolved names
+and types into C text, and the bounded accumulation it writes into. The emitter
+that walks a checked program and produces a translation unit is not part of it
+and is deferred.
+
+### 28.1 Location and role
+
+The sources are:
+
+- `selfhost/codegen/names.ktn` — name mangling, the C type mapping, and
+  string-literal escaping, mirroring `codegen/names.go` and `codegen/cstring.go`.
+- `selfhost/codegen/output.ktn` — bounded output accumulation and finalization.
+- `selfhost/codegen.ktn` — the driver.
+
+`selfhost/codegen/README.md` describes how to build and run it, the directive
+interface the driver exposes, and the measured accumulation cost.
+
+The driver in this phase is a **probe**, not the compiler stage: it reads
+directive lines from the fixed relative path `input.txt` and prints one result
+line per directive, so that every helper is reachable without a program to walk.
+The driver described for the finished component reads a Kitten program, lexes,
+parses, and checks it, and prints generated C; it has no counterpart yet.
+
+### 28.2 API
+
+`names.ktn` exposes the reserved prefixes and standalone generated names, the
+derived name forms, `c_type`, and `c_string_literal`:
+
+- `c_type(type) -> CTypeResult` where `CTypeResult` is `Ok { text }` or
+  `Failed { message }`. The absent type has no C representation and maps to
+  `Failed`; the message carries no position, because it is the caller that knows
+  where the type was written.
+- `c_string_literal(literal) -> CStringLiteral` where `CStringLiteral` is
+  `{ escaped, length }`. It has no failure case: the reference decoder reports an
+  error for an unsupported escape, but the lexer rejects every unsupported escape
+  before the parser or the generator sees the token, so decoding cannot fail. The
+  helper decodes with the parser's `decode_string`, which is exported for it, so
+  that the two decodings cannot drift.
+
+`output.ktn` exposes `new_output`, `output_write`, `output_indent`, `output_line`,
+each returning `OutputResult`, and `output_text`.
+
+Nothing here inspects a program, resolves a name, or infers a type: every helper
+maps a name, a module, a resolved type, or a literal token to C text.
+
+### 28.3 C type mapping and name mangling
+
+The mapping and the mangling are the ones in Section 19.1 and Section 19.7,
+derived from the reference generator rather than restated from the language:
+primitives map to `int64_t`, `double`, `bool`, `const ktn_string *`, and `void`;
+a struct or union maps to a pointer to `ktn_s_<module><Name>`; an enum maps to the
+typedef `ktn_e_<module><Name>`; and an array or a map maps to `ktn_array *` or
+`ktn_map *`. The root module is unmangled and an imported module is qualified by
+its id, which cannot collide with a root-module name because a Kitten identifier
+cannot begin with a digit.
+
+### 28.4 String literal escaping
+
+A literal token is decoded and its bytes are re-encoded for C: quote, backslash,
+newline, tab, carriage return, and question mark become their escape; printable
+ASCII is emitted verbatim; every other byte becomes a three-digit octal escape,
+which cannot merge with a following digit. The reported length is the number of
+decoded bytes, excluding the terminator C appends.
+
+### 28.5 Output accumulation
+
+Kitten strings are immutable, so appending to a growing buffer costs the size of
+the output per append. Output is therefore accumulated as a bounded array of
+chunks — one chunk per completed line — and finalized by joining the chunks in
+halves, which copies the text once per level of recursion. The caller sizes the
+chunk array, and capacity is tested before any state changes, so a line that does
+not fit is rejected whole rather than half recorded: `OutputResult.Overflow`
+means the write did not happen and the caller must abandon generation.
+
+`selfhost/codegen/README.md` records the measurements: balanced joining grows
+linearly, where joining left to right grows quadratically.
+
+### 28.6 Differential testing
+
+A differential test in `cmd/kitten` compiles the probe once and compares it with
+the reference generator. The comparison is against values the reference produced,
+not against a copy of its logic: for every literal of the corpus the harness reads
+the pooled declaration out of the reference's own output and compares both the
+escaped text and the byte length; every predicted name and every complex C type
+spelling is required to appear in reference C for a program that uses it.
+
+`selfhost/codegen/README.md` records the corpus and the results.
+
+### 28.7 Deferred
+
+- **The emitter.** No declaration, statement, or expression emission exists yet.
+  The helpers, the accumulation API, the semantic model of Section 27.2.1, and
+  the AST are the inputs it will consume.
+- **The pipeline driver.** The probe's directive interface is replaced by a
+  driver that reads a program.
+- A module loader written in Kitten: a caller supplies the module set, as the
+  checker's driver does (Section 22.4).
+- Compiling and running the generated C, and comparing its output with the
+  reference generator's, belong to the emitter's differential test.
+- File writing: generated C is captured from standard output.
+- Command-line arguments, standard error, and a program-selected exit status
+  (Section 16).
+
+Kitten is not self-hosting: the lexer, the parser, the checker, and this
+generator foundation are written in Kitten, while the loader, the emitter, and the
+production pipeline are Go.

@@ -1,0 +1,169 @@
+// output.ktn - accumulate generated text in bounded chunks.
+//
+// The generator writes a translation unit piece by piece, and the pieces must end
+// up as one string. Kitten strings are immutable: `+` allocates a new string and
+// copies both operands, so accumulating a whole translation unit with
+//
+//	buffer += text
+//
+// costs O(size) per append and O(size squared) in total, which is not acceptable
+// for a file of any size. Kitten has no string builder and no resizable array,
+// and the runtime offers no append that grows in place: ktn_rt_string_append is
+// itself a concatenation.
+//
+// So text is accumulated as a bounded array of chunks, which is what the parser
+// already does for AST lists and with the same justification. Each complete line
+// becomes one chunk, which keeps the string being appended to at the length of a
+// single line rather than the length of the output; the caller sizes the chunk
+// array, and a capacity that is too small is reported as OutputResult.Overflow
+// instead of being written past the end. Finalization joins the chunks with
+// balanced concatenation, which copies O(size x log chunks) bytes, rather than
+// left to right, which would copy O(size x chunks).
+
+// Output accumulates generated text.
+//
+// pending holds the text of the line being built; output_write moves a completed
+// line into chunks. A chunk therefore always ends at a line boundary, which makes
+// the final array independent of how a caller happens to divide its writes.
+public struct Output {
+    string[] chunks;
+    int count;
+    int capacity;
+
+    // pending is the text written since the last newline, so it is at most one
+    // line long even for an output of any size.
+    string pending;
+}
+
+// OutputResult reports whether text could be added to an Output.
+//
+// Overflow carries the capacity that was exhausted. It means the write did not
+// happen: the output holds exactly what the earlier writes added and nothing of
+// this one. The caller must abandon generation, because the capacity is fixed and
+// a later write cannot succeed either. Rejecting the write rather than keeping it
+// out of a chunk is what keeps the failure honest: an accepted write that could
+// not be chunked would leave a growing pending string, which is the quadratic
+// accumulation this representation exists to avoid.
+public union OutputResult {
+    Ok
+    Overflow { int capacity; }
+}
+
+// new_output returns an empty output whose chunk array holds capacity chunks.
+// A capacity below one is raised to one so that the array is never empty.
+//
+// The caller must size the array for the number of lines it will write. Every
+// chunk is one line, so the required capacity is the number of newlines in the
+// generated output; a generator computes it from the syntax tree it is emitting,
+// as the parser computes a list capacity from the extent of its group.
+public fn new_output(int capacity) -> Output {
+    int size = capacity;
+    if (size < 1) {
+        size = 1;
+    }
+    return Output { chunks = new string[size], count = 0, capacity = size, pending = "" };
+}
+
+// output_ok reports whether a result succeeded.
+public fn output_ok(OutputResult result) -> bool {
+    match (result) {
+        Ok { return true; }
+        Overflow(capacity) { return false; }
+    }
+}
+
+// output_write appends text with no indentation.
+//
+// The text may contain any number of newlines, including none. Every newline that
+// completes a line moves that line into the chunk array, so a caller can write a
+// whole line, a fragment of one, or several lines at once and still get the same
+// chunks and the same final text.
+//
+// Capacity is tested before the output is changed, so an overflow rejects the
+// write instead of recording half of it. The test only runs when the write
+// completes a line, because a fragment that completes nothing needs no chunk.
+public fn output_write(Output output, string text) -> OutputResult {
+    string combined = output.pending + text;
+    int cut = last_newline(combined);
+    if (cut >= 0 && output.count >= output.capacity) {
+        return OutputResult.Overflow { capacity = output.capacity };
+    }
+    output.pending = combined;
+    if (cut >= 0) {
+        output.chunks[output.count] = substring(combined, 0, cut + 1);
+        output.count = output.count + 1;
+        output.pending = substring(combined, cut + 1, length(combined));
+    }
+    return OutputResult.Ok;
+}
+
+// output_indent writes the indentation of a nesting level: four spaces per level,
+// the unit the reference generator uses.
+public fn output_indent(Output output, int level) -> OutputResult {
+    return output_write(output, indentation(level));
+}
+
+// output_line writes one indented, newline-terminated line in a single write, so
+// that a line is never half written: either the whole line is added or the line
+// is rejected and nothing of it is.
+public fn output_line(Output output, int level, string text) -> OutputResult {
+    return output_write(output, indentation(level) + text + "\n");
+}
+
+// output_text returns the accumulated text. It completes the line being built
+// first, by appending the tail rather than writing it into a chunk, so that
+// finalizing never needs a chunk slot the caller did not provide.
+//
+// The chunks are joined in halves rather than left to right. Concatenating n
+// chunks left to right copies the growing result once per chunk, so it copies
+// about size x n bytes; joining in halves copies the whole text once per level of
+// the recursion, so it copies about size x log2(n) bytes, and it holds the
+// recursion to log2(n) frames on the runtime stack.
+//
+// The text is only meaningful after every write succeeded. Once a write has been
+// rejected the output is incomplete, and completing it is the caller's failure to
+// report rather than this function's to hide.
+public fn output_text(Output output) -> string {
+    return join_chunks(output, 0, output.count) + output.pending;
+}
+
+// join_chunks concatenates chunks[start..end) in halves. An empty range is the
+// empty string, and a one-chunk range is that chunk, which need not be copied.
+fn join_chunks(Output output, int start, int end) -> string {
+    int span = end - start;
+    if (span <= 0) {
+        return "";
+    }
+    if (span == 1) {
+        return output.chunks[start];
+    }
+    int middle = start + span / 2;
+    return join_chunks(output, start, middle) + join_chunks(output, middle, end);
+}
+
+// last_newline returns the index of the final newline byte in text, or -1 when
+// text has none.
+fn last_newline(string text) -> int {
+    int index = length(text) - 1;
+    while (index >= 0) {
+        if (text[index] == 10) {
+            return index;
+        }
+        index--;
+    }
+    return -1;
+}
+
+// indentation returns the indentation of a nesting level: the four-space unit
+// repeated level times. It is only ever called with a nesting level, so the
+// repeated concatenation costs a few dozen bytes at most.
+fn indentation(int level) -> string {
+    string unit = "    ";
+    string result = "";
+    int index = 0;
+    while (index < level) {
+        result += unit;
+        index++;
+    }
+    return result;
+}

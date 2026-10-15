@@ -1,0 +1,261 @@
+# A C code generator for Kitten, written in Kitten
+
+This directory holds the foundation of a C code generator written in Kitten: the
+C names, the C type mapping, C string-literal escaping, and bounded output
+accumulation. The emitter that walks a checked program and writes a translation
+unit does not exist yet; this is the layer it will be built on, together with a
+driver that exposes the layer so it can be compared with the reference generator
+before anything depends on it.
+
+The reference is the Go generator in `codegen/`, which remains the production
+backend. `kitten build` and `kitten run` are unchanged and do not use anything
+here.
+
+## Files
+
+- `selfhost/codegen/names.ktn` — name mangling, the C type mapping, and
+  string-literal escaping. The Kitten counterpart of `codegen/names.go` and
+  `codegen/cstring.go`.
+- `selfhost/codegen/output.ktn` — bounded, chunked output accumulation and
+  finalization.
+- `selfhost/codegen.ktn` — the probe driver: it reads directives from `input.txt`
+  and prints one result line per directive.
+- `cmd/kitten/codegen_differential_test.go` — the differential harness.
+
+## Building and running
+
+```sh
+# From the repository root. The driver reads the fixed relative path
+# "input.txt", so the working directory selects the input.
+kitten build selfhost/codegen.ktn -o /tmp/codegen-probe
+cd /tmp/example && printf 'function 0 main\nescape "a\\tb"\n' > input.txt && /tmp/codegen-probe
+```
+
+The driver prints one line per directive and writes nothing to standard error.
+
+## The directive interface
+
+A directive names one helper call and its arguments. Arguments are separated by
+single spaces; the `escape` directive takes everything after its first space as
+the literal, because a literal may contain spaces. Blank lines and lines whose
+first character is `#` are ignored.
+
+| Directive | Result line |
+| --- | --- |
+| `module-prefix <module>` | `module-prefix <module> <prefix>` (`-` for the root module) |
+| `function <module> <name>` | `function <module> <name> <c-name>` |
+| `variable <name>` | `variable <name> <c-name>` |
+| `struct <module> <name>` | `struct <module> <name> <c-type>` |
+| `field <name>` | `field <name> <c-member>` |
+| `constructor <module> <name>` | `constructor <module> <name> <c-name>` |
+| `argument <name>` | `argument <name> <c-name>` |
+| `enum <module> <name>` | `enum <module> <name> <c-typedef>` |
+| `enum-case <module> <enum> <case>` | `enum-case <module> <enum> <case> <c-constant>` |
+| `union-tag <module> <union> <variant>` | `union-tag <module> <union> <variant> <c-constant>` |
+| `variant-field <variant> <field>` | `variant-field <variant> <field> <c-member>` |
+| `variant-constructor <module> <union> <variant>` | `variant-constructor <module> <union> <variant> <c-name>` |
+| `match-temporary <index>` | `match-temporary <index> <c-name>` |
+| `literal-name <index>` | `literal-name <index> <c-name>` |
+| `object` | `object <c-name>` |
+| `tag-field` | `tag-field <c-member>` |
+| `escape <literal>` | `escape <c-literal> <byte-length>` |
+| `ctype int\|float\|bool\|string\|void\|array\|map` | `ctype <kind> <c-type>` |
+| `ctype-enum <module> <name>` | `ctype-enum <module> <name> <c-type>` |
+| `ctype-struct <module> <name>` | `ctype-struct <module> <name> <c-type>` |
+| `ctype-union <module> <name>` | `ctype-union <module> <name> <c-type>` |
+| `ctype-none` | `ctype-none failed <message>` |
+| `output <capacity> <lines>` | a summary line, then the accumulated text |
+| `fragments <capacity>` | a summary line, then the accumulated text |
+
+An unrecognized directive prints `unknown <directive>`.
+
+## Public API
+
+`names.ktn`:
+
+- `function_prefix`, `variable_prefix`, `struct_prefix`, `field_prefix`,
+  `constructor_prefix`, `argument_prefix`, `enum_prefix`, `enum_case_prefix`,
+  `union_tag_prefix`, `variant_field_prefix`, `match_prefix`, `literal_prefix`,
+  `object_name`, `tag_field_name` — the reserved prefixes and standalone names,
+  each identical to the constant of the same meaning in `codegen/names.go`.
+- `module_prefix(module)`, `function_name(name, module)`,
+  `variable_name(name)`, `struct_name(name, module)`, `field_name(name)`,
+  `constructor_name(name, module)`, `argument_name(name)`,
+  `enum_name(name, module)`, `enum_case_name(enum_type, case)`,
+  `union_tag_name(union_type, variant)`,
+  `variant_field_name(variant, field)`,
+  `variant_constructor_name(union_type, variant)`,
+  `match_temporary_name(index)`, `literal_name(index)`.
+- `c_type(type) -> CTypeResult`, with `c_type_ok`, `c_type_text`, and
+  `c_type_message` to read the result.
+- `c_string_literal(literal) -> CStringLiteral`, a struct of the escaped C
+  literal and its decoded byte length. It has no failure case: the reference
+  reports an error for an unsupported escape, but the lexer rejects every
+  unsupported escape before the parser or the generator sees the token, so
+  decoding cannot fail here.
+
+`output.ktn`:
+
+- `new_output(capacity)`, `output_write(output, text)`, `output_indent(output,
+  level)`, `output_line(output, level, text)`, each returning `OutputResult`, and
+  `output_text(output)`, which finalizes. `output_ok` and `output_capacity` read
+  an `OutputResult`.
+
+## C type mapping
+
+| Kitten type | C representation |
+| --- | --- |
+| `int` | `int64_t` |
+| `float` | `double` |
+| `bool` | `bool` |
+| `string` | `const ktn_string *` |
+| `void` | `void` |
+| `struct`, `union` | `ktn_s_<module><Name> *` |
+| `enum` | `ktn_e_<module><Name>` |
+| array | `ktn_array *` |
+| map | `ktn_map *` |
+
+The absent type, `None`, has no representation and maps to a failure.
+
+## Name mangling
+
+Generated C identifiers use the reserved prefixes above so that a Kitten
+identifier can never collide with a C keyword, with a runtime or entry-point
+name, or with another generated name. The root module is unmangled; an imported
+module is qualified by its id as `<id>_`, and because a Kitten identifier cannot
+begin with a digit a mangled imported name can never collide with a root-module
+name.
+
+| Kitten | C |
+| --- | --- |
+| function `f` in module `m` | `ktn_fn_<m>f` |
+| local or parameter `x` | `ktn_var_x` |
+| struct or union `S` in module `m` | `ktn_s_<m>S` |
+| field `x` | `ktn_f_x` |
+| struct constructor for `S` | `ktn_new_<m>S` |
+| constructor parameter for field `x` | `ktn_arg_x` |
+| enum `E` in module `m` | `ktn_e_<m>E` |
+| enum case `C` of `E` | `ktn_ec_<m>E_C` |
+| union variant `V` of `U` | `ktn_uc_<m>U_V` |
+| field `x` of variant `V` | `ktn_v_V_x` |
+| variant constructor for `U.V` | `ktn_new_<m>U_V` |
+| match temporary *n* | `ktn_match_<n>` (zero-based) |
+| pooled literal *n* | `ktn_literal_<n>` (one-based, first-use order) |
+| constructor local | `ktn_object` |
+| union tag member | `ktn_tag` |
+
+## String literal escaping
+
+A literal token's escapes are decoded with the parser's `decode_string` — the
+same decoder the reference calls as `lexer.DecodeString` — and the resulting
+bytes are re-encoded for C. Re-encoding rather than copying the source text is
+what guarantees the generated C is well-formed: a quote, a backslash, a newline,
+a tab, a carriage return, and a question mark each become their escape; printable
+ASCII is emitted verbatim; every other byte becomes a three-digit octal escape,
+which cannot merge with a following digit. The reported length is the number of
+decoded bytes, excluding the terminator C appends, and is what the generated
+string object stores.
+
+## Output accumulation
+
+Kitten strings are immutable: `+` allocates a copy of both operands. Accumulating
+a translation unit with `buffer += text` therefore costs the size of the output
+per append, which is quadratic overall. Kitten has no string builder, no
+resizable array, and no runtime append that grows in place —
+`ktn_rt_string_append` is itself a concatenation.
+
+Text is therefore accumulated as a bounded array of chunks, exactly as the parser
+accumulates AST lists. `output_write` appends to a pending line and moves each
+completed line into one chunk, so the string being appended to is never longer
+than a single line however large the output is. Finalization joins the chunks in
+halves, which copies the text once per level of recursion.
+
+The caller sizes the chunk array — the number of chunks is the number of lines —
+and capacity is tested before any state changes, so a line that does not fit is
+rejected whole rather than half recorded:
+
+- `OutputResult.Overflow` means the write did not happen. The output holds
+  exactly what earlier writes added. The caller must abandon generation, because
+  a fixed capacity cannot recover.
+- Rejecting the write rather than letting it accumulate in `pending` keeps the
+  failure honest: an accepted write that could never be chunked would leave a
+  single growing string, which is the quadratic accumulation the chunks exist to
+  avoid.
+
+Measured on a 2.5 GHz x86-64 host, accumulating *n* lines and finalizing them:
+
+| Lines | Balanced join | Left-to-right join |
+| --- | --- | --- |
+| 2,000 | 0.011 s | 0.038 s |
+| 8,000 | 0.016 s | 0.491 s |
+| 32,000 | 0.073 s | 10.245 s |
+| 128,000 | 0.308 s | 211.620 s |
+
+Balanced joining grows linearly — four times the input costs about four times as
+much — while left-to-right joining grows quadratically. The measurement is
+reproduced by `TestKittenCodegenAccumulationScaling`, which also fails if
+sixteen times the input costs more than forty times as much.
+
+## Differential testing
+
+`cmd/kitten/codegen_differential_test.go` builds the probe once and compares it
+with the reference generator in `codegen/`.
+
+The probe's results are compared with values the reference generator itself
+produced, so a difference is a real disagreement rather than a copy of the
+reference's logic:
+
+- **Escaping and byte length.** For every literal in the curated set and the
+  corpus, the harness generates C with the reference generator for a program
+  whose only string literal it is, extracts the pooled declaration
+  `static const ktn_string ktn_literal_1 = { LENGTH, "ESCAPED" };`, and requires
+  the probe's escaped text and length to equal it. Both fields are read out of
+  the reference's own output, and the single-literal program makes the
+  association between literal and pooled entry unambiguous.
+- **Names.** Each predicted name must appear in the reference C for a program
+  that uses it, so a prediction cannot drift away from what the reference emits.
+  The direction is one-way: the harness checks that the reference uses the name
+  the probe predicted, not that the reference uses no other name.
+- **C types.** Each complex spelling must appear in the reference C in a
+  declaration of a local of that type, for example `ktn_array * ktn_var_values`.
+
+The escaping corpus is every distinct string literal, valid as UTF-8, in the
+checker corpus: invalid-UTF-8 input is skipped, because the reference lexer scans
+runes and would replace an invalid byte before the literal is spelled out. That is
+the lexer's documented byte-oriented difference, and it is covered by the lexer
+harness rather than here.
+
+Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
+
+- 29 mangled names anchored to the reference generator's C.
+- 15 C type spellings anchored to the reference generator's C.
+- 507 string literals whose escaping and byte length match the reference
+  generator's pooled literals exactly.
+- The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
+  overflow runs, including a partial line that never ends.
+- Linear accumulation, with the growth of each step logged.
+
+## What is deliberately not here
+
+- **The emitter.** Nothing walks a checked program yet. The name, type, and
+  escaping helpers are the ones the emitter will call, and the accumulation API is
+  the one it will write through, but the declaration, statement, and expression
+  emission in `codegen/codegen.go` and `codegen/emit.go` has no counterpart.
+- **The pipeline driver.** `selfhost/codegen.ktn` is a probe, not the compiler
+  stage: it reads directives rather than a Kitten program, and it does not lex,
+  parse, or check anything. The driver described for the finished component reads
+  a program, checks it, and prints generated C, and it will replace this probe's
+  directive interface.
+- **A module loader.** The probe takes a module id as an argument, so it can
+  exercise module-qualified names, but nothing loads modules in Kitten. A
+  multi-module program reaches the emitter only through a caller that supplies the
+  module set, as the checker's driver does.
+- **File writing.** The driver can only print to standard output, so generated C
+  is captured from standard output rather than written to a file.
+- **Command-line arguments, standard error, and a chosen exit status.**
+- **Compiling and running generated C.** That belongs to the emitter's
+  differential test, which does not exist yet.
+
+Kitten is not self-hosting. The lexer, the parser, the checker, and this
+generator foundation are written in Kitten; the loader, the emitter, and the
+production pipeline are Go.

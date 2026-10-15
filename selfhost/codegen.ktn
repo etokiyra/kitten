@@ -1,0 +1,386 @@
+// codegen.ktn - expose the code generator's foundational helpers.
+//
+// The eventual driver for the Kitten-written C generator reads a Kitten program,
+// lexes, parses, and checks it, and prints the generated C. None of that exists
+// yet: the emitter is not written. What exists is the foundation the emitter
+// builds on - the C name mangling, the C type mapping, C string-literal
+// escaping, and bounded output accumulation - and this driver exists so that
+// those helpers can be compared with the reference generator's own behavior
+// before anything depends on them.
+//
+// So this driver reads directive lines from the fixed relative path "input.txt"
+// and prints one result line per directive. A directive names one helper call and
+// its arguments, which makes every helper reachable without a program to walk:
+//
+//	module-prefix <module>                  -> the prefix for a module id
+//	function <module> <name>                -> a function's C identifier
+//	variable <name>                         -> a local's C identifier
+//	struct <module> <name>                  -> a struct or union's C type name
+//	field <name>                            -> a struct field's C member name
+//	constructor <module> <name>             -> a struct constructor's C name
+//	argument <name>                         -> a constructor argument's C name
+//	enum <module> <name>                    -> an enum's C typedef name
+//	enum-case <module> <enum> <case>        -> an enum case's C constant
+//	union-tag <module> <union> <variant>    -> a union variant's C tag constant
+//	variant-field <variant> <field>         -> a union variant field's C member
+//	variant-constructor <module> <union> <variant>
+//	                                        -> a variant constructor's C name
+//	match-temporary <index>                 -> a match temporary's C name
+//	literal-name <index>                    -> a pooled literal's C name
+//	object                                  -> the constructor local's C name
+//	tag-field                               -> the union tag member's C name
+//	escape <literal>                        -> a C literal and its byte length
+//	ctype <kind>                            -> a primitive, array, or map C type
+//	ctype-enum <module> <name>              -> an enum's C type
+//	ctype-struct <module> <name>            -> a struct's C type
+//	ctype-union <module> <name>             -> a union's C type
+//	ctype-none                              -> the absent type, which has none
+//	output <capacity> <lines>               -> bounded line accumulation
+//	fragments <capacity>                    -> accumulation from partial writes
+//
+// Blank lines and lines whose first character is '#' are ignored.
+//
+// <escape> is the literal as written in Kitten source, including its quotation
+// marks, so it is everything on the line after the directive word. The other
+// arguments are separate fields.
+//
+// The differential harness in cmd/kitten writes the directives, predicts each
+// result line, and anchors the predicted names against the C that the reference
+// generator produces for a program that contains them, so a helper is verified
+// against the reference implementation rather than against a copy of its logic.
+
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/names.ktn";
+import "codegen/output.ktn";
+
+// max_fields bounds the fields one directive line can have. The widest directive
+// is "variant-constructor <module> <union> <variant>", with four.
+fn max_fields() -> int {
+    return 8;
+}
+
+// split_fields splits a directive line on single spaces into at most capacity
+// fields, and returns how many it found. Consecutive spaces produce empty fields,
+// which no directive contains; the harness writes exactly one space between
+// fields.
+fn split_fields(string line, string[] fields, int capacity) -> int {
+    int count = 0;
+    int start = 0;
+    int index = 0;
+    int size = length(line);
+    while (index <= size) {
+        if (index == size || line[index] == 32) {
+            if (count < capacity) {
+                fields[count] = substring(line, start, index);
+                count++;
+            }
+            start = index + 1;
+        }
+        index++;
+    }
+    return count;
+}
+
+// rest_after_first_space returns everything after the first space in a line, or
+// the empty string when there is none.
+fn rest_after_first_space(string line) -> string {
+    int index = 0;
+    while (index < length(line)) {
+        if (line[index] == 32) {
+            return substring(line, index + 1, length(line));
+        }
+        index++;
+    }
+    return "";
+}
+
+// parse_int reads a non-negative decimal integer from a field, or a negative one
+// after a leading '-'. It stops at the first character that is not a digit, so a
+// malformed field parses as the digits it begins with; the harness only sends
+// well-formed fields.
+fn parse_int(string text) -> int {
+    int value = 0;
+    int index = 0;
+    bool negative = false;
+    if (length(text) > 0 && text[0] == 45) {
+        negative = true;
+        index = 1;
+    }
+    bool reading = true;
+    while (index < length(text) && reading) {
+        int digit = text[index] - 48;
+        if (digit < 0 || digit > 9) {
+            reading = false;
+        } else {
+            value = value * 10 + digit;
+            index++;
+        }
+    }
+    if (negative) {
+        return 0 - value;
+    }
+    return value;
+}
+
+// --- Reporting ---------------------------------------------------------------
+
+// report_text prints a label and one piece of text, using '-' for the empty
+// string so that a result is never padded with a trailing space.
+fn report_text(string label, string text) {
+    if (text == "") {
+        print(label, "-");
+    } else {
+        print(label, text);
+    }
+}
+
+// report_ctype prints a label followed by a mapped C type, or by the reason it
+// could not be mapped.
+fn report_ctype(string label, CTypeResult result) {
+    if (c_type_ok(result)) {
+        print(label, c_type_text(result));
+    } else {
+        print(label, "failed", c_type_message(result));
+    }
+}
+
+// named_type_for builds a named type without variants or fields, which is all a
+// name or type mapping needs: an enum, struct, or union type carries its name and
+// its declaring module, and nothing else takes part in mangling it.
+fn named_type_for(string kind, string name, int module) -> Type {
+    if (kind == "struct") {
+        return named_type(0, TypeKind.Struct, name, module, 0, name, 0);
+    }
+    if (kind == "union") {
+        return named_type(0, TypeKind.Union, name, module, 0, "", 0);
+    }
+    return named_type(0, TypeKind.Enum, name, module, 0, "", 0);
+}
+
+// report_output prints the outcome of an accumulation and then the accumulated
+// text. A rejected line reports "overflow"; the text printed is what the earlier
+// writes added, so a caller can see that a rejected write loses none of it.
+fn report_output(string directive, int capacity, int lines, Output output, int written, bool overflowed) {
+    if (overflowed) {
+        print(directive, capacity, lines, "overflow", written);
+    } else {
+        print(directive, capacity, lines, "ok", output.count);
+    }
+    print(output_text(output));
+}
+
+// --- Directives --------------------------------------------------------------
+
+// run_output accumulates a run of lines and reports the result.
+fn run_output(int capacity, int lines) {
+    Output output = new_output(capacity);
+    int written = 0;
+    bool overflowed = false;
+    while (written < lines && !overflowed) {
+        OutputResult result = output_line(output, written % 4, "line " + decimal(written));
+        if (output_ok(result)) {
+            written++;
+        } else {
+            overflowed = true;
+        }
+    }
+    report_output("output", capacity, lines, output, written, overflowed);
+}
+
+// run_fragments accumulates from partial writes, indentation, and a trailing
+// fragment with no newline, so that chunking and the unterminated tail are both
+// observable.
+fn run_fragments(int capacity) {
+    Output output = new_output(capacity);
+    bool overflowed = false;
+    OutputResult first = output_write(output, "alpha");
+    if (!output_ok(first)) {
+        overflowed = true;
+    }
+    if (!overflowed) {
+        OutputResult second = output_write(output, " beta");
+        if (!output_ok(second)) {
+            overflowed = true;
+        }
+    }
+    if (!overflowed) {
+        OutputResult third = output_write(output, " gamma\n");
+        if (!output_ok(third)) {
+            overflowed = true;
+        }
+    }
+    if (!overflowed) {
+        OutputResult fourth = output_indent(output, 1);
+        if (!output_ok(fourth)) {
+            overflowed = true;
+        }
+    }
+    if (!overflowed) {
+        OutputResult fifth = output_write(output, "delta\n");
+        if (!output_ok(fifth)) {
+            overflowed = true;
+        }
+    }
+    if (!overflowed) {
+        OutputResult sixth = output_write(output, "tail");
+        if (!output_ok(sixth)) {
+            overflowed = true;
+        }
+    }
+    report_output("fragments", capacity, 0, output, output.count, overflowed);
+}
+
+// run_directive handles one non-empty, non-comment line.
+fn run_directive(string line) {
+    string[] fields = new string[max_fields()];
+    int count = split_fields(line, fields, max_fields());
+    if (count == 0) {
+        return;
+    }
+    string directive = fields[0];
+
+    if (directive == "#") {
+        return;
+    } else if (directive == "module-prefix") {
+        report_text("module-prefix " + fields[1], module_prefix(parse_int(fields[1])));
+    } else if (directive == "function") {
+        print("function", fields[1], fields[2], function_name(fields[2], parse_int(fields[1])));
+    } else if (directive == "variable") {
+        print("variable", fields[1], variable_name(fields[1]));
+    } else if (directive == "struct") {
+        print("struct", fields[1], fields[2], struct_name(fields[2], parse_int(fields[1])));
+    } else if (directive == "field") {
+        print("field", fields[1], field_name(fields[1]));
+    } else if (directive == "constructor") {
+        print("constructor", fields[1], fields[2], constructor_name(fields[2], parse_int(fields[1])));
+    } else if (directive == "argument") {
+        print("argument", fields[1], argument_name(fields[1]));
+    } else if (directive == "enum") {
+        print("enum", fields[1], fields[2], enum_name(fields[2], parse_int(fields[1])));
+    } else if (directive == "enum-case") {
+        Type owner = named_type_for("enum", fields[2], parse_int(fields[1]));
+        print("enum-case", fields[1], fields[2], fields[3], enum_case_name(owner, fields[3]));
+    } else if (directive == "union-tag") {
+        Type owner = named_type_for("union", fields[2], parse_int(fields[1]));
+        print("union-tag", fields[1], fields[2], fields[3], union_tag_name(owner, fields[3]));
+    } else if (directive == "variant-field") {
+        print("variant-field", fields[1], fields[2], variant_field_name(fields[1], fields[2]));
+    } else if (directive == "variant-constructor") {
+        Type owner = named_type_for("union", fields[2], parse_int(fields[1]));
+        print("variant-constructor", fields[1], fields[2], fields[3], variant_constructor_name(owner, fields[3]));
+    } else if (directive == "match-temporary") {
+        print("match-temporary", fields[1], match_temporary_name(parse_int(fields[1])));
+    } else if (directive == "literal-name") {
+        print("literal-name", fields[1], literal_name(parse_int(fields[1])));
+    } else if (directive == "object") {
+        print("object", object_name());
+    } else if (directive == "tag-field") {
+        print("tag-field", tag_field_name());
+    } else if (directive == "escape") {
+        CStringLiteral literal = c_string_literal(rest_after_first_space(line));
+        print("escape", literal.escaped, literal.length);
+    } else if (directive == "ctype") {
+        report_ctype("ctype " + fields[1], primitive_c_type(fields[1]));
+    } else if (directive == "ctype-enum" || directive == "ctype-struct" || directive == "ctype-union") {
+        int module = parse_int(fields[1]);
+        Type value = named_type_for(subject_kind(directive), fields[2], module);
+        print(directive, fields[1], fields[2], c_type_text(c_type(value)));
+    } else if (directive == "ctype-none") {
+        report_ctype("ctype-none", c_type(none_type()));
+    } else if (directive == "output") {
+        run_output(parse_int(fields[1]), parse_int(fields[2]));
+    } else if (directive == "fragments") {
+        run_fragments(parse_int(fields[1]));
+    } else {
+        print("unknown", directive);
+    }
+}
+
+// subject_kind maps a ctype directive name to the named type kind it asks about.
+fn subject_kind(string directive) -> string {
+    if (directive == "ctype-struct") {
+        return "struct";
+    }
+    if (directive == "ctype-union") {
+        return "union";
+    }
+    return "enum";
+}
+
+// primitive_c_type maps a ctype directive's kind word to the C type of the
+// corresponding Kitten type. The array and map cases use a concrete element and
+// value type, because neither takes part in the C representation.
+fn primitive_c_type(string kind) -> CTypeResult {
+    if (kind == "int") {
+        return c_type(primitive_type(TypeKind.Int, "int"));
+    }
+    if (kind == "float") {
+        return c_type(primitive_type(TypeKind.Float, "float"));
+    }
+    if (kind == "bool") {
+        return c_type(primitive_type(TypeKind.Bool, "bool"));
+    }
+    if (kind == "string") {
+        return c_type(primitive_type(TypeKind.String, "string"));
+    }
+    if (kind == "void") {
+        return c_type(primitive_type(TypeKind.Void, "void"));
+    }
+    if (kind == "array") {
+        return c_type(array_type(primitive_type(TypeKind.String, "string")));
+    }
+    if (kind == "map") {
+        return c_type(map_type(primitive_type(TypeKind.String, "string"), primitive_type(TypeKind.Int, "int")));
+    }
+    return CTypeResult.Failed { message = "unknown ctype kind " + quoted(kind) };
+}
+
+fn main() {
+    string source = read_file("input.txt");
+    string[] lines = new string[line_capacity(source)];
+    int count = split_lines(source, lines, length(lines));
+    int index = 0;
+    while (index < count) {
+        if (length(lines[index]) > 0) {
+            run_directive(lines[index]);
+        }
+        index++;
+    }
+}
+
+// line_capacity bounds the number of lines a directive file can hold: every line
+// contains at least one byte, so a file of n bytes has at most n lines.
+fn line_capacity(string source) -> int {
+    int size = length(source);
+    if (size < 1) {
+        return 1;
+    }
+    return size;
+}
+
+// split_lines splits text on newline bytes into at most capacity lines and
+// returns how many it found. A final line without a trailing newline is kept; an
+// empty trailing line is not, so a file ending in a newline has no empty last
+// line.
+fn split_lines(string text, string[] lines, int capacity) -> int {
+    int count = 0;
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            if (count < capacity) {
+                lines[count] = substring(text, start, index);
+                count++;
+            }
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size && count < capacity) {
+        lines[count] = substring(text, start, size);
+        count++;
+    }
+    return count;
+}

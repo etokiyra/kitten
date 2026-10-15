@@ -1,0 +1,273 @@
+// names.ktn - the C names and types the code generator emits.
+//
+// It is the Kitten counterpart of codegen/names.go and codegen/cstring.go: the
+// same prefixes, the same module mangling, the same C type mapping, and the same
+// string escaping, derived from those files rather than from the language
+// specification, because the reference generator's output is the compatibility
+// reference.
+//
+// Nothing here inspects a program. Every helper maps a name, a module, a resolved
+// type, or a string literal token to the C text the reference generator would
+// produce for it, so the helpers can be tested against the reference in isolation
+// and reused unchanged by the emitter.
+
+import "../checker/model.ktn";
+import "../checker/state.ktn";
+import "../parser/parser.ktn";
+
+// Generated C identifiers use reserved prefixes so that arbitrary Kitten
+// identifiers can never collide with C keywords, with runtime and entry-point
+// names, or with each other. Kitten identifiers are ASCII letters, digits, and
+// underscores, so prefixing always yields a valid C identifier.
+public fn function_prefix() -> string { return "ktn_fn_"; }
+public fn variable_prefix() -> string { return "ktn_var_"; }
+public fn struct_prefix() -> string { return "ktn_s_"; }
+public fn field_prefix() -> string { return "ktn_f_"; }
+public fn constructor_prefix() -> string { return "ktn_new_"; }
+public fn argument_prefix() -> string { return "ktn_arg_"; }
+public fn enum_prefix() -> string { return "ktn_e_"; }
+public fn enum_case_prefix() -> string { return "ktn_ec_"; }
+public fn union_tag_prefix() -> string { return "ktn_uc_"; }
+public fn variant_field_prefix() -> string { return "ktn_v_"; }
+public fn match_prefix() -> string { return "ktn_match_"; }
+public fn literal_prefix() -> string { return "ktn_literal_"; }
+
+// object_name is the local used inside generated struct and variant
+// constructors, and tag_field_name is the C member holding a union value's
+// active variant tag.
+public fn object_name() -> string { return "ktn_object"; }
+public fn tag_field_name() -> string { return "ktn_tag"; }
+
+// module_prefix returns the C name prefix for a module. The root module (id 0)
+// has no prefix, so single-module programs generate the same names as before.
+// Imported modules use "<id>_"; because a Kitten identifier cannot begin with a
+// digit, a mangled imported name can never collide with a root-module name, and
+// distinct ids keep imported modules distinct.
+public fn module_prefix(int module) -> string {
+    if (module <= 0) {
+        return "";
+    }
+    return decimal(module) + "_";
+}
+
+// function_name maps a Kitten function name in a module to its C identifier.
+public fn function_name(string name, int module) -> string {
+    return function_prefix() + module_prefix(module) + name;
+}
+
+// variable_name maps a Kitten variable or parameter name to its C identifier.
+// Local names are not module-scoped, so they are not mangled.
+public fn variable_name(string name) -> string {
+    return variable_prefix() + name;
+}
+
+// struct_name maps a Kitten struct or union name in a module to its C type name.
+public fn struct_name(string name, int module) -> string {
+    return struct_prefix() + module_prefix(module) + name;
+}
+
+// field_name maps a Kitten struct field name to its C member name.
+public fn field_name(string name) -> string {
+    return field_prefix() + name;
+}
+
+// constructor_name maps a Kitten struct name in a module to the name of the
+// function that allocates and initializes one instance.
+public fn constructor_name(string name, int module) -> string {
+    return constructor_prefix() + module_prefix(module) + name;
+}
+
+// argument_name maps a struct or variant field name to the parameter name used
+// in the generated constructor.
+public fn argument_name(string name) -> string {
+    return argument_prefix() + name;
+}
+
+// enum_name maps a Kitten enum type to its C typedef name.
+public fn enum_name(string name, int module) -> string {
+    return enum_prefix() + module_prefix(module) + name;
+}
+
+// enum_case_name maps an enum case to its C constant name. The enum's own module
+// qualifies the constant, because two modules may declare the same enum name.
+public fn enum_case_name(Type enum_type, string case_name) -> string {
+    return enum_case_prefix() + module_prefix(enum_type.module) + enum_type.name + "_" + case_name;
+}
+
+// union_tag_name maps a union variant to its C tag constant name.
+public fn union_tag_name(Type union_type, string variant_name) -> string {
+    return union_tag_prefix() + module_prefix(union_type.module) + union_type.name + "_" + variant_name;
+}
+
+// variant_field_name maps a union variant's field to its C member name in the
+// flat union layout. The variant name is part of the member so that variants may
+// reuse field names.
+public fn variant_field_name(string variant_name, string field_name_text) -> string {
+    return variant_field_prefix() + variant_name + "_" + field_name_text;
+}
+
+// variant_constructor_name maps a union variant to the function that allocates
+// and initializes one instance carrying that variant.
+public fn variant_constructor_name(Type union_type, string variant_name) -> string {
+    return constructor_prefix() + module_prefix(union_type.module) + union_type.name + "_" + variant_name;
+}
+
+// match_temporary_name maps a match statement's temporary index to its local
+// name. The index is the number of match statements the generator has emitted
+// before this one, which makes the names unique and deterministic.
+public fn match_temporary_name(int index) -> string {
+    return match_prefix() + decimal(index);
+}
+
+// literal_name maps a pooled string literal's index to the name of its static C
+// object. Pool indices are one-based, in first-use order.
+public fn literal_name(int index) -> string {
+    return literal_prefix() + decimal(index);
+}
+
+// --- C types -----------------------------------------------------------------
+
+// CTypeResult is a type's C representation, or the reason it has none.
+//
+// None (the absent type) has no C representation, which is the reference's
+// "unsupported type" case. The message has no position: it is the caller that
+// knows where the type was written and reports the failure there.
+public union CTypeResult {
+    Ok { string text; }
+    Failed { string message; }
+}
+
+// c_type_ok reports whether a type could be mapped.
+public fn c_type_ok(CTypeResult result) -> bool {
+    match (result) {
+        Ok(text) { return true; }
+        Failed(message) { return false; }
+    }
+}
+
+// c_type_text returns the C text of a successful mapping. Its failure branch
+// returns the empty string; no caller can observe it, because the result is
+// tested first.
+public fn c_type_text(CTypeResult result) -> string {
+    match (result) {
+        Ok(text) { return text; }
+        Failed(message) { return ""; }
+    }
+}
+
+// c_type_message returns why a mapping failed, or the empty string when it did
+// not.
+public fn c_type_message(CTypeResult result) -> string {
+    match (result) {
+        Ok(text) { return ""; }
+        Failed(message) { return message; }
+    }
+}
+
+// c_type maps a resolved Kitten type to its C representation:
+//
+//	int    -> int64_t             (signed 64-bit)
+//	float  -> double              (IEEE 754 binary64)
+//	bool   -> bool                (stdbool.h)
+//	string -> const ktn_string *  (immutable, length-carrying byte string)
+//	void   -> void                (function return position only)
+//	struct -> struct pointer      (GC-managed reference)
+//	union  -> struct pointer      (GC-managed reference, tagged)
+//	enum   -> int64_t typedef     (a named constant per case)
+//	array  -> ktn_array *         (GC-managed dynamic array)
+//	map    -> ktn_map *           (GC-managed hash table)
+//
+// A Kitten string is a pointer to the runtime's ktn_string, which stores the byte
+// length next to the bytes, so length and indexing are constant-time and the
+// bytes are still NUL-terminated. The pointer is const-qualified because strings
+// are immutable; a static literal is a `static const ktn_string` and a
+// constructed string is a GC-managed ktn_string that the runtime fills before
+// returning it.
+public fn c_type(Type value) -> CTypeResult {
+    match (value.kind) {
+        Int { return CTypeResult.Ok { text = "int64_t" }; }
+        Float { return CTypeResult.Ok { text = "double" }; }
+        Bool { return CTypeResult.Ok { text = "bool" }; }
+        String { return CTypeResult.Ok { text = "const ktn_string *" }; }
+        Void { return CTypeResult.Ok { text = "void" }; }
+        Array { return CTypeResult.Ok { text = "ktn_array *" }; }
+        Map { return CTypeResult.Ok { text = "ktn_map *" }; }
+        Enum { return CTypeResult.Ok { text = enum_name(value.name, value.module) }; }
+        Struct { return CTypeResult.Ok { text = struct_name(value.name, value.module) + " *" }; }
+        Union { return CTypeResult.Ok { text = struct_name(value.name, value.module) + " *" }; }
+        None {
+            return CTypeResult.Failed { message = "unsupported type " + quoted(type_string(value)) };
+        }
+    }
+}
+
+// --- C string literals -------------------------------------------------------
+
+// CStringLiteral is a Kitten string literal token re-encoded as a C string
+// literal, together with the number of bytes it denotes.
+//
+// There is no failure case. The reference decoder reports an error for an
+// unsupported escape, but a literal that reached the parser cannot contain one:
+// the lexer rejects every escape the language does not define before the parser
+// or the generator ever sees the token, so decoding here always succeeds.
+public struct CStringLiteral {
+    // escaped is the literal's bytes as a C string literal, including its
+    // surrounding quotation marks.
+    string escaped;
+
+    // length is the number of bytes in the literal, excluding the NUL
+    // terminator that C appends, and is what the generated string object stores
+    // as its length.
+    int length;
+}
+
+// c_string_literal converts a Kitten string literal token into a safe C string
+// literal and its byte length, mirroring codegen/cstring.go.
+//
+// The Kitten token text includes the surrounding quotation marks and the escapes
+// exactly as written, so this function decodes those escapes with the parser's
+// decoder and then re-encodes the resulting bytes for C. Re-encoding rather than
+// copying the source text guarantees the generated C is well-formed: quotes,
+// backslashes, control characters, question marks, and non-ASCII bytes are all
+// escaped explicitly, so no source text can break out of the C literal.
+public fn c_string_literal(string kitten_literal) -> CStringLiteral {
+    string decoded = decode_string(kitten_literal);
+    string escaped = "\"";
+    int index = 0;
+    while (index < length(decoded)) {
+        int character = decoded[index];
+        if (character == 34) {
+            escaped += "\\\"";
+        } else if (character == 92) {
+            escaped += "\\\\";
+        } else if (character == 10) {
+            escaped += "\\n";
+        } else if (character == 9) {
+            escaped += "\\t";
+        } else if (character == 13) {
+            escaped += "\\r";
+        } else if (character == 63) {
+            // Escape '?' so that it can never begin a trigraph.
+            escaped += "\\?";
+        } else if (character >= 32 && character <= 126) {
+            escaped += substring(decoded, index, index + 1);
+        } else {
+            // Three-digit octal escapes are unambiguous and cannot merge with a
+            // following digit, so a byte may be followed by any character.
+            escaped += "\\" + octal_three(character);
+        }
+        index++;
+    }
+    escaped += "\"";
+    return CStringLiteral { escaped = escaped, length = length(decoded) };
+}
+
+// octal_three renders one byte as a three-digit octal escape, which is what the
+// reference's %03o verb produces.
+fn octal_three(int byte) -> string {
+    string digits = "01234567";
+    int high = byte / 64;
+    int middle = (byte / 8) % 8;
+    int low = byte % 8;
+    return substring(digits, high, high + 1) + substring(digits, middle, middle + 1) + substring(digits, low, low + 1);
+}

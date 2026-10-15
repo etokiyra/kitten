@@ -240,7 +240,7 @@ conversion remains deferred.
 ## Differential testing
 
 `cmd/kitten/checker_differential_test.go` builds the checker once and runs it over
-a corpus of **1849 inputs**, comparing its rendering with the reference
+a corpus of **1852 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
@@ -257,12 +257,12 @@ built-ins; lexical and syntax failures, which must be distinguished from semanti
 ones; deeply nested and generated larger inputs; sixteen cross-module cases
 covering public and private functions and types, duplicate public declarations,
 imported types in fields and maps, and a malformed imported module; and every
-fixture and every self-hosted source, including the checker's own. A self-hosted
-source that declares `import` statements is checked as a one-module program, so
-the corpus exercises the reference's undefined-name diagnostics on them rather
-than checking them cleanly.
+fixture and every self-hosted source, including the checker's own and the code
+generator's. A self-hosted source that declares `import` statements is checked as
+a one-module program, so the corpus exercises the reference's undefined-name
+diagnostics on them rather than checking them cleanly.
 
-**All 1849 inputs render byte-identically**, so this is exact parity on
+**All 1852 inputs render byte-identically**, so this is exact parity on
 success/failure, error category, position, message, and the declaration counts
 reported on success. `TestKittenCheckerOutputFormat` additionally pins the
 rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
@@ -283,8 +283,8 @@ the same corpus. The rendering is one line per declaration and per annotated nod
 in a fixed walk order — the node's kind and position, its resolved type, its
 resolved symbol with the declaration position it denotes, and its variant — with
 types rendered structurally and named types carrying their module. It covers the
-annotations themselves rather than success counts: **1849 inputs, all identical,
-4537 annotated lines of which 4331 carry a fact** (the remainder are the callee
+annotations themselves rather than success counts: **1852 inputs, all identical,
+4756 annotated lines of which 4537 carry a fact** (the remainder are the callee
 nodes and type names that the reference leaves unannotated).
 
 `TestKittenSemanticsOutputFormat` pins the rendering, and
@@ -313,10 +313,16 @@ A Kitten-written C generator may rely on exactly this much:
    declared it, which is how it distinguishes two same-named types.
 4. It must handle `Absent` exactly where the reference has no entry.
 
+The generator's first layer — C naming, the C type mapping, string-literal
+escaping, and bounded output accumulation — lives in `selfhost/codegen`; see
+`selfhost/codegen/README.md` for what it provides and what is still missing.
+
 ## What is deliberately not here
 
-- Code generation. The semantic result exists and is tested; nothing consumes it
-  to emit C yet.
+- Code generation. The semantic result exists and is tested; the generator's
+  first layer — naming, the C type mapping, escaping, and output accumulation —
+  is in `selfhost/codegen`, and the emitter that consumes this result does not
+  exist yet.
 - A module loader: the driver checks the two modules it is given, and a caller
   supplies the module set as the reference's loader does.
 - Command-line arguments, standard error, and a chosen exit status.
