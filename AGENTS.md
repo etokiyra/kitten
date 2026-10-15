@@ -95,14 +95,20 @@ emitter under `selfhost/codegen/declarations.ktn`, driven by
 `selfhost/declarations.ktn`: it reproduces the nine sections the reference
 generator emits before any function body, byte for byte, and is checked against
 the reference over a targeted corpus, the checker corpus, and representative
-native compilations.
+native compilations. Phase 4D.3 added the core expression emitter under
+`selfhost/codegen/expressions.ktn`, driven by `selfhost/expressions.ktn`: integer,
+floating-point, and boolean literals, identifiers, unary expressions, and binary
+expressions, checked against the reference node by node. String literals,
+assignments, calls, member access, literals, allocation, and indexing are reported
+as not implemented rather than rendered, and statements and function bodies are
+still to come.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
 which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, and no function
-bodies, entry point, or module loader yet) are documented in SPEC.md Sections 25
-to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
+positions, no command-line arguments or chosen exit status, and no statements,
+function bodies, entry point, or module loader yet) are documented in SPEC.md
+Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
 `selfhost/checker/README.md`, and `selfhost/codegen/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
@@ -125,7 +131,8 @@ authorization.
    future code generator; Phase 4D.1 began the Kitten-written C generator with
    its naming, C type mapping, string escaping, and bounded output accumulation;
    Phase 4D.2 added its declaration emitter, checked against the reference
-   generator byte for byte, without function bodies yet).
+   generator byte for byte; Phase 4D.3 added its core expression emitter, checked
+   node by node against the reference, without statements or function bodies yet).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

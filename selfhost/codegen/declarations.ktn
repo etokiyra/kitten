@@ -25,19 +25,9 @@
 
 import "../checker/model.ktn";
 import "../parser/ast.ktn";
+import "errors.ktn";
 import "names.ktn";
 import "output.ktn";
-
-// GenerateError is a code generation failure with a source position.
-//
-// The reference carries a file name as well; the position here is the one the
-// reference uses for the same failure, which is always inside a module, and the
-// driver knows which module it was reading.
-public struct GenerateError {
-    int line;
-    int column;
-    string message;
-}
 
 // DeclarationsResult is the emitted declaration section, or the reason none was
 // produced.
@@ -112,11 +102,6 @@ fn emit_error(EmitStep step) -> GenerateError {
         Ok { return generate_error(0, 0, ""); }
         Failed(error) { return error; }
     }
-}
-
-// generate_error builds a failure at a position.
-fn generate_error(int line, int column, string message) -> GenerateError {
-    return GenerateError { line = line, column = column, message = message };
 }
 
 // failure_at builds a failing step at a position, which is how every emission

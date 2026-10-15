@@ -46,6 +46,14 @@ public fn tag_field_name() -> string { return "ktn_tag"; }
 public fn header_file_name() -> string { return "kitten_runtime.h"; }
 public fn alloc_function() -> string { return "ktn_rt_alloc"; }
 
+// string_concat_function and string_equal_function are the runtime helpers a
+// string "+", "==", or "!=" becomes. A Kitten string is a length-carrying
+// pointer, so "+" is a concatenation and "==" compares content rather than
+// pointers; both need the runtime. The remaining runtime names arrive with the
+// expressions that call them.
+public fn string_concat_function() -> string { return "ktn_rt_string_concat"; }
+public fn string_equal_function() -> string { return "ktn_rt_string_equal"; }
+
 // module_prefix returns the C name prefix for a module. The root module (id 0)
 // has no prefix, so single-module programs generate the same names as before.
 // Imported modules use "<id>_"; because a Kitten identifier cannot begin with a

@@ -1,14 +1,17 @@
 # A C code generator for Kitten, written in Kitten
 
-This directory holds two layers of a C code generator written in Kitten:
+This directory holds a C code generator written in Kitten, in layers that are
+being built one at a time:
 
 - the helper layer - C names, the C type mapping, C string-literal escaping, and
-  bounded output accumulation; and
+  bounded output accumulation;
 - the declaration emitter - the nine sections the reference generator emits
-  before any function body, reproduced in its order and with its spacing.
+  before any function body; and
+- the core expression emitter - integer, floating-point, and boolean literals,
+  identifiers, unary expressions, and binary expressions.
 
-Function bodies, expression and statement emission, the pooled string literals,
-and the C entry point do not exist yet.
+Statement and function-body emission, the remaining expression kinds, the pooled
+string literals, and the C entry point do not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -21,13 +24,19 @@ here.
   `codegen/cstring.go`.
 - `selfhost/codegen/output.ktn` — bounded, chunked output accumulation and
   finalization.
+- `selfhost/codegen/errors.ktn` — the failure type every generator stage reports.
 - `selfhost/codegen/declarations.ktn` — the declaration emitter.
+- `selfhost/codegen/expressions.ktn` — the core expression emitter.
 - `selfhost/codegen.ktn` — the helper probe driver: it reads directives from
   `input.txt` and prints one result line per directive.
 - `selfhost/declarations.ktn` — the declaration driver: it reads two modules,
   runs the Kitten front end, and prints their declaration section.
-- `cmd/kitten/codegen_differential_test.go` and
-  `cmd/kitten/declarations_differential_test.go` — the differential harnesses.
+- `selfhost/expressions.ktn` — the expression driver: it reads two modules, runs
+  the Kitten front end, and prints the rendering of every expression in their
+  function bodies.
+- `cmd/kitten/codegen_differential_test.go`,
+  `cmd/kitten/declarations_differential_test.go`, and
+  `cmd/kitten/expressions_differential_test.go` — the differential harnesses.
 
 ## Building and running
 
@@ -36,10 +45,11 @@ here.
 # working directory selects the input.
 kitten build selfhost/codegen.ktn -o /tmp/codegen-probe
 kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
+kitten build selfhost/expressions.ktn -o /tmp/expressions-probe
 cd /tmp/example && printf 'function 0 main\nescape "a\\tb"\n' > input.txt && /tmp/codegen-probe
 ```
 
-Both drivers write nothing to standard error.
+Every driver writes nothing to standard error.
 
 ## The directive interface
 
@@ -103,14 +113,22 @@ An unrecognized directive prints `unknown <directive>`.
   decoding cannot fail here.
 - `header_file_name()` and `alloc_function()`, the two runtime interface names the
   declaration section mentions: the header it includes and the allocation the
-  generated constructors call. The remaining runtime names arrive with the
-  emission that calls them.
+  generated constructors call. `string_concat_function()` and
+  `string_equal_function()` are the runtime helpers a string `+`, `==`, or `!=`
+  becomes. The remaining runtime names arrive with the emission that calls them.
 
 `output.ktn`:
 
 - `new_output(capacity)`, `output_write(output, text)`, `output_indent(output,
   level)`, `output_line(output, level, text)`, each returning `OutputResult`, and
   `output_text(output)`, which finalizes. `output_ok` reads an `OutputResult`.
+
+`errors.ktn`:
+
+- `GenerateError`, the position and message a stage reports for a failure, and
+  `generate_error(line, column, message)`, which builds one. The reference reports
+  the same shape, so a failure from this generator can be compared with one from
+  the reference directly.
 
 ## C type mapping
 
@@ -238,6 +256,85 @@ The section is printed one line at a time, so the driver's standard output is th
 section itself, byte for byte. A failed preparation, check, or emission prints a
 single diagnostic line beginning with `error` instead.
 
+## Core expression emitter
+
+`selfhost/codegen/expressions.ktn` renders the expressions the reference generator
+handles with no more than a recursive walk and parentheses:
+
+| Kind | Rendering |
+| --- | --- |
+| integer literal | the source spelling, for example `42` |
+| floating-point literal | the source spelling, for example `10.25` |
+| boolean literal | `true` or `false` |
+| identifier | `ktn_var_<name>` |
+| unary `-` `!` `++` `--` | `(<op><operand>)` for a prefix, `(<operand><op>)` for a postfix |
+| binary `+` `-` `*` `/` `%` `<` `<=` `>` `>=` `==` `!=` `&&` `\|\|` | `(<left> <op> <right>)` |
+
+Three binary operators are special on strings, because a Kitten string is a
+length-carrying pointer: `+` becomes `ktn_rt_string_concat(left, right)`, `==`
+becomes `ktn_rt_string_equal(left, right)`, and `!=` becomes
+`!ktn_rt_string_equal(left, right)`. The left operand's resolved type decides
+that, which is the only semantic fact the emitter reads.
+
+The other nine expression kinds — string literals, assignments, calls, member
+access, struct and variant literals, array and map creation, and indexing — are
+not implemented yet, and each is reported as such rather than rendered as
+something plausible:
+
+```
+fail <line> <column> <kind> <kind> expressions are not implemented yet
+```
+
+A string literal is in that group because it needs the pooled literal table,
+which a later phase emits; the emitter never emits a literal as a C string of its
+own.
+
+### API
+
+- `emit_expression(context, expression) -> ExpressionResult`, where the context
+  is the semantic model and the index of the module the expression belongs to. The
+  module's id, which the model carries, is what names are mangled by; the index
+  selects the module's annotations. Both are needed, and neither is derivable from
+  the other.
+- `ExpressionResult` is `Ok { text }` or `Failed { error }`. A failure is
+  propagated from the expression that contains it, exactly as the reference
+  reports a child's error from its parent, so a caller can never see a partly
+  rendered expression.
+- `expression_kind_name(expression)` names a kind, which the driver reports and
+  the emitter's failure message uses.
+
+An expression is a fragment, not a line, so it is returned as a string rather than
+written through the output accumulator. Rendering a node concatenates its
+children's text, which is the shape the reference uses; for a chain of depth *d*
+that copies about *d* squared characters in total. The corpus measures the cost
+(`TestKittenExpressionsScaling`) rather than hiding it: the quadratic term is a
+property of the representation the reference chose, so matching the reference
+byte for byte means inheriting it. A fragment-based representation could remove it
+in a later phase, and would need the emitter to return something richer than a
+string.
+
+### Running the expression driver
+
+```sh
+# From the repository root.
+kitten build selfhost/expressions.ktn -o /tmp/expressions-probe
+mkdir -p /tmp/example && cd /tmp/example
+printf 'fn main() {\n    int a = 1;\n    print(a + 2);\n}\n' > input.txt
+printf '' > input2.txt
+/tmp/expressions-probe
+```
+
+The driver walks the function bodies of both modules and prints one line per
+expression node, in the order the reference renders bodies:
+
+```
+expr <line> <column> <kind> <rendering>
+fail <line> <column> <kind> <message>
+```
+
+The walk exists only to reach expressions; it emits no C for a statement and
+implements no part of the statement emitter.
+
 ## Output accumulation
 
 Kitten strings are immutable: `+` allocates a copy of both operands. Accumulating
@@ -311,7 +408,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 604 string literals whose escaping and byte length match the reference
+- 612 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -335,8 +432,8 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
   modules, declaration order, bodies with and without literals, a shared literal
   pool, many declarations of every kind, and wide field and parameter lists.
 - 35 corpus programs whose sections match byte for byte, over 544 lines, and
-  1750 whose check error the probe reports exactly as the reference checker does.
-- 56 corpus programs without an entry point, verified by deriving the reference
+  1752 whose check error the probe reports exactly as the reference checker does.
+- 57 corpus programs without an entry point, verified by deriving the reference
   section: prepending `fn main() {}` adds exactly one prototype line and nothing
   else, and removing it - together with the prototype block's blank line when the
   original declared no function - yields the original section.
@@ -347,20 +444,54 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
 - Representative sections compile with `-std=c11 -Wall -Wextra` and produce no
   diagnostics.
 
+`cmd/kitten/expressions_differential_test.go` compares expression renderings. The
+probe prints one line per expression node in emission order, and the harness walks
+the reference AST in that same order and pairs the two lists line by line, so a
+wrong node, a wrong order, a wrong position, or a wrong kind cannot pass. A
+rendering is compared when the reference's own output contains it in an
+extractable position: a print argument is the balanced parenthesized text after a
+print helper's opening parenthesis, in emission order. A kind this phase does not
+implement is compared against the emitter's own failure message instead, so a
+missing implementation can never look like a rendering.
+
+Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
+
+- 222 of 552 expected lines of the 14 targeted programs compared byte for byte,
+  covering every literal kind, both booleans, every unary and binary operator,
+  precedence, associativity, redundant parentheses, nesting, and mixed operand
+  types. The lines that are not compared are the subexpressions of a compared
+  expression, which the compared whole already validates.
+- 570 of 1220 expected lines of 34 corpus programs compared byte for byte, over
+  the checker corpus, which also exercises all nine unimplemented kinds and
+  compares each of their messages.
+- 20 floating-point spellings compared, with the boundary forms the language
+  cannot express (`1.`, `.5`, `1e5`) checked at the lexer.
+- Every unary and binary operator present in the targeted corpus, read from the
+  lexer's tokens.
+- The nested-expression measurements in the section above.
+
 ## What is deliberately not here
 
-- **Function bodies, expressions, statements, the literal pool, and the C entry
-  point.** The declaration emitter stops where the reference switches to
-  generating bodies. `codegen/emit.go` has no counterpart yet.
+- **Function bodies, expressions, statements, and the entry point.**
+  `selfhost/codegen/expressions.ktn` renders six expression kinds and
+  `selfhost/codegen/declarations.ktn` renders the declaration sections; nothing
+  emits a statement, a function body, the pooled string literals, or the C entry
+  point, so no complete translation unit is produced by Kitten.
+- **The remaining expression kinds.** String literals, assignments, calls, member
+  access, struct and variant literals, array and map creation, and indexing are
+  reported as not implemented rather than rendered. A string literal needs the
+  pooled literal table; a call needs the runtime ABI names and the callee's
+  signature; indexing and assignment need the runtime accessors that keep the
+  target evaluated once.
 - **Entry-point validation.** The reference checks that the root module declares a
   zero-parameter, void-returning `main` before it emits anything, so it rejects
   some programs whose declarations are otherwise complete. That rule belongs with
   emitting the entry point, and until it is implemented the declaration driver
   emits a section for such a program while the reference refuses to generate; the
-  corpus harness handles them with the derivation above.
-- **A module loader.** The declaration driver reads two fixed paths, as the
-  checker's driver does. Nothing discovers imports in Kitten, so a multi-module
-  program reaches the emitter only through a caller that supplies the module set.
+  corpus harnesses handle those programs with the derivation above.
+- **A module loader.** The drivers read two fixed paths, as the checker's driver
+  does. Nothing discovers imports in Kitten, so a multi-module program reaches the
+  emitters only through a caller that supplies the module set.
 - **Compiling and running generated programs.** A declaration section is not a
   translation unit: it has no bodies and no entry point, so it is compiled alone,
   not linked, and no claim is made that a complete generated program builds.
@@ -369,5 +500,5 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
 - **Command-line arguments, standard error, and a chosen exit status.**
 
 Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
-helper and declaration layers are written in Kitten; the loader, the rest of the
-emitter, and the production pipeline are Go.
+helper, declaration, and core-expression layers are written in Kitten; the loader,
+the rest of the emitter, and the production pipeline are Go.

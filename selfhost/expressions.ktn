@@ -1,0 +1,273 @@
+// expressions.ktn - print the C rendering of every expression in a checked
+// program.
+//
+// It reads the two modules the other self-hosted drivers read, lexes, parses, and
+// checks them with the same Kitten front end, and then walks the function bodies
+// and prints one line per expression node, in the order the reference generator
+// renders bodies:
+//
+//	expr <line> <column> <kind> <rendering>
+//	fail <line> <column> <kind> <message>
+//
+// A node the expression emitter does not implement yet is reported as "fail" with
+// the emitter's message, so a caller can see the difference between a rendering
+// and a missing implementation. A failed preparation, check, or parse prints a
+// single "error ..." line instead.
+//
+// The walk exists only to reach expressions: it emits no C for a statement and
+// implements no part of the statement emitter. It visits declarations in module
+// and source order, then each function's body, then statements and their
+// expressions in the order the reference emits them (a condition before a branch,
+// a scrutinee before its arms, a loop's clauses before its body, an operand after
+// its operator and a binary expression's left operand before its right).
+//
+// This is test infrastructure, not the compiler stage: the finished driver will
+// emit a whole translation unit for a program.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/expressions.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// prepare_source lexes and parses one module, printing the first lexical or
+// syntax error it finds.
+fn prepare_source(string source, string path, int id) -> PreparedModule {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// --- Walking -----------------------------------------------------------------
+
+// scan_expression reports one expression and then visits its children.
+fn scan_expression(ExpressionContext context, Expr expression) {
+    Position at = expr_position(expression);
+    match (emit_expression(context, expression)) {
+        Ok(text) {
+            print("expr", at.line, at.column, expression_kind_name(expression), text);
+        }
+        Failed(error) {
+            print("fail", at.line, at.column, expression_kind_name(expression), error.message);
+        }
+    }
+
+    match (expression) {
+        Unary(node_id, operator, operand, postfix) {
+            scan_expression(context, operand);
+        }
+        Binary(node_id, operator, left, right) {
+            scan_expression(context, left);
+            scan_expression(context, right);
+        }
+        Assign(node_id, operator, target, value) {
+            scan_expression(context, target);
+            scan_expression(context, value);
+        }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            scan_expression(context, callee);
+            int index = 0;
+            while (index < argument_count) {
+                scan_expression(context, arguments[index]);
+                index++;
+            }
+        }
+        Member(node_id, dot, receiver, member) {
+            scan_expression(context, receiver);
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                scan_expression(context, fields[index].value);
+                index++;
+            }
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                scan_expression(context, fields[index].value);
+                index++;
+            }
+        }
+        NewArray(node_id, at, element, length) {
+            scan_expression(context, length);
+        }
+        NewMap(node_id, at, map_type) { }
+        Index(node_id, bracket, target, index) {
+            scan_expression(context, target);
+            scan_expression(context, index);
+        }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        Boolean(node_id, token, value) { }
+        String(node_id, token) { }
+        Identifier(node_id, token) { }
+    }
+}
+
+// scan_statement visits the expressions a statement contains, in the order the
+// reference emits them.
+fn scan_statement(ExpressionContext context, Stmt statement) {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            int index = 0;
+            while (index < statement_count) {
+                scan_statement(context, statements[index]);
+                index++;
+            }
+        }
+        VarDecl(type_ref, name, initializer) {
+            match (initializer) {
+                Present(expression) {
+                    scan_expression(context, expression);
+                }
+                Absent { }
+            }
+        }
+        Expression(expression) {
+            scan_expression(context, expression);
+        }
+        If(at, condition, then_branch, else_branch) {
+            scan_expression(context, condition);
+            scan_statement(context, then_branch);
+            match (else_branch) {
+                Present(statement_value) {
+                    scan_statement(context, statement_value);
+                }
+                Absent { }
+            }
+        }
+        While(at, condition, body) {
+            scan_expression(context, condition);
+            scan_statement(context, body);
+        }
+        For(at, initializer, condition, increment, body) {
+            match (initializer) {
+                Present(statement_value) {
+                    scan_statement(context, statement_value);
+                }
+                Absent { }
+            }
+            match (condition) {
+                Present(expression) {
+                    scan_expression(context, expression);
+                }
+                Absent { }
+            }
+            match (increment) {
+                Present(expression) {
+                    scan_expression(context, expression);
+                }
+                Absent { }
+            }
+            scan_statement(context, body);
+        }
+        Return(at, value) {
+            match (value) {
+                Present(expression) {
+                    scan_expression(context, expression);
+                }
+                Absent { }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            scan_expression(context, scrutinee);
+            int index = 0;
+            while (index < arm_count) {
+                scan_statement(context, arms[index].body);
+                index++;
+            }
+        }
+    }
+}
+
+// scan_module visits every function body of one module.
+fn scan_module(SemanticModel model, int module_index) {
+    ModuleModel module = module_model(model, module_index);
+    ExpressionContext context = ExpressionContext { model = model, module_index = module_index };
+    int index = 0;
+    while (index < module.program.declaration_count) {
+        match (module.program.declarations[index]) {
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                scan_statement(context, body);
+            }
+            Import(keyword, path) { }
+            Struct(at, visibility, name, fields, field_count) { }
+            Enum(at, visibility, name, cases, case_count) { }
+            Union(at, visibility, name, variants, variant_count) { }
+        }
+        index++;
+    }
+}
+
+fn main() {
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_source(read_file("input.txt"), "input.txt", 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_source(read_file("input2.txt"), "input2.txt", 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+            Success(summary, model) {
+                int index = 0;
+                while (index < model.module_count) {
+                    scan_module(model, index);
+                    index++;
+                }
+            }
+        }
+    }
+}

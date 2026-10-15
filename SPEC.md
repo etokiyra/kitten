@@ -2352,9 +2352,10 @@ cross-module cases, every fixture, and the self-hosted sources.
 Section 19 describes the compilation model, and Section 27 describes the
 Kitten-written checker that resolves a program. This section describes the
 Kitten-written code generator: the layer that turns resolved names and types into
-C text and the bounded accumulation it writes into, and the emitter of the
-declaration sections. Function bodies, expressions, statements, the pooled string
-literals, and the C entry point are deferred.
+C text and the bounded accumulation it writes into, the emitter of the declaration
+sections, and the emitter of the core expressions. Function bodies, statements,
+the remaining expression kinds, the pooled string literals, and the C entry point
+are deferred.
 
 ### 28.1 Location and role
 
@@ -2363,19 +2364,24 @@ The sources are:
 - `selfhost/codegen/names.ktn` — name mangling, the C type mapping, and
   string-literal escaping, mirroring `codegen/names.go` and `codegen/cstring.go`.
 - `selfhost/codegen/output.ktn` — bounded output accumulation and finalization.
+- `selfhost/codegen/errors.ktn` — the failure type every stage reports.
 - `selfhost/codegen/declarations.ktn` — the declaration emitter.
+- `selfhost/codegen/expressions.ktn` — the core expression emitter.
 - `selfhost/codegen.ktn` — the helper probe driver.
 - `selfhost/declarations.ktn` — the declaration driver.
+- `selfhost/expressions.ktn` — the expression driver.
 
 `selfhost/codegen/README.md` describes how to build and run each driver, the
-directive interface the helper probe exposes, and the measured accumulation cost.
+directive interface the helper probe exposes, and the measured costs.
 
-Two drivers exist because the layers are reached differently. The helper probe
+Three drivers exist because the layers are reached differently. The helper probe
 reads directive lines from the fixed relative path `input.txt` and prints one
 result line per directive, so that every helper is reachable without a program to
 walk. The declaration driver reads the two module paths the checker's driver
-reads, runs the same front end, and prints the declaration section. Neither is the
-finished compiler stage, which will emit a whole translation unit for a program.
+reads, runs the same front end, and prints the declaration section. The expression
+driver reads the same two modules and prints the rendering of every expression in
+their function bodies, one line per expression node. None is the finished compiler
+stage, which will emit a whole translation unit for a program.
 
 ### 28.2 API
 
@@ -2402,7 +2408,8 @@ each returning `OutputResult`, and `output_text`.
 
 Nothing in this layer inspects a program, resolves a name, or infers a type: every
 helper maps a name, a module, a resolved type, or a literal token to C text. The
-declaration emitter's own API is in Section 28.6.
+declaration emitter's own API is in Section 28.6, and the core expression
+emitter's in Section 28.7.
 
 ### 28.3 C type mapping and name mangling
 
@@ -2467,11 +2474,51 @@ completes exactly one chunk — and because every section rule, including whethe
 section is followed by a blank line, is decided by the same line counter the dry
 run advances.
 
-### 28.7 Differential testing
+### 28.7 The core expression emitter
 
-Two differential tests in `cmd/kitten` compare the Kitten-written generator with
-the reference. The helper test compares values the reference produced rather than
-a copy of its logic: for every literal of the corpus the harness reads the pooled
+`selfhost/codegen/expressions.ktn` renders the expressions the reference generator
+handles with a recursive walk and parentheses: integer, floating-point, and boolean
+literals; identifiers; unary `-`, `!`, `++`, and `--`; and binary `+`, `-`, `*`,
+`/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`. Every unary and binary
+operation is parenthesized, so the generated C never depends on C's precedence
+matching Kitten's.
+
+A literal is emitted as its source spelling, exactly as the reference emits it, so
+no rounding, no exponent form, and no change of precision can be introduced by
+generation; the language defines no exponent notation and no form that C would
+spell differently. An identifier is emitted as a variable name and needs no lookup,
+because the checker rejects a name that is not a local variable or parameter in
+expression position.
+
+Three binary operators are string operations: `+` concatenates and `==` and `!=`
+compare content, through the runtime helpers, because a Kitten string is a
+length-carrying pointer. The left operand's resolved type decides that, and it is
+the only semantic fact the emitter reads, which mirrors the reference exactly.
+
+The API is `emit_expression(context, expression)`, where the context carries the
+semantic model and the index of the module the expression belongs to: the index
+selects the module's annotations, and the module's id, which the model carries, is
+what names are mangled by. A result is the rendering or a failure, and a failure is
+propagated from the expression that contains it, exactly as the reference reports a
+child's error from its parent, so a partly rendered expression is never returned.
+
+An expression kind outside this subset is reported as not implemented, never
+rendered as something plausible: string literals, which need the pooled literal
+table; assignments; calls; member access; struct and variant literals; array and
+map creation; and indexing.
+
+An expression is a fragment, not a line, so it is returned as a string rather than
+written through the output accumulator of Section 28.5. Rendering a node
+concatenates its children's text, which is the reference's own shape: for a chain
+of depth *d* it copies about *d* squared characters in total. Matching the
+reference byte for byte means inheriting that cost, and the differential suite
+measures it rather than hiding it.
+
+### 28.8 Differential testing
+
+Three differential tests in `cmd/kitten` compare the Kitten-written generator with
+the reference. The helper test compares values the reference produced rather than a
+copy of its logic: for every literal of the corpus the harness reads the pooled
 declaration out of the reference's own output and compares both the escaped text
 and the byte length, and every predicted name and complex C type spelling is
 required to appear in reference C for a program that uses it.
@@ -2485,15 +2532,27 @@ entry-point rule, which this phase does not implement, are verified by deriving
 the section instead: prepending an empty `main` adds exactly one prototype line
 and nothing else.
 
+The expression test compares renderings node by node. The driver prints one line
+per expression node in emission order, and the harness walks the reference AST in
+that same order and pairs the two lists, so a wrong node, order, position, or kind
+cannot pass. A rendering is compared when the reference's own output contains it in
+an extractable position, which for this phase is a print argument: the balanced
+parenthesized text after a print helper's opening parenthesis, in emission order. A
+kind the phase does not implement is compared against the emitter's own failure
+message, never against a rendering.
+
 `selfhost/codegen/README.md` records the corpora and the results.
 
-### 28.8 Deferred
+### 28.9 Deferred
 
-- **Function bodies.** Expression and statement emission, the pooled string
-  literals, and the C entry point do not exist yet, so no complete translation
-  unit is produced by Kitten. The helpers, the declaration emitter, the semantic
-  model of Section 27.2.1, and the AST are the inputs the rest of the emitter will
-  consume.
+- **Function bodies and statements.** No statement, block, or function body is
+  emitted, and the pooled string literals and the C entry point do not exist yet,
+  so no complete translation unit is produced by Kitten.
+- **The remaining expression kinds.** String literals, assignments, calls, member
+  access, struct and variant literals, array and map creation, and indexing are
+  reported as not implemented rather than rendered. They need the pooled literal
+  table, the runtime ABI names, the callee's signature, or the accessors that keep
+  an assignment target evaluated once.
 - **Entry-point validation.** The reference validates the entry point before it
   emits anything; that rule belongs with emitting it, and until it exists the
   declaration driver emits a section for a program the reference refuses.
@@ -2507,5 +2566,5 @@ and nothing else.
   (Section 16).
 
 Kitten is not self-hosting: the lexer, the parser, the checker, and the generator's
-helper and declaration layers are written in Kitten, while the loader, the rest of
-the emitter, and the production pipeline are Go.
+helper, declaration, and core-expression layers are written in Kitten, while the
+loader, the rest of the emitter, and the production pipeline are Go.

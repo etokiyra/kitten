@@ -1,0 +1,232 @@
+// expressions.ktn - render Kitten expressions as C expressions.
+//
+// It reproduces the expression emitter of the reference generator
+// (codegen/emit.go) for the subset it implements: integer, floating-point, and
+// boolean literals, identifiers, unary expressions, and binary expressions. It
+// mirrors the reference exactly, including the parentheses the reference adds
+// around every unary and binary operation, so that its output is byte for byte
+// the reference's for the same expression.
+//
+// An expression is a fragment, not a line: it is built as a string that a caller
+// places inside a declaration or a larger expression. It therefore does not go
+// through the line-oriented output accumulator, which would force a fragment into
+// a line.
+//
+// The emitter reads the checker's semantic model only where the reference does:
+// the left operand's type decides whether "+", "==", and "!=" are string
+// operations, and nothing else is looked up. An identifier needs no lookup
+// because the checker rejects a name that is not a local variable or parameter in
+// expression position, so the reference mangles every identifier as a variable
+// and so does this emitter. An expression kind outside the supported subset is
+// reported as not implemented rather than rendered as something plausible.
+
+import "../checker/model.ktn";
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "errors.ktn";
+import "names.ktn";
+
+// ExpressionContext is the module an expression belongs to. The index selects the
+// module's annotations in the semantic model; the module's id, which the model
+// carries, is what names are mangled by.
+public struct ExpressionContext {
+    SemanticModel model;
+    int module_index;
+}
+
+// ExpressionResult is a rendered C expression or the reason none was produced.
+public union ExpressionResult {
+    Ok { string text; }
+    Failed { GenerateError error; }
+}
+
+// expression_ok reports whether an expression was rendered.
+public fn expression_ok(ExpressionResult result) -> bool {
+    match (result) {
+        Ok(text) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// expression_text returns the text of a successful result. Its failure branch
+// returns the empty string; no caller can observe it, because the result is
+// tested first.
+public fn expression_text(ExpressionResult result) -> string {
+    match (result) {
+        Ok(text) { return text; }
+        Failed(error) { return ""; }
+    }
+}
+
+// expression_error returns the failure a result carries, or an empty error when
+// it succeeded.
+public fn expression_error(ExpressionResult result) -> GenerateError {
+    match (result) {
+        Ok(text) { return generate_error(0, 0, ""); }
+        Failed(error) { return error; }
+    }
+}
+
+// expression_kind_name is the name of an expression kind, used in a diagnostic
+// and by the driver that reports which expression a rendering belongs to. The
+// names follow the shape names used elsewhere in the repository.
+public fn expression_kind_name(Expr expression) -> string {
+    match (expression) {
+        Integer(node_id, token) { return "int"; }
+        Float(node_id, token) { return "float"; }
+        Boolean(node_id, token, value) { return "bool"; }
+        String(node_id, token) { return "string"; }
+        Identifier(node_id, token) { return "ident"; }
+        Unary(node_id, operator, operand, postfix) { return "unary"; }
+        Binary(node_id, operator, left, right) { return "binary"; }
+        Assign(node_id, operator, target, value) { return "assign"; }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return "call"; }
+        Member(node_id, dot, receiver, member) { return "member"; }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return "struct-literal"; }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return "variant-literal"; }
+        NewArray(node_id, at, element, length) { return "new-array"; }
+        NewMap(node_id, at, map_type) { return "new-map"; }
+        Index(node_id, bracket, target, index) { return "index"; }
+    }
+}
+
+// not_implemented reports an expression kind this emitter does not render yet. It
+// is never a default: each unsupported kind names itself, so a caller cannot
+// mistake a missing implementation for a rendered expression.
+fn not_implemented(Expr expression) -> ExpressionResult {
+    Position at = expr_position(expression);
+    return ExpressionResult.Failed {
+        error = generate_error(at.line, at.column, expression_kind_name(expression) + " expressions are not implemented yet")
+    };
+}
+
+// emit_expression renders one expression as a C expression.
+//
+// The supported kinds are the three literal kinds, identifiers, unary
+// expressions, and binary expressions. Every other kind is reported as not
+// implemented, including a string literal, which needs the pooled literal table
+// that a later phase emits.
+public fn emit_expression(ExpressionContext context, Expr expression) -> ExpressionResult {
+    match (expression) {
+        Integer(node_id, token) {
+            // An integer literal is its source spelling: the language defines no
+            // form that C would spell differently.
+            return ExpressionResult.Ok { text = token.text };
+        }
+        Float(node_id, token) {
+            // A floating-point literal is its source spelling too. The reference
+            // never reformats it, so the generated C holds exactly the digits the
+            // source wrote, and no rounding or exponent notation is introduced.
+            return ExpressionResult.Ok { text = token.text };
+        }
+        Boolean(node_id, token, value) {
+            if (value) {
+                return ExpressionResult.Ok { text = "true" };
+            }
+            return ExpressionResult.Ok { text = "false" };
+        }
+        Identifier(node_id, token) {
+            return ExpressionResult.Ok { text = variable_name(token.text) };
+        }
+        Unary(node_id, operator, operand, postfix) {
+            return unary_expression(context, operator, operand, postfix);
+        }
+        Binary(node_id, operator, left, right) {
+            return binary_expression(context, operator, left, right);
+        }
+        String(node_id, token) { return not_implemented(expression); }
+        Assign(node_id, operator, target, value) { return not_implemented(expression); }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return not_implemented(expression); }
+        Member(node_id, dot, receiver, member) { return not_implemented(expression); }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return not_implemented(expression); }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return not_implemented(expression); }
+        NewArray(node_id, at, element, length) { return not_implemented(expression); }
+        NewMap(node_id, at, map_type) { return not_implemented(expression); }
+        Index(node_id, bracket, target, index) { return not_implemented(expression); }
+    }
+}
+
+// unary_expression renders a prefix or postfix unary operation. Kitten and C
+// agree on the operators, so they map directly, and the reference parenthesizes
+// the result, so this does too.
+fn unary_expression(ExpressionContext context, Token operator, Expr operand, bool postfix) -> ExpressionResult {
+    ExpressionResult rendered = emit_expression(context, operand);
+    if (!expression_ok(rendered)) {
+        return rendered;
+    }
+    if (postfix) {
+        return ExpressionResult.Ok { text = "(" + expression_text(rendered) + operator.text + ")" };
+    }
+    return ExpressionResult.Ok { text = "(" + operator.text + expression_text(rendered) + ")" };
+}
+
+// binary_expression renders a binary operation.
+//
+// Precedence is made explicit with parentheses, so the C text does not depend on
+// C's precedence matching Kitten's. "+", "==", and "!=" on strings use the
+// runtime helpers, because a Kitten string is a length-carrying pointer: "+"
+// concatenates rather than adding addresses, and "==" compares content rather
+// than pointers. Every other operator maps directly to its C spelling.
+fn binary_expression(ExpressionContext context, Token operator, Expr left, Expr right) -> ExpressionResult {
+    ExpressionResult rendered_left = emit_expression(context, left);
+    if (!expression_ok(rendered_left)) {
+        return rendered_left;
+    }
+    ExpressionResult rendered_right = emit_expression(context, right);
+    if (!expression_ok(rendered_right)) {
+        return rendered_right;
+    }
+    string left_text = expression_text(rendered_left);
+    string right_text = expression_text(rendered_right);
+
+    if (operator.text == "+" || operator.text == "==" || operator.text == "!=") {
+        OperandKind kind = left_operand_kind(context, left);
+        match (kind) {
+            String {
+                if (operator.text == "+") {
+                    return ExpressionResult.Ok { text = string_concat_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "==") {
+                    return ExpressionResult.Ok { text = string_equal_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                return ExpressionResult.Ok { text = "!" + string_equal_function() + "(" + left_text + ", " + right_text + ")" };
+            }
+            NotString { }
+            Missing(error) {
+                return ExpressionResult.Failed { error = error };
+            }
+        }
+    }
+
+    return ExpressionResult.Ok { text = "(" + left_text + " " + operator.text + " " + right_text + ")" };
+}
+
+// OperandKind is what the left operand's resolved type means for a binary
+// operator: a string operand selects the runtime helpers, any other operand maps
+// directly, and an operand the checker did not annotate is a failure.
+union OperandKind {
+    String
+    NotString
+    Missing { GenerateError error; }
+}
+
+// left_operand_kind reports how the left operand of "+", "==", or "!=" is
+// treated. The reference reads the left operand's recorded type for exactly these
+// three operators and reports a missing annotation as an error, which cannot
+// happen for a tree the checker accepted.
+fn left_operand_kind(ExpressionContext context, Expr left) -> OperandKind {
+    match (expression_info(module_model(context.model, context.module_index), expr_node_id(left)).type) {
+        Absent {
+            Position at = expr_position(left);
+            return OperandKind.Missing {
+                error = generate_error(at.line, at.column, "expression has no recorded type")
+            };
+        }
+        Present(operand_type) {
+            if (operand_type.kind == TypeKind.String) {
+                return OperandKind.String;
+            }
+            return OperandKind.NotString;
+        }
+    }
+}

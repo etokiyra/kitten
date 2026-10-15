@@ -1,0 +1,22 @@
+// errors.ktn - the failure type every generator stage reports.
+//
+// The reference reports a code generation failure as a position and a message
+// (codegen.Error). The Kitten-written generator reports the same shape, so that a
+// failure produced by one stage can be compared with a failure produced by the
+// reference for the same input.
+
+// GenerateError is a code generation failure with a source position.
+//
+// The reference carries a file name as well; the position here is the one the
+// reference uses for the same failure, which is always inside a module, and the
+// driver knows which module it was reading.
+public struct GenerateError {
+    int line;
+    int column;
+    string message;
+}
+
+// generate_error builds a failure at a position.
+public fn generate_error(int line, int column, string message) -> GenerateError {
+    return GenerateError { line = line, column = column, message = message };
+}

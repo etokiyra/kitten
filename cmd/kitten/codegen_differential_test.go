@@ -173,7 +173,13 @@ func referenceLiteral(t *testing.T, literal string) pooledLiteral {
 
 // probeLines splits probe output into its lines, dropping the final empty one.
 func probeLines(output string) []string {
-	return strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	trimmed := strings.TrimSuffix(output, "\n")
+	if trimmed == "" {
+		// An empty output has no lines. A driver that finds nothing to report
+		// prints nothing, which is not one empty line.
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
 }
 
 // expectedProbeOutput renders the lines a probe run should print. A non-empty
