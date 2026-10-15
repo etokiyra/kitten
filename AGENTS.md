@@ -54,16 +54,20 @@ Phase 1 delivered the project skeleton, the provisional specification, the
 example programs, and the lexer. Phase 2A delivered the parser and the abstract
 syntax tree. Phase 2B delivered semantic analysis and the type checker. Phase 2C
 delivered the C code generator, the C runtime, and native compilation through
-`kitten build` and `kitten run`.
+`kitten build` and `kitten run`. Phase 3A delivered dynamic strings:
+concatenation with `+` and `+=`, and content-based equality, over the existing
+NUL-terminated representation.
 
-Self-hosting, a native backend, dynamic strings, and the standard library are
-still intentionally unimplemented: do not start them without explicit
-authorization.
+Self-hosting, a native backend, arrays, maps, imports/modules, file I/O, and the
+standard library are still intentionally unimplemented: do not start them
+without explicit authorization.
 
 ## Roadmap
 
 1. Go-based compiler frontend and C backend. **Done** (Phases 1–2C).
-2. A working, tested native compiler for the current language. **In progress.**
+2. A working, tested native compiler for the current language, including the
+   language foundations self-hosting needs. **In progress** (Phase 3A added
+   dynamic strings).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

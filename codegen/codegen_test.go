@@ -123,6 +123,38 @@ func TestStringEqualityUsesRuntimeHelper(t *testing.T) {
 	assertContains(t, generated, `!ktn_rt_string_equal("a", "b")`)
 }
 
+func TestStringConcatenationUsesRuntimeHelper(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    string literal = "a" + "b";
+    string first = "x";
+    string second = "y";
+    string variables = first + second;
+    string mixed = first + "!";
+    print(literal, variables, mixed);
+}
+`)
+	assertContains(t, generated, `ktn_rt_string_concat("a", "b")`)
+	assertContains(t, generated, "ktn_rt_string_concat(ktn_var_first, ktn_var_second)")
+	assertContains(t, generated, `ktn_rt_string_concat(ktn_var_first, "!")`)
+}
+
+func TestStringCompoundAssignmentLowersToConcatenation(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    string text = "a";
+    text += "b";
+}
+`)
+	assertContains(t, generated, `(ktn_var_text = ktn_rt_string_concat(ktn_var_text, "b"))`)
+}
+
+func TestStringTypeMappingIsConstPointer(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    string text = "a";
+}
+`)
+	assertContains(t, generated, "const char * ktn_var_text")
+}
+
 func TestForwardReferencesAreEmittedBeforeUse(t *testing.T) {
 	generated := generateSource(t, `fn main() {
     print(later());

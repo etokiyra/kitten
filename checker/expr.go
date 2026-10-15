@@ -146,14 +146,18 @@ func (c *checker) checkBinary(expression *parser.BinaryExpr, scope *Scope) (*Typ
 
 // checkArithmetic checks "+", "-", "*", "/", and "%".
 //
-// The operands must be the same numeric type (no implicit conversions). "%" is
-// int-only. String concatenation is not supported.
+// The operands must be the same type (no implicit conversions). "+" is defined
+// for two ints, two floats, or two strings; on strings it concatenates. "%" is
+// int-only. The remaining operators are numeric-only.
 func (c *checker) checkArithmetic(operator string, left, right *Type, at parser.Position) (*Type, error) {
 	if left.IsVoid() || right.IsVoid() {
 		return nil, c.errorAt(InvalidOperator, at, "operator %q cannot be applied to a void value", operator)
 	}
 	if left != right {
 		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
+	}
+	if operator == "+" && left == StringType {
+		return StringType, nil
 	}
 	if operator == "%" {
 		if left != IntType {
@@ -235,6 +239,10 @@ func (c *checker) checkAssignment(expression *parser.AssignExpr, scope *Scope) (
 		}
 		if targetType != valueType {
 			return nil, c.errorAt(TypeMismatch, expression.OperatorAt, "operator %q requires operands of the same type, found %s and %s", expression.Operator, targetType, valueType)
+		}
+		if expression.Operator == "+=" && targetType == StringType {
+			// Appending is the compound form of string concatenation.
+			return StringType, nil
 		}
 		if !targetType.IsNumeric() {
 			return nil, c.errorAt(InvalidOperator, expression.OperatorAt, "operator %q requires numeric operands, found %s", expression.Operator, targetType)

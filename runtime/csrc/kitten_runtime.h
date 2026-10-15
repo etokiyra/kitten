@@ -40,9 +40,21 @@ void ktn_rt_init(void);
 void *ktn_rt_alloc(size_t size);
 
 /*
- * Value equality for Kitten strings, which are NUL-terminated byte strings.
+ * Value equality for Kitten strings, which are immutable NUL-terminated byte
+ * strings. Comparison is by content, never by pointer identity.
  */
 bool ktn_rt_string_equal(const char *left, const char *right);
+
+/*
+ * Returns a new string that is left followed by right. The result is a fresh,
+ * exactly-sized, GC-managed buffer, so it stays valid as long as Kitten code
+ * can reach it and never needs a manual free. Concatenating two empty strings
+ * yields an empty string.
+ *
+ * The representation is NUL-terminated, so embedded NUL bytes are not
+ * supported; the language cannot create them.
+ */
+const char *ktn_rt_string_concat(const char *left, const char *right);
 
 /*
  * Built-in print helpers. Each writes a single value. Callers separate

@@ -212,8 +212,9 @@ The following escape sequences are supported:
 
 Any other escape sequence is a lexical error. The token text preserves the
 original spelling, including the quotes and the escapes; the lexer performs no
-decoding. String representation, indexing, and runtime operations are
-**deferred**.
+decoding. A string literal denotes an immutable NUL-terminated byte sequence.
+String representation and dynamic string operations are described in Section 20;
+indexing, slicing, and length are still **deferred**.
 
 An unterminated string, a newline inside a string, or an unsupported escape is
 reported as a lexical error at a specific `line:column`. A trailing backslash
@@ -507,12 +508,13 @@ outcome here.
 **Strings**
 
 - In-memory representation, mutability, indexing, and slicing. In this revision
-  a string is a pointer to NUL-terminated constant bytes; string literals use
-  static storage (Section 19). Mutability, indexing, and slicing are not
+  a string is an immutable, NUL-terminated byte sequence represented as a
+  pointer to bytes; literals use static storage and constructed strings use
+  GC-managed storage (Sections 19 and 20). Indexing and slicing are not
   implemented.
-- Runtime operations (length, concatenation, comparison). Value equality (`==`,
-  `!=`) is implemented by comparing byte content; length and concatenation are
-  not implemented.
+- Runtime operations (length, concatenation, comparison). Concatenation (`+`,
+  `+=`) and value equality (`==`, `!=`) are implemented (Section 20); `length`
+  is not implemented.
 - Whether string interpolation or raw/multiline strings exist.
 
 **Visibility and declarations**
@@ -754,7 +756,8 @@ initialize a variable or field.
 
 | Operators | Operand types | Result |
 | --- | --- | --- |
-| `+` `-` `*` `/` | two `int`, or two `float` | the operand type |
+| `+` | two `int`, two `float`, or two `string` | the operand type (`string` concatenates) |
+| `-` `*` `/` | two `int`, or two `float` | the operand type |
 | `%` | two `int` | `int` |
 | `<` `<=` `>` `>=` | two `int`, or two `float` | `bool` |
 | `==` `!=` | two of the same primitive type | `bool` |
@@ -765,14 +768,16 @@ initialize a variable or field.
 Notes:
 
 - Both operands of a binary operation must have the same type. Mixing `int` and
-  `float` is an error, not a promotion.
+  `float`, or a `string` with a non-`string`, is an error, not a conversion.
+- `+` on two `string` values concatenates them (Section 20). `+` on two `bool`
+  values or two struct values is an error.
+- `-`, `*`, `/` are not defined for `string`.
 - `%` is not defined for `float`.
-- String concatenation with `+` is **not** supported in this revision; `+` on
-  strings is an error.
 - Relational operators are numeric-only; comparing `bool` or `string` values
   with `<` is an error.
 - Equality is defined for the primitive types only. Comparing two struct values
-  with `==` is an error.
+  with `==` is an error. Comparing two `string` values compares their contents,
+  never their addresses.
 - There is no unary `+` operator: the grammar in Section 17 does not include it.
 - The checker does not diagnose constant division by zero and does not guarantee
   overflow behavior; those are **deferred**.
@@ -786,8 +791,9 @@ Notes:
 - The assignment target must be a mutable l-value: a local variable, a
   parameter, or a struct field reached through an l-value. Assigning to a
   literal, a call, or any other expression is an error.
-- Compound assignment (`+=`, `-=`) requires both operands to be the same numeric
-  type. The result has the target's type.
+- Compound assignment (`+=`) requires both operands to be the same numeric type,
+  or two `string` values, in which case it appends. `-=` requires two operands
+  of the same numeric type. The result has the target's type.
 - Prefix and postfix `++`/`--` require a mutable numeric l-value (`int` or
   `float`) and produce the operand's type. They are not defined for `string`,
   `bool`, or struct values.
@@ -891,7 +897,7 @@ malformed or incomplete syntax trees.
 2. Types match exactly; there are no implicit conversions and no casts.
 3. `void` is only a function return type.
 4. `-> void` is equivalent to no return type.
-5. String concatenation and struct equality are not supported.
+5. Struct equality is not supported; string `==`/`!=` compare contents.
 6. Relational operators are numeric-only; equality is primitive-only.
 7. A variable initializer is optional, and reading an uninitialized variable is
    not diagnosed.
@@ -918,7 +924,7 @@ are expected to evolve.
 | `int` | `int64_t` (signed 64-bit) |
 | `float` | `double` (IEEE 754 binary64) |
 | `bool` | `bool` (`<stdbool.h>`) |
-| `string` | `const char *` (pointer to NUL-terminated constant bytes) |
+| `string` | `const char *` (immutable, NUL-terminated byte string) |
 | `void` | `void` (function return position only) |
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
 
@@ -956,15 +962,15 @@ is **deferred**.
 - `ktn_rt_init` initializes the Boehm–Demers–Weiser conservative collector. The
   generated C entry point calls it before any allocation.
 - `ktn_rt_alloc` allocates a zero-initialized, pointer-scanned object with the
-  collector. Struct allocation goes through it. The collector reclaims objects
-  automatically; Kitten code never frees memory by hand.
-- The runtime also provides `ktn_rt_string_equal` and the built-in print
-  helpers.
-- Strings are pointers to constant bytes, so structs may still contain pointers
-  (to strings and to nested structs) and must be scanned; the runtime therefore
+  collector. Struct allocation and string concatenation buffers go through it.
+  The collector reclaims objects automatically; Kitten code never frees memory
+  by hand.
+- The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`, and
+  the built-in print helpers.
+- Strings are pointers to bytes, so structs may still contain pointers (to
+  strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one.
-- Dynamic strings, string concatenation, arrays, exceptions, and finalizers are
-  **not** implemented.
+- Arrays, maps, exceptions, and finalizers are **not** implemented.
 
 ### 19.4 Built-in `print` behavior
 
@@ -1048,10 +1054,11 @@ targets the host platform; cross-compilation and Windows are **not** supported.
 
 1. Struct values are GC-managed references with pointer-copy assignment.
 2. `int` is `int64_t` and `float` is `double`.
-3. Strings are pointers to constant bytes; dynamic strings, concatenation,
-   indexing, and length are not implemented. String `==`/`!=` compare content.
-4. The runtime only provides GC initialization, struct allocation, string
-   equality, and print helpers.
+3. Strings are immutable NUL-terminated byte sequences. `+` and `+=`
+   concatenate, and `==`/`!=` compare content. Indexing, slicing, and length are
+   not implemented; embedded NUL bytes are unsupported (Section 20).
+4. The runtime provides GC initialization, struct allocation, string
+   concatenation and equality, and print helpers.
 5. The entry point must be a zero-parameter, void-returning `main`.
 6. Default `build` output is the source base name in the current directory.
 7. Only the host platform is supported; there is no cross-compilation.
@@ -1061,3 +1068,90 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     optimization level of its own.
 11. Self-hosting and the standard library are not implemented. The long-term
     roadmap is recorded in AGENTS.md.
+
+---
+
+## 20. Strings (provisional)
+
+This section records the implemented string semantics. It is **provisional**:
+the representation is the first working model and may evolve.
+
+### 20.1 Representation
+
+- A `string` is an immutable, NUL-terminated sequence of bytes. The C
+  representation is `const char *` (Section 19.1).
+- A string literal denotes a string backed by static storage. The lexer supports
+  the escapes `\n`, `\t`, `\"`, and `\\` (Section 6.3); the code generator
+  decodes them and re-encodes the bytes safely for C.
+- A string produced by concatenation is backed by a freshly allocated,
+  exactly-sized, GC-managed buffer. It remains valid as long as Kitten code can
+  reach it, and it is never freed by hand.
+- Strings are byte sequences, not necessarily valid text; concatenation and
+  equality are byte operations.
+- **Embedded NUL bytes are not supported.** Because the representation is
+  NUL-terminated, a string cannot contain a NUL byte in the middle. Kitten
+  provides no way to create one: there is no `\0` escape, and concatenation of
+  NUL-free strings is NUL-free. This is a limitation of the representation, not
+  a hidden behavior.
+
+### 20.2 Concatenation
+
+- `left + right` concatenates two `string` values and produces a new `string`.
+- Both operands must be `string`. A `string` operand mixed with an `int`,
+  `float`, `bool`, or struct is a type error; there are no implicit conversions
+  (there is no automatic conversion of other values to text).
+- Concatenation is left-associative, so `a + b + c` groups as `(a + b) + c`.
+- `target += value` appends `value` to `target` when both are `string`. It
+  requires `target` to be a mutable l-value, exactly like other compound
+  assignments.
+- Concatenating with an empty string (`""`) yields a string equal to the other
+  operand. Concatenating two empty strings yields an empty string.
+- Repeated concatenation copies each intermediate result, so a long chain costs
+  more than a builder would. A builder or join operation is **deferred**;
+  correctness is prioritized over this optimization.
+
+### 20.3 Equality
+
+- `==` and `!=` compare two `string` values **by content**, never by address.
+  Two distinct strings with the same bytes are equal.
+- Equality requires both operands to be `string`; mixing types is a type error.
+- Ordering comparisons (`<`, `<=`, `>`, `>=`) are numeric-only and are not
+  defined for `string`.
+
+### 20.4 Print behavior
+
+`print` writes a string as its bytes (Section 19.4). Printing an empty string
+produces an empty field; printing a string containing `\n` produces multiple
+output lines.
+
+### 20.5 Type rules summary
+
+| Expression | Operand types | Result |
+| --- | --- | --- |
+| `a + b` | `string`, `string` | `string` (concatenation) |
+| `a += b` | `string` target, `string` | `string` |
+| `a == b`, `a != b` | `string`, `string` | `bool` (content comparison) |
+
+### 20.6 Deferred string operations
+
+The following are **not** implemented in this revision and must not be assumed:
+
+- `length` (byte or character count).
+- Indexing, slicing, and character access.
+- Ordering comparisons and string ordering.
+- Searching, replacing, splitting, and joining.
+- Interpolation, raw strings, and multiline strings.
+- Mutable strings and in-place mutation.
+- Any conversion between strings and other types.
+
+### 20.7 Provisional decisions recorded
+
+1. Strings keep the single NUL-terminated `const char *` representation; no
+   separate string type or struct wrapper was introduced.
+2. Concatenation allocates a fresh GC buffer of exactly `len(left) + len(right)
+   + 1` bytes; empty operands are handled by the same path.
+3. `+` and `+=` are concatenation for two strings; `-=` and the other arithmetic
+   operators remain numeric-only.
+4. Equality is content-based, as it already was.
+5. Embedded NUL bytes are unsupported and cannot be created.
+6. No implicit conversion from other types to `string` was added.

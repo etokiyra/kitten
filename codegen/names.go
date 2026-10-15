@@ -48,7 +48,7 @@ func argumentName(name string) string { return argumentPrefix + name }
 //	int    -> int64_t        (signed 64-bit)
 //	float  -> double         (IEEE 754 binary64)
 //	bool   -> bool           (stdbool.h)
-//	string -> const char *   (pointer to NUL-terminated constant bytes)
+//	string -> const char *   (immutable NUL-terminated byte string)
 //	void   -> void           (function return position only)
 //	struct -> struct pointer (GC-managed reference)
 func cType(kittenType *checker.Type) (string, error) {

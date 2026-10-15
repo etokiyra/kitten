@@ -20,6 +20,7 @@ func TestHeaderDeclaresRuntimeABI(t *testing.T) {
 		InitFunction,
 		AllocFunction,
 		StringEqualFunction,
+		StringConcatFunction,
 		PrintIntFunction,
 		PrintFloatFunction,
 		PrintBoolFunction,
@@ -38,7 +39,7 @@ func TestHeaderDeclaresRuntimeABI(t *testing.T) {
 
 func TestSourceImplementsGarbageCollection(t *testing.T) {
 	source := Source()
-	for _, fragment := range []string{"GC_INIT", "GC_MALLOC", "strcmp"} {
+	for _, fragment := range []string{"GC_INIT", "GC_MALLOC", "strcmp", "memcpy"} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("runtime source does not contain %q", fragment)
 		}

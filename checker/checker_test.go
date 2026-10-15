@@ -300,6 +300,34 @@ public fn main() {
 }
 `,
 		},
+		{
+			name: "string operations",
+			source: `struct Tag {
+    string label;
+}
+fn decorate(string text) -> string {
+    return "[" + text + "]";
+}
+fn main() {
+    string empty = "";
+    string literal = "abc" + "def";
+    string first = "one";
+    string second = "two";
+    string variables = first + second;
+    string mixed_left = first + "!";
+    string mixed_right = "<" + second;
+    string chained = first + "-" + second + "-" + literal;
+    string decorated = decorate("x");
+    string appended = first;
+    appended += second;
+    bool same = variables == "onetwo";
+    bool different = variables != literal;
+    Tag tag = Tag { label = "tag" + "ged" };
+    print(empty, literal, variables, mixed_left, mixed_right);
+    print(chained, decorated, appended, same, different, tag.label);
+}
+`,
+		},
 	}
 
 	for _, testCase := range cases {
@@ -448,14 +476,6 @@ func TestErrorCases(t *testing.T) {
 			contains: "int operands",
 		},
 		{
-			name:     "string concatenation unsupported",
-			source:   "fn main() {\n    string s = \"a\" + \"b\";\n}\n",
-			kind:     InvalidOperator,
-			line:     2,
-			column:   20,
-			contains: "numeric operands",
-		},
-		{
 			name:     "arithmetic on bool",
 			source:   "fn main() {\n    bool b = true + false;\n}\n",
 			kind:     InvalidOperator,
@@ -552,12 +572,76 @@ func TestErrorCases(t *testing.T) {
 			contains: "same type",
 		},
 		{
-			name:     "compound assignment on string",
-			source:   "fn main() {\n    string s = \"a\";\n    s += \"b\";\n}\n",
+			name:     "subtraction compound assignment on string",
+			source:   "fn main() {\n    string s = \"a\";\n    s -= \"b\";\n}\n",
 			kind:     InvalidOperator,
 			line:     3,
 			column:   7,
 			contains: "numeric operands",
+		},
+		{
+			name:     "concatenate string and int",
+			source:   "fn main() {\n    string s = \"a\" + 1;\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   20,
+			contains: "same type",
+		},
+		{
+			name:     "concatenate int and string",
+			source:   "fn main() {\n    int x = 1 + \"a\";\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   15,
+			contains: "same type",
+		},
+		{
+			name:     "concatenate string and bool",
+			source:   "fn main() {\n    string s = \"a\" + true;\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   20,
+			contains: "same type",
+		},
+		{
+			name:     "subtract strings",
+			source:   "fn main() {\n    string s = \"a\" - \"b\";\n}\n",
+			kind:     InvalidOperator,
+			line:     2,
+			column:   20,
+			contains: "numeric operands",
+		},
+		{
+			name:     "multiply strings",
+			source:   "fn main() {\n    string s = \"a\" * \"b\";\n}\n",
+			kind:     InvalidOperator,
+			line:     2,
+			column:   20,
+			contains: "numeric operands",
+		},
+		{
+			name:     "remainder of strings",
+			source:   "fn main() {\n    string s = \"a\" % \"b\";\n}\n",
+			kind:     InvalidOperator,
+			line:     2,
+			column:   20,
+			contains: "int operands",
+		},
+		{
+			name:     "compound append to a string literal",
+			source:   "fn main() {\n    \"a\" += \"b\";\n}\n",
+			kind:     InvalidAssignment,
+			line:     2,
+			column:   5,
+			contains: "cannot assign",
+		},
+		{
+			name:     "concatenate struct and string",
+			source:   "struct S {\n    int x;\n}\nfn main() {\n    S s = S { x = 1 };\n    string t = s + \"a\";\n}\n",
+			kind:     TypeMismatch,
+			line:     6,
+			column:   18,
+			contains: "same type",
 		},
 		{
 			name:     "increment on string",

@@ -33,6 +33,10 @@ const (
 	// StringEqualFunction compares two Kitten strings by value.
 	StringEqualFunction = "ktn_rt_string_equal"
 
+	// StringConcatFunction returns a new string that is its two arguments
+	// concatenated.
+	StringConcatFunction = "ktn_rt_string_concat"
+
 	// PrintIntFunction, PrintFloatFunction, PrintBoolFunction, and
 	// PrintStringFunction write one value of the corresponding primitive type.
 	PrintIntFunction    = "ktn_rt_print_int"

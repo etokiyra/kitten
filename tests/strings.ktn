@@ -1,0 +1,38 @@
+fn decorate(string text) -> string {
+    return "[" + text + "]";
+}
+
+struct Tag {
+    string label;
+}
+
+fn main() {
+    string empty = "";
+    string literal = "abc" + "def";
+    string first = "one";
+    string second = "two";
+    string variables = first + second;
+    string literal_left = "x" + first;
+    string literal_right = first + "y";
+    string chained = first + "-" + second + "-" + literal;
+    string decorated = decorate(first);
+    string appended = "start";
+    appended += " end";
+    Tag tag = Tag { label = "tag" + "ged" };
+
+    print(empty);
+    print(literal);
+    print(variables);
+    print(literal_left);
+    print(literal_right);
+    print(chained);
+    print(decorated);
+    print(appended);
+    print(tag.label);
+    print(first == "one", first != second);
+    print(("a" + "b") == "ab");
+    print("" + "");
+    print("tab\there");
+    print("quote\"slash\\end");
+    print("first\nsecond");
+}

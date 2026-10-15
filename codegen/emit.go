@@ -258,8 +258,8 @@ func (g *generator) unaryExpression(expression *parser.UnaryExpr) (string, error
 
 // binaryExpression renders a binary operation. Kitten and C share operator
 // symbols and precedence is made explicit with parentheses, so most operators
-// map directly. String equality uses a runtime helper because C would otherwise
-// compare pointers.
+// map directly. String operations use runtime helpers: "+" concatenates, and
+// "==" / "!=" compare content rather than pointers.
 func (g *generator) binaryExpression(expression *parser.BinaryExpr) (string, error) {
 	if expression == nil || expression.Left == nil || expression.Right == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete binary expression"}
@@ -273,25 +273,30 @@ func (g *generator) binaryExpression(expression *parser.BinaryExpr) (string, err
 		return "", err
 	}
 
-	if expression.Operator == "==" || expression.Operator == "!=" {
+	switch expression.Operator {
+	case "+", "==", "!=":
 		operandType, err := g.expressionType(expression.Left)
 		if err != nil {
 			return "", err
 		}
 		if operandType == checker.StringType {
-			comparison := fmt.Sprintf("%s(%s, %s)", runtime.StringEqualFunction, left, right)
-			if expression.Operator == "==" {
-				return comparison, nil
+			switch expression.Operator {
+			case "+":
+				return fmt.Sprintf("%s(%s, %s)", runtime.StringConcatFunction, left, right), nil
+			case "==":
+				return fmt.Sprintf("%s(%s, %s)", runtime.StringEqualFunction, left, right), nil
+			default: // "!="
+				return fmt.Sprintf("!%s(%s, %s)", runtime.StringEqualFunction, left, right), nil
 			}
-			return "!" + comparison, nil
 		}
 	}
 
 	return fmt.Sprintf("(%s %s %s)", left, expression.Operator, right), nil
 }
 
-// assignExpression renders an assignment. Kitten and C agree on "=", "+=", and
-// "-=", and both yield the assigned value.
+// assignExpression renders an assignment. Kitten and C agree on "=" and "-=",
+// and both yield the assigned value. String "+=" has no C equivalent, so it is
+// lowered to concatenation followed by assignment.
 func (g *generator) assignExpression(expression *parser.AssignExpr) (string, error) {
 	if expression == nil || expression.Target == nil || expression.Value == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete assignment"}
@@ -304,6 +309,17 @@ func (g *generator) assignExpression(expression *parser.AssignExpr) (string, err
 	if err != nil {
 		return "", err
 	}
+
+	if expression.Operator == "+=" {
+		targetType, err := g.expressionType(expression.Target)
+		if err != nil {
+			return "", err
+		}
+		if targetType == checker.StringType {
+			return fmt.Sprintf("(%s = %s(%s, %s))", target, runtime.StringConcatFunction, target, value), nil
+		}
+	}
+
 	return fmt.Sprintf("(%s %s %s)", target, expression.Operator, value), nil
 }
 

@@ -184,7 +184,7 @@ func TestUsageAndExitCodes(t *testing.T) {
 func TestFixturesEndToEnd(t *testing.T) {
 	requireToolchain(t)
 
-	fixtures := []string{"hello", "fizzbuzz", "math", "room"}
+	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings"}
 	for _, name := range fixtures {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -226,6 +226,76 @@ func TestRunCommandForwardsOutput(t *testing.T) {
 	}
 	if stdout.String() != "run works\n" {
 		t.Errorf("stdout = %q, want %q", stdout.String(), "run works\n")
+	}
+}
+
+func TestStringEqualityIsValueBased(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    string first = "a" + "b";
+    string second = "a" + "b";
+    print(first == second, first != second);
+    string empty = "";
+    print(first == (empty + first));
+    print(("x" + "y") == "xy");
+}
+`
+	stdout, _, exitCode := compileAndRunSource(t, source)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "true false\ntrue\ntrue\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+func TestStringConcatenationChain(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    string result = "";
+    int index = 0;
+    while (index < 5) {
+        result += "ab";
+        index++;
+    }
+    print(result);
+    print(result == "ababababab");
+}
+`
+	stdout, _, exitCode := compileAndRunSource(t, source)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "ababababab\ntrue\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+func TestStringStructFieldMutation(t *testing.T) {
+	requireToolchain(t)
+
+	source := `struct Builder {
+    string text;
+}
+fn main() {
+    Builder builder = Builder { text = "a" };
+    builder.text += "b";
+    builder.text = builder.text + "c";
+    print(builder.text);
+    print(builder.text == "abc");
+}
+`
+	stdout, _, exitCode := compileAndRunSource(t, source)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "abc\ntrue\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
 	}
 }
 
