@@ -284,9 +284,9 @@ func TestControlFlowEmission(t *testing.T) {
     }
 }
 `)
-	assertContains(t, generated, "if ((ktn_var_total > 0)) {")
+	assertContains(t, generated, "if (ktn_var_total > 0) {")
 	assertContains(t, generated, "else {")
-	assertContains(t, generated, "while ((ktn_var_total != 5)) {")
+	assertContains(t, generated, "while (ktn_var_total != 5) {")
 	assertContains(t, generated, "for (int64_t ktn_var_index = 0; (ktn_var_index < 3); (ktn_var_index++)) {")
 }
 
@@ -891,4 +891,55 @@ fn main() {
 	if first != second {
 		t.Errorf("map generation is not deterministic")
 	}
+}
+
+func TestStringByteAndRangeGeneration(t *testing.T) {
+	generated := generateSource(t, `fn first_word(string source) -> string {
+    int size = length(source);
+    int position = 0;
+    while (position < size && source[position] != 32) {
+        position++;
+    }
+    return substring(source, 0, position);
+}
+fn main() {
+    print(length("abc"), "abc"[1], first_word("hi there"));
+}
+`)
+	assertContains(t, generated, `ktn_rt_string_length("abc")`)
+	assertContains(t, generated, `ktn_rt_string_at("abc", 1)`)
+	assertContains(t, generated, `ktn_var_size = ktn_rt_string_length(ktn_var_source)`)
+	assertContains(t, generated, `ktn_rt_substring(ktn_var_source, 0, ktn_var_position)`)
+	// String indexing is a byte read, not an l-value.
+	assertContains(t, generated, `ktn_rt_string_at(ktn_var_source, ktn_var_position) != 32`)
+}
+
+func TestConditionParenthesesAreNotRedundant(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    int n = 0;
+    if (n == 0) {
+        print(1);
+    }
+    while (n != 2) {
+        n++;
+    }
+    bool flag = true;
+    if (flag) {
+        print(2);
+    }
+    bool other = false;
+    if (flag = other) {
+        print(3);
+    }
+}
+`)
+	// A parenthesized comparison is not wrapped in a second pair, which Clang
+	// reports as a redundant comparison in an if condition.
+	assertContains(t, generated, "if (ktn_var_n == 0) {")
+	assertContains(t, generated, "while (ktn_var_n != 2) {")
+	// A bare identifier is wrapped so that it is parenthesized.
+	assertContains(t, generated, "if (ktn_var_flag) {")
+	// An assignment keeps its own parenthesization, so C's -Wparentheses is
+	// satisfied.
+	assertContains(t, generated, "if ((ktn_var_flag = ktn_var_other)) {")
 }

@@ -7,7 +7,8 @@
 //
 //   - garbage-collector initialization and managed allocation, backed by the
 //     Boehm-Demers-Weiser conservative collector;
-//   - string operations: value equality, concatenation, and append;
+//   - string operations: value equality, concatenation, append, byte length,
+//     byte indexing, and byte ranges;
 //   - dynamic arrays: allocation, bounds-checked element access, and length;
 //   - string-keyed maps: a hash table with insert, lookup, membership, and
 //     length operations;

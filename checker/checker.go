@@ -298,6 +298,11 @@ func builtinFunctions() map[string]*Function {
 			ReturnType: BoolType,
 			Builtin:    BuiltinMapHas,
 		},
+		"substring": {
+			Name:       "substring",
+			ReturnType: StringType,
+			Builtin:    BuiltinSubstring,
+		},
 	}
 }
 

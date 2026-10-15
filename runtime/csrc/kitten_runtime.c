@@ -79,6 +79,37 @@ void ktn_rt_string_append(const char **slot, const char *value) {
     *slot = ktn_rt_string_concat(*slot, value);
 }
 
+int64_t ktn_rt_string_length(const char *value) {
+    return (int64_t)strlen(ktn_rt_string_value(value));
+}
+
+int64_t ktn_rt_string_at(const char *value, int64_t index) {
+    const char *checked = ktn_rt_string_value(value);
+    size_t length = strlen(checked);
+    if (index < 0 || (uint64_t)index >= (uint64_t)length) {
+        char message[128];
+        snprintf(message, sizeof(message), "string index %lld is out of range for length %lld", (long long)index, (long long)length);
+        ktn_rt_fail(message);
+    }
+    return (int64_t)(unsigned char)checked[index];
+}
+
+const char *ktn_rt_substring(const char *value, int64_t start, int64_t end) {
+    const char *checked = ktn_rt_string_value(value);
+    size_t length = strlen(checked);
+    if (start < 0 || end < start || (uint64_t)end > (uint64_t)length) {
+        char message[160];
+        snprintf(message, sizeof(message), "substring range %lld..%lld is out of range for length %lld", (long long)start, (long long)end, (long long)length);
+        ktn_rt_fail(message);
+    }
+
+    size_t count = (size_t)(end - start);
+    char *result = (char *)ktn_rt_alloc(count + 1);
+    memcpy(result, checked + start, count);
+    result[count] = '\0';
+    return result;
+}
+
 ktn_array *ktn_rt_array_new(int64_t length, int64_t element_size) {
     if (length < 0) {
         ktn_rt_fail("array length cannot be negative");

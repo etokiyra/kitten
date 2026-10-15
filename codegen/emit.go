@@ -59,12 +59,12 @@ func (g *generator) emitStatement(statement parser.Stmt) error {
 		return g.emitIfTail(s)
 
 	case *parser.WhileStmt:
-		condition, err := g.expression(s.Condition)
+		condition, err := g.conditionExpression(s.Condition)
 		if err != nil {
 			return err
 		}
 		g.writeIndent()
-		g.write("while (" + condition + ") ")
+		g.write("while " + condition + " ")
 		return g.emitBlock(s.Body)
 
 	case *parser.ForStmt:
@@ -100,11 +100,11 @@ func (g *generator) emitIfTail(statement *parser.IfStmt) error {
 	if statement == nil || statement.Condition == nil {
 		return &Error{Line: 1, Column: 1, Message: "incomplete if statement"}
 	}
-	condition, err := g.expression(statement.Condition)
+	condition, err := g.conditionExpression(statement.Condition)
 	if err != nil {
 		return err
 	}
-	g.write("if (" + condition + ") ")
+	g.write("if " + condition + " ")
 	if err := g.emitBlock(statement.Then); err != nil {
 		return err
 	}
@@ -155,11 +155,11 @@ func (g *generator) emitFor(statement *parser.ForStmt) error {
 
 	condition := ""
 	if statement.Condition != nil {
-		expression, err := g.expression(statement.Condition)
+		rendered, err := g.conditionExpression(statement.Condition)
 		if err != nil {
 			return err
 		}
-		condition = expression
+		condition = rendered
 	}
 
 	increment := ""
@@ -496,14 +496,27 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 			return "", err
 		}
 		lengthFunction := runtime.ArrayLengthFunction
-		if argumentType.IsMap() {
+		switch {
+		case argumentType.IsMap():
 			lengthFunction = runtime.MapLengthFunction
+		case argumentType == checker.StringType:
+			lengthFunction = runtime.StringLengthFunction
 		}
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s(%s)", lengthFunction, argument), nil
+	case checker.BuiltinSubstring:
+		arguments := make([]string, 0, 3)
+		for _, argumentExpression := range expression.Arguments {
+			rendered, err := g.expression(argumentExpression)
+			if err != nil {
+				return "", err
+			}
+			arguments = append(arguments, rendered)
+		}
+		return fmt.Sprintf("%s(%s)", runtime.SubstringFunction, strings.Join(arguments, ", ")), nil
 	case checker.BuiltinMapHas:
 		mapExpression, err := g.expression(expression.Arguments[0])
 		if err != nil {
@@ -640,11 +653,40 @@ func (g *generator) indexExpression(expression *parser.IndexExpr) (string, error
 		return "", err
 	}
 
+	// String indexing yields an int byte value directly and is not an l-value.
+	if targetType == checker.StringType {
+		return fmt.Sprintf("%s(%s, %s)", runtime.StringAtFunction, target, index), nil
+	}
+
 	accessor := runtime.ArrayAtFunction
 	if targetType.IsMap() {
 		accessor = runtime.MapAtFunction
 	}
 	return fmt.Sprintf("(*((%s *)%s(%s, %s)))", resultCType, accessor, target, index), nil
+}
+
+// conditionExpression renders an expression for use as the condition of an if,
+// while, or for.
+//
+// Compound expressions are already emitted fully parenthesized, so adding
+// another pair of parentheses around them is redundant; Clang in particular
+// warns about a redundant parenthesized equality comparison in an if condition.
+// An assignment keeps its own extra layer, because C's -Wparentheses warns when
+// an assignment is used as a condition without its own parentheses. A condition
+// that is not already parenthesized, such as a bare identifier or a call, is
+// wrapped so that it is parenthesized.
+func (g *generator) conditionExpression(expression parser.Expr) (string, error) {
+	rendered, err := g.expression(expression)
+	if err != nil {
+		return "", err
+	}
+	if _, isAssignment := expression.(*parser.AssignExpr); isAssignment {
+		return "(" + rendered + ")", nil
+	}
+	if len(rendered) >= 2 && rendered[0] == '(' && rendered[len(rendered)-1] == ')' {
+		return rendered, nil
+	}
+	return "(" + rendered + ")", nil
 }
 
 // emitMatch writes a match statement.

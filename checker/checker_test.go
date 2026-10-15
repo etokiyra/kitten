@@ -371,6 +371,42 @@ fn main() {
 `,
 		},
 		{
+			name: "string bytes and ranges",
+			source: `fn is_digit(int byte) -> bool {
+    return byte >= 48 && byte <= 57;
+}
+fn scan(string source) -> int {
+    int size = length(source);
+    int position = 0;
+    int digits = 0;
+    while (position < size) {
+        if (is_digit(source[position])) {
+            digits++;
+        }
+        position++;
+    }
+    return digits;
+}
+fn first_word(string source) -> string {
+    int size = length(source);
+    int position = 0;
+    while (position < size && source[position] != 32) {
+        position++;
+    }
+    return substring(source, 0, position);
+}
+fn main() {
+    print(length(""), length("abc"), length("é"));
+    print("abc"[0], "abc"[2]);
+    print(substring("hello world", 0, 5), first_word("hello world"));
+    print(scan("a1b2c3"), scan(""));
+    string text = "abc";
+    text += substring(text, 0, 1);
+    print(text);
+}
+`,
+		},
+		{
 			name: "typed maps",
 			source: `enum Kind {
     Integer,
@@ -1101,6 +1137,46 @@ func TestErrorCases(t *testing.T) {
 			line:     3,
 			column:   26,
 			contains: "found map[string]int",
+		},
+		{
+			name:     "assign to a string byte",
+			source:   "fn main() {\n    string text = \"abc\";\n    text[0] = 122;\n}\n",
+			kind:     InvalidAssignment,
+			line:     3,
+			column:   9,
+			contains: "strings are immutable",
+		},
+		{
+			name:     "string index with a non-int",
+			source:   "fn main() {\n    print(\"abc\"[\"x\"]);\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   17,
+			contains: "string index must be int",
+		},
+		{
+			name:     "substring with the wrong argument count",
+			source:   "fn main() {\n    print(substring(\"abc\", 1));\n}\n",
+			kind:     BadCall,
+			line:     2,
+			column:   20,
+			contains: "expects 3 arguments",
+		},
+		{
+			name:     "substring of a non-string",
+			source:   "fn main() {\n    print(substring(1, 2, 3));\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   21,
+			contains: "expects a string as its first argument",
+		},
+		{
+			name:     "substring with a non-int offset",
+			source:   "fn main() {\n    print(substring(\"abc\", \"x\", 2));\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   28,
+			contains: "substring offsets must be int",
 		},
 		{
 			name:     "increment on string",

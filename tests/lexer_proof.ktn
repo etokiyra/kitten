@@ -1,0 +1,83 @@
+// Capability proof for a future Kitten-written lexer.
+//
+// It exercises the primitives a lexer needs, using source-like text: byte
+// length, bounds-checked byte indexing, byte ranges for lexemes, and
+// end-of-input by comparing a position against the byte length.
+
+fn is_letter(int byte) -> bool {
+    return (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90);
+}
+
+fn is_digit(int byte) -> bool {
+    return byte >= 48 && byte <= 57;
+}
+
+fn is_space(int byte) -> bool {
+    return byte == 32 || byte == 9 || byte == 10;
+}
+
+struct Counts {
+    int identifiers;
+    int numbers;
+    int punctuation;
+}
+
+fn scan(string source) -> Counts {
+    Counts counts = Counts { identifiers = 0, numbers = 0, punctuation = 0 };
+    int size = length(source);
+    int position = 0;
+    while (position < size) {
+        int byte = source[position];
+        if (is_letter(byte)) {
+            while (position < size && (is_letter(source[position]) || is_digit(source[position]))) {
+                position++;
+            }
+            counts.identifiers++;
+        } else if (is_digit(byte)) {
+            while (position < size && is_digit(source[position])) {
+                position++;
+            }
+            counts.numbers++;
+        } else if (is_space(byte)) {
+            position++;
+        } else {
+            position++;
+            counts.punctuation++;
+        }
+    }
+    return counts;
+}
+
+fn identifier_at(string source, int position) -> string {
+    int size = length(source);
+    int start = position;
+    while (position < size && (is_letter(source[position]) || is_digit(source[position]))) {
+        position++;
+    }
+    if (position == start) {
+        return "";
+    }
+    return substring(source, start, position);
+}
+
+fn main() {
+    print("empty length:", length(""));
+    print("one length:", length("z"));
+    print("bytes:", "kitten"[0], "kitten"[5]);
+    print("slice:", substring("lexer", 0, 3), substring("lexer", 3, 5));
+    print("empty slice:", substring("lexer", 2, 2) == "");
+    print("escape length:", length("a\tb\n"));
+    print("escape byte:", "a\tb\n"[1]);
+    print("utf8 length:", length("é"), "utf8 bytes:", "é"[0], "é"[1]);
+
+    string source = "fn add(int a) { return a + 1; }";
+    Counts counts = scan(source);
+    print("counts:", counts.identifiers, counts.numbers, counts.punctuation);
+    print("first identifier:", identifier_at(source, 0));
+    print("second identifier:", identifier_at(source, 3));
+    print("empty identifier:", identifier_at(source, 0) == "");
+
+    Counts none = scan("");
+    print("empty counts:", none.identifiers, none.numbers, none.punctuation);
+    print("last byte lexeme:", identifier_at("zz", 1));
+}

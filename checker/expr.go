@@ -316,6 +316,9 @@ func (c *checker) assignableType(expression parser.Expr, scope *Scope) (*Type, e
 		if err != nil {
 			return nil, err
 		}
+		if targetType == StringType {
+			return nil, c.errorAt(InvalidAssignment, e.At, "cannot assign to a string byte; strings are immutable")
+		}
 		return c.checkIndexOperands(e, targetType, scope)
 
 	case nil:
@@ -472,6 +475,8 @@ func (c *checker) checkCall(expression *parser.CallExpr, scope *Scope) (*Type, e
 		return c.checkLengthCall(expression, function, scope)
 	case BuiltinMapHas:
 		return c.checkMapHasCall(expression, function, scope)
+	case BuiltinSubstring:
+		return c.checkSubstringCall(expression, function, scope)
 	}
 
 	if len(expression.Arguments) != len(function.ParameterTypes) {
@@ -593,9 +598,9 @@ func (c *checker) checkIndex(expression *parser.IndexExpr, scope *Scope) (*Type,
 }
 
 // checkIndexOperands checks the index of an indexing expression whose target
-// already has type targetType, and returns the element or value type.
+// already has type targetType, and returns the element, value, or byte type.
 func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *Type, scope *Scope) (*Type, error) {
-	if !targetType.IsArray() && !targetType.IsMap() {
+	if !targetType.IsArray() && !targetType.IsMap() && targetType != StringType {
 		return nil, c.errorAt(TypeMismatch, expression.At, "cannot index a value of type %s", targetType)
 	}
 	if expression.Index == nil {
@@ -614,13 +619,21 @@ func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *T
 	}
 
 	if indexType != IntType {
+		if targetType == StringType {
+			return nil, c.errorAt(TypeMismatch, expression.Index.Pos(), "string index must be int, found %s", indexType)
+		}
 		return nil, c.errorAt(TypeMismatch, expression.Index.Pos(), "array index must be int, found %s", indexType)
+	}
+	if targetType == StringType {
+		// A string is indexed by byte and yields the byte's value.
+		return IntType, nil
 	}
 	return targetType.Element, nil
 }
 
 // checkLengthCall checks a call to the built-in length, which takes exactly one
-// array or map argument and returns the number of elements as an int.
+// array, map, or string argument and returns its number of elements or bytes as
+// an int.
 func (c *checker) checkLengthCall(expression *parser.CallExpr, function *Function, scope *Scope) (*Type, error) {
 	if len(expression.Arguments) != 1 {
 		return nil, c.errorAt(BadCall, expression.OpenParen, "function %q expects 1 argument, got %d", function.Name, len(expression.Arguments))
@@ -630,8 +643,8 @@ func (c *checker) checkLengthCall(expression *parser.CallExpr, function *Functio
 	if err != nil {
 		return nil, err
 	}
-	if !argumentType.IsArray() && !argumentType.IsMap() {
-		return nil, c.errorAt(TypeMismatch, argument.Pos(), "length expects an array or map, found %s", argumentType)
+	if !argumentType.IsArray() && !argumentType.IsMap() && argumentType != StringType {
+		return nil, c.errorAt(TypeMismatch, argument.Pos(), "length expects an array, map, or string, found %s", argumentType)
 	}
 	return IntType, nil
 }
@@ -661,6 +674,33 @@ func (c *checker) checkMapHasCall(expression *parser.CallExpr, function *Functio
 		return nil, c.errorAt(TypeMismatch, keyArgument.Pos(), "map key must be %s, found %s", mapType.Key, keyType)
 	}
 	return BoolType, nil
+}
+
+// checkSubstringCall checks a call to the built-in substring, which takes a
+// string and two int byte offsets and returns the bytes in [start, end).
+func (c *checker) checkSubstringCall(expression *parser.CallExpr, function *Function, scope *Scope) (*Type, error) {
+	if len(expression.Arguments) != 3 {
+		return nil, c.errorAt(BadCall, expression.OpenParen, "function %q expects 3 arguments, got %d", function.Name, len(expression.Arguments))
+	}
+
+	sourceType, err := c.checkExpr(expression.Arguments[0], scope)
+	if err != nil {
+		return nil, err
+	}
+	if sourceType != StringType {
+		return nil, c.errorAt(TypeMismatch, expression.Arguments[0].Pos(), "%q expects a string as its first argument, found %s", function.Name, sourceType)
+	}
+
+	for _, argument := range expression.Arguments[1:] {
+		offsetType, err := c.checkExpr(argument, scope)
+		if err != nil {
+			return nil, err
+		}
+		if offsetType != IntType {
+			return nil, c.errorAt(TypeMismatch, argument.Pos(), "substring offsets must be int, found %s", offsetType)
+		}
+	}
+	return StringType, nil
 }
 
 // checkNewMap checks map creation, "new map[Key]Value".

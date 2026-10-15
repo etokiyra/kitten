@@ -517,11 +517,13 @@ outcome here.
 - In-memory representation, mutability, indexing, and slicing. In this revision
   a string is an immutable, NUL-terminated byte sequence represented as a
   pointer to bytes; literals use static storage and constructed strings use
-  GC-managed storage (Sections 19 and 20). Indexing and slicing are not
-  implemented.
+  GC-managed storage (Sections 19 and 20). Byte indexing, byte length, and byte
+  ranges (`substring`) are implemented; strings remain immutable.
 - Runtime operations (length, concatenation, comparison). Concatenation (`+`,
-  `+=`) and value equality (`==`, `!=`) are implemented (Section 20); `length`
-  is not implemented.
+  `+=`), value equality (`==`, `!=`), byte length, byte indexing, and byte
+  ranges are implemented (Section 20).
+- Conversions between strings and other types, and code-point operations, are
+  **deferred** (Section 20.7).
 - Whether string interpolation or raw/multiline strings exist.
 
 **Visibility and declarations**
@@ -821,6 +823,13 @@ Notes:
   error. Comparing two `string` values compares their contents, never their
   addresses, and comparing two enum values compares their cases (Section 23).
 - There is no unary `+` operator: the grammar in Section 17 does not include it.
+- `&&` and `||` **short-circuit**: the right operand is evaluated only when the
+  left operand does not determine the result, and the right operand is always
+  type-checked. This is what makes the common bound-check idiom
+  `position < size && text[position] != 32` safe, since the indexed access is
+  not evaluated once `position < size` is false.
+- Indexing is defined for arrays, maps, and strings. A string index is an `int`
+  (a byte), not a one-character `string`; see Section 20.6.
 - The checker does not diagnose constant division by zero and does not guarantee
   overflow behavior; those are **deferred**.
 
@@ -909,10 +918,10 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Four functions are provided by the language: `print`, `length`, `has`, and
-`read_file`. All are represented in the semantic environment rather than
-special-cased in expression checking. A user-defined top-level declaration with
-the same name shadows the built-in.
+Five functions are provided by the language: `print`, `length`, `has`,
+`substring`, and `read_file`. All are represented in the semantic environment
+rather than special-cased in expression checking. A user-defined top-level
+declaration with the same name shadows the built-in.
 
 **`print`**
 
@@ -924,10 +933,11 @@ the same name shadows the built-in.
 
 **`length`**
 
-- `length(collection)` takes exactly one argument, which must be an array or a
-  map, and returns its number of elements as an `int` (Sections 21 and 24).
-- Calling it with no arguments, more than one argument, or a non-collection
-  argument is an error.
+- `length(collection)` takes exactly one argument, which must be an array, a
+  map, or a string, and returns its number of elements or bytes as an `int`
+  (Sections 20.6, 21, and 24).
+- Calling it with no arguments, more than one argument, or an argument that is
+  not a collection is an error.
 - Its return type is `int`, and it is not variadic.
 
 **`has`**
@@ -938,6 +948,16 @@ the same name shadows the built-in.
 - Passing a non-map first argument, a key of the wrong type, or the wrong number
   of arguments is an error.
 - Its return type is `bool`.
+
+**`substring`**
+
+- `substring(text, start, end)` takes a `string` and two `int` byte offsets and
+  returns a `string` holding the bytes in `[start, end)` (Section 20.6).
+- Passing a non-`string` first argument, a non-`int` offset, or the wrong number
+  of arguments is an error.
+- A range that does not satisfy `0 <= start <= end <= byte length` is a fatal
+  runtime error.
+- Its return type is `string`.
 
 **`read_file`**
 
@@ -1045,7 +1065,8 @@ is **deferred**.
   The collector reclaims objects automatically; Kitten code never frees memory
   by hand.
 - The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
-  `ktn_rt_string_append`, `ktn_rt_array_new`, `ktn_rt_array_at`,
+  `ktn_rt_string_append`, `ktn_rt_string_length`, `ktn_rt_string_at`,
+  `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_map_new`, `ktn_rt_map_set`, `ktn_rt_map_at`,
   `ktn_rt_map_has`, `ktn_rt_map_length`, `ktn_rt_read_file`, and the built-in
   print helpers.
@@ -1140,11 +1161,12 @@ targets the host platform; cross-compilation and Windows are **not** supported.
 1. Struct values are GC-managed references with pointer-copy assignment.
 2. `int` is `int64_t` and `float` is `double`.
 3. Strings are immutable NUL-terminated byte sequences. `+` and `+=`
-   concatenate, and `==`/`!=` compare content. String indexing, slicing, and
-   length are not implemented; `length` applies to arrays (Section 21), and
-   embedded NUL bytes are unsupported (Section 20).
+   concatenate, `==`/`!=` compare content, and byte length, byte indexing, and
+   byte ranges are implemented (Section 20); embedded NUL bytes are unsupported,
+   and there are no string/number conversions or code-point operations.
 4. The runtime provides GC initialization, struct allocation, string
-   concatenation/append/equality, dynamic arrays, and print helpers.
+   concatenation/append/equality/length/indexing/ranges, dynamic arrays, maps,
+   and print helpers.
 5. The entry point must be a zero-parameter, void-returning `main`.
 6. Default `build` output is the source base name in the current directory.
 7. Only the host platform is supported; there is no cross-compilation.
@@ -1164,6 +1186,8 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     inspected only with an exhaustive `match` (Section 23).
 16. Maps are GC-managed references with string keys, an inline value, and a
     fatal missing-key lookup (Section 24).
+17. String length and indexing are byte-oriented, `text[i]` yields an `int`
+    byte, and `substring` yields a byte range (Section 20.6).
 
 ---
 
@@ -1227,20 +1251,58 @@ output lines.
 | `a + b` | `string`, `string` | `string` (concatenation) |
 | `a += b` | `string` target, `string` | `string` |
 | `a == b`, `a != b` | `string`, `string` | `bool` (content comparison) |
+| `length(a)` | `string` | `int` (byte count) |
+| `a[i]` | `string`, `int` | `int` (byte value 0..255) |
+| `substring(a, start, end)` | `string`, `int`, `int` | `string` |
 
-### 20.6 Deferred string operations
+### 20.6 Byte length, indexing, and ranges
+
+String access is **byte-oriented, never code-point-oriented**. This is
+consistent with the rest of the string design: concatenation, equality, and the
+NUL-terminated representation all operate on bytes, so length and indexing do
+too. No operation mixes bytes and code points.
+
+- `length(text)` returns the number of **bytes**, excluding the terminator. An
+  empty string has length 0. For example, `"é"` has length 2 because the
+  character is encoded as two UTF-8 bytes.
+- `text[index]` returns the **byte value** at `index` as an `int` in 0..255. A
+  byte is a number, not a one-character string, so it is classified with integer
+  comparisons (`byte >= 97 && byte <= 122` is a lowercase ASCII letter). A
+  multi-byte UTF-8 character occupies several indices.
+- Indexing is bounds-checked. A negative index, or an index at or beyond the
+  byte length, is a **fatal runtime error**; it is never an out-of-bounds read
+  and never a fabricated value.
+- String indexing is **read-only**: strings are immutable, and assigning to
+  `text[index]` is a checker error.
+- `substring(text, start, end)` returns a new string holding the bytes in
+  `[start, end)` — `start` inclusive, `end` exclusive. The range must satisfy
+  `0 <= start <= end <= byte length`; any other range is a fatal runtime error.
+  `substring(text, i, i)` is the empty string, and `substring(text, i, i + 1)`
+  is the byte at `i` as a one-byte string.
+- Because the representation is NUL-terminated, computing a string's length
+  requires scanning it, so indexing and `length` are linear in the string's
+  length while a substring copies its range. A future representation that stores
+  the length would make these constant-time; see Section 20.7.
+
+### 20.7 Deferred string operations
 
 The following are **not** implemented in this revision and must not be assumed:
 
-- `length` (byte or character count).
-- Indexing, slicing, and character access.
-- Ordering comparisons and string ordering.
+- Ordering comparisons and string ordering (so range checks over strings must be
+  written as explicit byte comparisons).
 - Searching, replacing, splitting, and joining.
 - Interpolation, raw strings, and multiline strings.
 - Mutable strings and in-place mutation.
-- Any conversion between strings and other types.
+- **Conversions between strings and other types**, including `int` to `string`
+  and `string` to `int`. This is deliberately deferred: diagnostics can print
+  numbers directly (`print("at", line, column)` accepts several arguments), and a
+  lexeme is produced with `substring`, so neither conversion is required for a
+  lexer in this revision.
+- **Code-point (Unicode) operations**: there is no way to decode a UTF-8
+  sequence into a code point, and no character type. Non-ASCII text is handled
+  as bytes.
 
-### 20.7 Provisional decisions recorded
+### 20.8 Provisional decisions recorded
 
 1. Strings keep the single NUL-terminated `const char *` representation; no
    separate string type or struct wrapper was introduced.
@@ -1251,6 +1313,13 @@ The following are **not** implemented in this revision and must not be assumed:
 4. Equality is content-based, as it already was.
 5. Embedded NUL bytes are unsupported and cannot be created.
 6. No implicit conversion from other types to `string` was added.
+7. Length, indexing, and substrings are **byte-oriented**; no code-point
+   operation exists, and none is implied.
+8. `text[index]` yields an `int` byte value, which makes byte classification use
+   the existing integer comparisons without new syntax.
+9. Indexing is read-only, and both indexing and `substring` fail deterministically
+   when out of range.
+10. `int`-to-`string` and `string`-to-`int` conversions are deferred (Section 20.7).
 
 ---
 

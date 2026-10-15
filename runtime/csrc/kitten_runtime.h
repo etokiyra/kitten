@@ -65,6 +65,31 @@ const char *ktn_rt_string_concat(const char *left, const char *right);
 void ktn_rt_string_append(const char **slot, const char *value);
 
 /*
+ * Returns the number of bytes in a string, not counting the terminator. A null
+ * pointer is the empty string, so its length is 0.
+ */
+int64_t ktn_rt_string_length(const char *value);
+
+/*
+ * Returns the byte at index as an integer in 0..255.
+ *
+ * Indexing is byte-oriented, not code-point-oriented: the byte at a given byte
+ * offset is returned, so a multi-byte UTF-8 character occupies several indices.
+ * The index is bounds-checked; a negative index, or an index at or beyond the
+ * byte length, is a fatal runtime error rather than an out-of-bounds read.
+ */
+int64_t ktn_rt_string_at(const char *value, int64_t index);
+
+/*
+ * Returns a new string holding the bytes in [start, end).
+ *
+ * The range is bounds-checked and must satisfy
+ * 0 <= start <= end <= byte length; any other range is a fatal runtime error.
+ * The result is a fresh, exactly-sized, GC-managed, NUL-terminated buffer.
+ */
+const char *ktn_rt_substring(const char *value, int64_t start, int64_t end);
+
+/*
  * A dynamically sized array.
  *
  * length is the number of elements and element_size is the size in bytes of one

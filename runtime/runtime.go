@@ -40,6 +40,15 @@ const (
 	// StringAppendFunction appends to the string stored at a slot address.
 	StringAppendFunction = "ktn_rt_string_append"
 
+	// StringLengthFunction returns the number of bytes in a string.
+	StringLengthFunction = "ktn_rt_string_length"
+
+	// StringAtFunction returns the byte at an index, with a bounds check.
+	StringAtFunction = "ktn_rt_string_at"
+
+	// SubstringFunction returns a new string holding a byte range.
+	SubstringFunction = "ktn_rt_substring"
+
 	// ArrayNewFunction allocates a zero-initialized array.
 	ArrayNewFunction = "ktn_rt_array_new"
 

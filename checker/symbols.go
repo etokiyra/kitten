@@ -50,6 +50,9 @@ const (
 
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
+
+	// BuiltinSubstring returns a byte range of a string.
+	BuiltinSubstring
 )
 
 // Function is a resolved function signature, either user-defined or built-in.

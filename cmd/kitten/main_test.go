@@ -185,7 +185,7 @@ func TestUsageAndExitCodes(t *testing.T) {
 func TestFixturesEndToEnd(t *testing.T) {
 	requireToolchain(t)
 
-	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays", "variants", "maps"}
+	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays", "variants", "maps", "lexer_proof"}
 	for _, name := range fixtures {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -1047,5 +1047,102 @@ fn main() {
 	}
 	if string(output) != "42 -1 1\n" {
 		t.Errorf("output = %q, want %q", output, "42 -1 1\n")
+	}
+}
+
+func TestStringIndexOutOfRangeIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    string text = "abc";
+    print(length(text));
+    print(text[3]);
+}
+`
+	stdout, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "out of range") {
+		t.Errorf("stderr = %q, want an out-of-range message", stderr)
+	}
+	if stdout != "3\n" {
+		t.Errorf("stdout = %q, want output produced before the failing access", stdout)
+	}
+}
+
+func TestSubstringOutOfRangeIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    print(substring("abc", 1, 4));
+}
+`
+	_, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "out of range") {
+		t.Errorf("stderr = %q, want an out-of-range message", stderr)
+	}
+}
+
+func TestLexerWorkflowInTemporaryProject(t *testing.T) {
+	requireToolchain(t)
+
+	project := t.TempDir()
+	writeSource(t, filepath.Join(project, "input.ktn"), "fn main() {\n    int x = 42;\n}\n")
+	mainPath := writeSource(t, filepath.Join(project, "scan.ktn"), `fn is_letter(int byte) -> bool {
+    return (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90);
+}
+
+fn is_digit(int byte) -> bool {
+    return byte >= 48 && byte <= 57;
+}
+
+fn count_words(string source) -> int {
+    int size = length(source);
+    int position = 0;
+    int words = 0;
+    while (position < size) {
+        int byte = source[position];
+        if (is_letter(byte)) {
+            while (position < size && (is_letter(source[position]) || is_digit(source[position]))) {
+                position++;
+            }
+            words++;
+        } else {
+            position++;
+        }
+    }
+    return words;
+}
+
+fn main() {
+    string source = read_file("input.ktn");
+    print("bytes:", length(source));
+    print("words:", count_words(source));
+    print("first:", substring(source, 0, 2));
+}
+`)
+
+	executablePath := filepath.Join(t.TempDir(), "program")
+	var diagnostics bytes.Buffer
+	if err := buildExecutable(mainPath, executablePath, &diagnostics); err != nil {
+		t.Fatalf("building: %v\n%s", err, diagnostics.String())
+	}
+	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+		t.Fatalf("C compiler diagnostics:\n%s", warnings)
+	}
+
+	command := exec.Command(executablePath)
+	command.Dir = project
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	want := "bytes: 30\nwords: 4\nfirst: fn\n"
+	if string(output) != want {
+		t.Errorf("output = %q, want %q", output, want)
 	}
 }

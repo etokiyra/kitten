@@ -1,0 +1,14 @@
+empty length: 0
+one length: 1
+bytes: 107 110
+slice: lex er
+empty slice: true
+escape length: 4
+escape byte: 9
+utf8 length: 2 utf8 bytes: 195 169
+counts: 6 1 6
+first identifier: fn
+second identifier: add
+empty identifier: false
+empty counts: 0 0 0
+last byte lexeme: z
