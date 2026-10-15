@@ -22,10 +22,11 @@ Project instructions for everyone (human or AI) working on Kitten.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
-The current `.ktn` files under `tests/` are lexer inputs and future
+The current `.ktn` files under `tests/` are lexer and parser inputs and future
 executable-program tests. Their `.expected` files document intended program
-output. The current compiler cannot execute them; the lexer only tokensizes
-them. Do not describe them as passing run tests.
+output. The current compiler cannot execute them; the lexer tokenizes them and
+the parser builds a syntax tree from them. Do not describe them as passing run
+tests.
 
 ## Architecture
 
@@ -48,7 +49,14 @@ them. Do not describe them as passing run tests.
 
 ## Current phase
 
-Phase 1 delivers the project skeleton, the provisional specification, the
-example programs, and the lexer. The parser, checker, code generator, and
-runtime are intentionally unimplemented. Do not add implementation code to
-`parser/`, `checker/`, `codegen/`, or `runtime/` without explicit authorization.
+Phase 1 delivered the project skeleton, the provisional specification, the
+example programs, and the lexer. Phase 2A delivered the parser and the abstract
+syntax tree. The checker, code generator, and runtime are still intentionally
+unimplemented: do not add implementation code to `checker/`, `codegen/`, or
+`runtime/` without explicit authorization, and do not begin later phases.
+
+## Roadmap
+
+The initial compiler is written in Go. The long-term goal is for Kitten to
+compile its own compiler (self-hosting). This is a direction for future design,
+not permission to add language features or phases early.
