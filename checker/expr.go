@@ -65,14 +65,20 @@ func (c *checker) checkIdentifier(identifier *parser.Identifier, scope *Scope) (
 		c.result.Symbols[identifier] = symbol
 		return symbol.Type, nil
 	}
-	if _, ok := c.functions[identifier.Name]; ok {
+	if _, ok := c.lookupFunction(identifier.Name); ok {
 		return nil, c.errorAt(InvalidExpression, identifier.At, "function %q cannot be used as a value", identifier.Name)
 	}
 	if _, ok := c.builtins[identifier.Name]; ok {
 		return nil, c.errorAt(InvalidExpression, identifier.At, "function %q cannot be used as a value", identifier.Name)
 	}
-	if _, ok := c.structs[identifier.Name]; ok {
+	if _, ok := c.lookupStruct(identifier.Name); ok {
 		return nil, c.errorAt(InvalidExpression, identifier.At, "type %q cannot be used as a value", identifier.Name)
+	}
+	if path, ok := c.privateFunction(identifier.Name); ok {
+		return nil, c.errorAt(PrivateAccess, identifier.At, "function %q is private to %s", identifier.Name, path)
+	}
+	if path, ok := c.privateStruct(identifier.Name); ok {
+		return nil, c.errorAt(PrivateAccess, identifier.At, "type %q is private to %s", identifier.Name, path)
 	}
 	return nil, c.errorAt(UndefinedName, identifier.At, "undefined name %q", identifier.Name)
 }
@@ -391,7 +397,7 @@ func (c *checker) resolveCallee(callee parser.Expr, scope *Scope) (*Function, er
 		c.result.Symbols[identifier] = symbol
 		return nil, c.errorAt(BadCall, identifier.At, "%q is a variable, not a function", identifier.Name)
 	}
-	if function, ok := c.functions[identifier.Name]; ok {
+	if function, ok := c.lookupFunction(identifier.Name); ok {
 		c.result.Symbols[identifier] = functionSymbol(function, identifier.At)
 		return function, nil
 	}
@@ -399,8 +405,14 @@ func (c *checker) resolveCallee(callee parser.Expr, scope *Scope) (*Function, er
 		c.result.Symbols[identifier] = functionSymbol(function, identifier.At)
 		return function, nil
 	}
-	if _, ok := c.structs[identifier.Name]; ok {
+	if _, ok := c.lookupStruct(identifier.Name); ok {
 		return nil, c.errorAt(BadCall, identifier.At, "type %q is not a function", identifier.Name)
+	}
+	if path, ok := c.privateFunction(identifier.Name); ok {
+		return nil, c.errorAt(PrivateAccess, identifier.At, "function %q is private to %s", identifier.Name, path)
+	}
+	if path, ok := c.privateStruct(identifier.Name); ok {
+		return nil, c.errorAt(PrivateAccess, identifier.At, "type %q is private to %s", identifier.Name, path)
 	}
 	return nil, c.errorAt(UndefinedName, identifier.At, "undefined function %q", identifier.Name)
 }

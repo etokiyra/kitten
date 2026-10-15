@@ -1,0 +1,23 @@
+public struct Rectangle {
+    int width;
+    int height;
+}
+
+public fn area(Rectangle rectangle) -> int {
+    return rectangle.width * rectangle.height;
+}
+
+public fn label() -> string {
+    return "geometry";
+}
+
+public fn width_of(Rectangle rectangle) -> int {
+    return clamped(rectangle.width);
+}
+
+private fn clamped(int value) -> int {
+    if (value < 0) {
+        return 0;
+    }
+    return value;
+}

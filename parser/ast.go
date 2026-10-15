@@ -79,6 +79,34 @@ type Program struct {
 	Declarations []Decl
 }
 
+// Module is a parsed source unit together with its identity, used when a program
+// is spread across several files.
+type Module struct {
+	// Path is the canonical identity of the module, normally its absolute file
+	// path. It is empty for a program built directly from a source string.
+	Path string
+
+	// ID distinguishes the module for code generation: 0 is the root module
+	// being compiled, and imported modules use 1, 2, 3, ... in load order.
+	ID int
+
+	// Program holds the module's parsed declarations.
+	Program *Program
+}
+
+// ImportDecl imports another module by a path relative to the importing file:
+//
+//	import "geometry.ktn";
+type ImportDecl struct {
+	At   Position
+	Path string // decoded import path, relative to the importing file
+}
+
+// Pos reports the position of the "import" keyword.
+func (d *ImportDecl) Pos() Position { return d.At }
+
+func (*ImportDecl) declNode() {}
+
 // TypeRef names a type.
 //
 // A named type has Name set and Element nil. An array type has Element set to

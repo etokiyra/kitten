@@ -27,7 +27,7 @@ import (
 
 	"kitten/checker"
 	"kitten/codegen"
-	"kitten/lexer"
+	"kitten/loader"
 	"kitten/parser"
 	"kitten/runtime"
 )
@@ -209,24 +209,15 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 // is attached to the returned error instead so it is reported once, with
 // context.
 func buildExecutable(sourcePath, outputPath string, diagnostics io.Writer) error {
-	source, err := os.ReadFile(sourcePath)
+	modules, err := loader.Load(sourcePath)
 	if err != nil {
 		return err
 	}
-
-	tokens, err := lexer.Lex(string(source))
+	checked, err := checker.CheckModules(modules)
 	if err != nil {
 		return err
 	}
-	program, err := parser.Parse(tokens)
-	if err != nil {
-		return err
-	}
-	checked, err := checker.Check(program)
-	if err != nil {
-		return err
-	}
-	cSource, err := codegen.Generate(program, checked)
+	cSource, err := codegen.Generate(modules, checked)
 	if err != nil {
 		return err
 	}
@@ -321,22 +312,48 @@ func reportError(stderr io.Writer, sourcePath string, err error) {
 	}
 
 	if position, message, ok := diagnostic(err); ok {
-		fmt.Fprintf(stderr, "%s:%d:%d: %s\n", sourcePath, position.Line, position.Column, message)
+		file := sourcePath
+		if diagnosticFile(err) != "" {
+			file = diagnosticFile(err)
+		}
+		fmt.Fprintf(stderr, "%s:%d:%d: %s\n", file, position.Line, position.Column, message)
+		return
+	}
+
+	// Errors that already name their own file, such as a loader error without a
+	// position, format themselves.
+	var loadError *loader.Error
+	if errors.As(err, &loadError) {
+		fmt.Fprintln(stderr, loadError.Error())
 		return
 	}
 
 	fmt.Fprintf(stderr, "%s: %v\n", sourcePath, err)
 }
 
-// diagnostic extracts a source position and message from a frontend error.
-func diagnostic(err error) (parser.Position, string, bool) {
-	var lexError *lexer.Error
-	if errors.As(err, &lexError) {
-		return parser.Position{Line: lexError.Line, Column: lexError.Column}, lexError.Message, true
+// diagnosticFile returns the source file an error belongs to, or "" when the
+// error does not carry one.
+func diagnosticFile(err error) string {
+	var loadError *loader.Error
+	if errors.As(err, &loadError) {
+		return loadError.Path
 	}
-	var parseError *parser.Error
-	if errors.As(err, &parseError) {
-		return parser.Position{Line: parseError.Line, Column: parseError.Column}, parseError.Message, true
+	var checkError *checker.Error
+	if errors.As(err, &checkError) {
+		return checkError.File
+	}
+	var codegenError *codegen.Error
+	if errors.As(err, &codegenError) {
+		return codegenError.File
+	}
+	return ""
+}
+
+// diagnostic extracts a source position and message from a compiler error.
+func diagnostic(err error) (parser.Position, string, bool) {
+	var loadError *loader.Error
+	if errors.As(err, &loadError) && loadError.Line > 0 {
+		return parser.Position{Line: loadError.Line, Column: loadError.Column}, loadError.Message, true
 	}
 	var checkError *checker.Error
 	if errors.As(err, &checkError) {

@@ -348,7 +348,7 @@ func (g *generator) structLiteral(expression *parser.StructLiteral) (string, err
 	if expression == nil || expression.Type == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "struct literal is missing its type"}
 	}
-	structType, ok := g.checked.StructTypes[expression.Type.Name]
+	structType, ok := g.checked.TypeRefs[expression.Type]
 	if !ok || structType == nil || structType.Struct == nil {
 		return "", &Error{Line: expression.Type.At.Line, Column: expression.Type.At.Column, Message: fmt.Sprintf("struct %q was not checked", expression.Type.Name)}
 	}
@@ -373,7 +373,7 @@ func (g *generator) structLiteral(expression *parser.StructLiteral) (string, err
 		}
 		arguments = append(arguments, rendered)
 	}
-	return fmt.Sprintf("%s(%s)", constructorName(structType.Name), strings.Join(arguments, ", ")), nil
+	return fmt.Sprintf("%s(%s)", constructorName(structType.Name, structType.Module), strings.Join(arguments, ", ")), nil
 }
 
 // callExpression renders a function call. The built-in print is expanded into a
@@ -393,6 +393,12 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 			return "", err
 		}
 		return fmt.Sprintf("%s(%s)", runtime.ArrayLengthFunction, argument), nil
+	case checker.BuiltinReadFile:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", runtime.ReadFileFunction, argument), nil
 	}
 
 	identifier, ok := expression.Callee.(*parser.Identifier)
@@ -409,7 +415,22 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		}
 		arguments = append(arguments, rendered)
 	}
-	return fmt.Sprintf("%s(%s)", functionName(identifier.Name), strings.Join(arguments, ", ")), nil
+
+	function := g.calleeFunction(identifier)
+	if function == nil {
+		return "", &Error{Line: identifier.At.Line, Column: identifier.At.Column, Message: fmt.Sprintf("function %q was not resolved", identifier.Name)}
+	}
+	return fmt.Sprintf("%s(%s)", functionName(identifier.Name, function.Module), strings.Join(arguments, ", ")), nil
+}
+
+// calleeFunction returns the resolved user function for a call's callee
+// identifier, or nil when the callee is a built-in or was not resolved.
+func (g *generator) calleeFunction(identifier *parser.Identifier) *checker.Function {
+	symbol := g.checked.Symbols[identifier]
+	if symbol == nil || symbol.Function == nil || symbol.Function.Builtin != checker.NotBuiltin {
+		return nil
+	}
+	return symbol.Function
 }
 
 // builtinKind reports which built-in function a callee resolves to, or

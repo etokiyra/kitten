@@ -304,6 +304,13 @@ fn main() {
 // compiler diagnostics.
 func runCompiledProgram(t *testing.T, source string) (string, string, int) {
 	t.Helper()
+	return runCompiledProgramInDir(t, source, "")
+}
+
+// runCompiledProgramInDir is runCompiledProgram with an explicit working
+// directory for the executed program, used by file-I/O tests.
+func runCompiledProgramInDir(t *testing.T, source, workingDirectory string) (string, string, int) {
+	t.Helper()
 
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "program.ktn")
@@ -321,6 +328,7 @@ func runCompiledProgram(t *testing.T, source string) (string, string, int) {
 	}
 
 	command := exec.Command(executablePath)
+	command.Dir = workingDirectory
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -714,4 +722,139 @@ func temporaryBuildDirectories(t *testing.T) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func TestModuleFixtureEndToEnd(t *testing.T) {
+	requireToolchain(t)
+
+	sourcePath := filepath.Join("..", "..", "tests", "modules", "main.ktn")
+	expectedPath := filepath.Join("..", "..", "tests", "modules", "main.expected")
+	expected, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", expectedPath, err)
+	}
+
+	stdout, diagnostics, exitCode := compileAndRunFile(t, sourcePath)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	if stdout != string(expected) {
+		t.Errorf("output mismatch\n got: %q\nwant: %q", stdout, string(expected))
+	}
+	if warnings := strings.TrimSpace(diagnostics); warnings != "" {
+		t.Errorf("C compiler diagnostics:\n%s", warnings)
+	}
+}
+
+func TestMultiModuleProgramInTemporaryProject(t *testing.T) {
+	requireToolchain(t)
+
+	project := t.TempDir()
+	writeSource(t, filepath.Join(project, "lib.ktn"), "public fn value() -> int {\n    return 42;\n}\n")
+	writeSource(t, filepath.Join(project, "sub", "helper.ktn"), "import \"../lib.ktn\";\npublic fn doubled() -> int {\n    return value() * 2;\n}\n")
+	mainPath := writeSource(t, filepath.Join(project, "main.ktn"), "import \"sub/helper.ktn\";\nfn main() {\n    print(doubled());\n}\n")
+
+	// Build and run with a working directory unrelated to the project, to prove
+	// resolution is relative to the sources rather than the current directory.
+	executablePath := filepath.Join(t.TempDir(), "program")
+	var diagnostics bytes.Buffer
+	if err := buildExecutable(mainPath, executablePath, &diagnostics); err != nil {
+		t.Fatalf("building: %v\n%s", err, diagnostics.String())
+	}
+	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+		t.Fatalf("C compiler diagnostics:\n%s", warnings)
+	}
+
+	command := exec.Command(executablePath)
+	command.Dir = t.TempDir()
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if string(output) != "84\n" {
+		t.Errorf("output = %q, want %q", output, "84\n")
+	}
+}
+
+func TestReadFileNative(t *testing.T) {
+	requireToolchain(t)
+
+	directory := t.TempDir()
+	writeSource(t, filepath.Join(directory, "data.txt"), "alpha\nbeta\n")
+	writeSource(t, filepath.Join(directory, "empty.txt"), "")
+
+	source := `fn main() {
+    string data = read_file("data.txt");
+    print(data == "alpha\nbeta\n");
+    print(data);
+    print("[" + read_file("empty.txt") + "]");
+}
+`
+	stdout, _, exitCode := runCompiledProgramInDir(t, source, directory)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "true\nalpha\nbeta\n\n[]\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+func TestReadFileMissingIsFatal(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    print(read_file("missing.txt"));
+}
+`
+	stdout, stderr, exitCode := runCompiledProgramInDir(t, source, t.TempDir())
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "cannot open") {
+		t.Errorf("stderr = %q, want a read_file failure message", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want no output", stdout)
+	}
+}
+
+func TestModuleMissingImportIsReported(t *testing.T) {
+	directory := t.TempDir()
+	mainPath := writeSource(t, filepath.Join(directory, "main.ktn"), "import \"nope.ktn\";\nfn main() {\n}\n")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"build", mainPath, "-o", filepath.Join(directory, "out")}, &stdout, &stderr); code != exitFailure {
+		t.Fatalf("exit = %d, want %d", code, exitFailure)
+	}
+	if !strings.Contains(stderr.String(), "nope.ktn") {
+		t.Errorf("stderr %q does not name the missing module", stderr.String())
+	}
+}
+
+func TestModuleWithoutEntryPointIsRejected(t *testing.T) {
+	directory := t.TempDir()
+	writeSource(t, filepath.Join(directory, "lib.ktn"), "public fn value() -> int {\n    return 1;\n}\n")
+	mainPath := writeSource(t, filepath.Join(directory, "main.ktn"), "import \"lib.ktn\";\nfn helper() {\n}\n")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"build", mainPath, "-o", filepath.Join(directory, "out")}, &stdout, &stderr); code != exitFailure {
+		t.Fatalf("exit = %d, want %d", code, exitFailure)
+	}
+	if !strings.Contains(stderr.String(), "no entry point") {
+		t.Errorf("stderr %q does not mention the missing entry point", stderr.String())
+	}
+}
+
+// writeSource writes a file, creating parent directories, and returns its path.
+func writeSource(t *testing.T, path, content string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("creating directory for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+	return path
 }

@@ -25,14 +25,17 @@ Project instructions for everyone (human or AI) working on Kitten.
 The `.ktn` files under `tests/` are end-to-end tests: the lexer tokenizes them,
 the parser builds a syntax tree, the checker validates them, the code generator
 emits C, and the native executable's output is compared byte-for-byte with the
-matching `.expected` file. Keep the `.expected` files in sync with actual,
-verified program output; never edit them to match buggy behavior.
+matching `.expected` file. Some fixtures are multi-file: `tests/modules/` has a
+root file with imports; add the matching `.expected` next to the root file. Keep
+the `.expected` files in sync with actual, verified program output; never edit
+them to match buggy behavior.
 
 ## Architecture
 
-7. Keep lexer, parser, checker, code generator, and runtime concerns separated
-   into their own packages: `lexer`, `parser`, `checker`, `codegen`, `runtime`.
-   A package must not reach into another phase's responsibilities.
+7. Keep lexer, parser, loader, checker, code generator, and runtime concerns
+   separated into their own packages: `lexer`, `parser`, `loader`, `checker`,
+   `codegen`, `runtime`. A package must not reach into another phase's
+   responsibilities.
 8. Keep the compiler's architecture easy to test and extend. Prefer clear
    interfaces and table-driven tests over clever or tightly coupled code.
 9. Use descriptive identifiers. Avoid unexplained single-letter variable names.
@@ -58,18 +61,21 @@ delivered the C code generator, the C runtime, and native compilation through
 concatenation with `+` and `+=`, and content-based equality, over the existing
 NUL-terminated representation. Phase 3B delivered dynamic arrays: typed array
 declarations, `new Element[length]` creation, bounds-checked indexing,
-`length`, and GC-managed reference semantics.
+`length`, and GC-managed reference semantics. Phase 3C delivered file I/O
+(`read_file`), a module system with `import`, cross-module visibility, and
+multi-file compilation.
 
-Self-hosting, a native backend, maps, imports/modules, file I/O, and the
-standard library are still intentionally unimplemented: do not start them
-without explicit authorization.
+Self-hosting, a native backend, maps, a complete standard library, and file
+writing are still intentionally unimplemented: do not start them without
+explicit authorization.
 
 ## Roadmap
 
 1. Go-based compiler frontend and C backend. **Done** (Phases 1–2C).
 2. A working, tested native compiler for the current language, including the
    language foundations self-hosting needs. **In progress** (Phase 3A added
-   dynamic strings; Phase 3B added dynamic arrays).
+   dynamic strings; Phase 3B added dynamic arrays; Phase 3C added file I/O and
+   modules).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

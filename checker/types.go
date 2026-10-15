@@ -48,6 +48,10 @@ type Type struct {
 
 	// Element is non-nil when Kind is KindArray and holds the element type.
 	Element *Type
+
+	// Module is the ID of the module that declared this struct type. It is 0
+	// for primitive and array types, and for a struct in the root module.
+	Module int
 }
 
 // String returns the type's source name.

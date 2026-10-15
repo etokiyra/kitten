@@ -44,6 +44,9 @@ const (
 
 	// BuiltinLength returns the length of an array.
 	BuiltinLength
+
+	// BuiltinReadFile reads a whole file into a string.
+	BuiltinReadFile
 )
 
 // Function is a resolved function signature, either user-defined or built-in.
@@ -59,6 +62,10 @@ type Function struct {
 
 	// ReturnType is the declared return type, or void when none was written.
 	ReturnType *Type
+
+	// Module is the ID of the module that declared this function. It is 0 for a
+	// function in the root module and for a built-in.
+	Module int
 
 	// Builtin identifies a language provided function, or NotBuiltin.
 	Builtin BuiltinKind

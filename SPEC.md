@@ -56,8 +56,9 @@ formatter, test runner, language server, third-party libraries).
   language grows.
 - Whitespace, including newlines, separates tokens and is otherwise
   insignificant. See Section 8.
-- Whether a single file may contain multiple modules or whether modules span
-  files is **deferred**. Nothing in this revision depends on module structure.
+- Whether a single file may contain multiple modules is **no**: one source file
+  is one module. Whether a module may span several files is also **no** in this
+  revision. Modules may import one another (Section 22).
 
 ---
 
@@ -107,7 +108,7 @@ Recognized token kinds (implementation names):
 | Names | `Ident` |
 | Literals | `Int`, `Float`, `String` |
 | Boolean literals | `True`, `False` |
-| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Public`, `Private` |
+| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Import`, `Public`, `Private` |
 | Type names | `TypeInt`, `TypeFloat`, `TypeBool`, `TypeString`, `TypeVoid` |
 | Operators | `Plus`, `Minus`, `Star`, `Slash`, `Percent`, `Assign`, `Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `And`, `Or`, `Not`, `Inc`, `Dec`, `PlusAssign`, `MinusAssign`, `Arrow` |
 | Punctuation | `LParen`, `RParen`, `LBrace`, `RBrace`, `LBracket`, `RBracket`, `Comma`, `Dot`, `Semicolon`, `Colon` |
@@ -140,7 +141,7 @@ identifiers:
 
 ```text
 struct if else while for return
-fn new public private
+fn new import public private
 int float bool string void
 true false
 ```
@@ -163,9 +164,11 @@ Section 18.6: both are accepted and mean the same thing.
 `var` is **not** a keyword. Variables are declared with an explicit type
 (Section 10).
 
-`public` and `private` are visibility modifiers. Where they are required, what
-they default to, and which declarations they apply to are **deferred**
-(Section 16).
+`public` and `private` are visibility modifiers for top-level `fn` and `struct`
+declarations. A declaration is visible to other modules only when it is marked
+`public`; the default is `private`, so a declaration without a modifier is
+visible only within its own module. Struct fields and local variables do not
+take modifiers. See Section 22.
 
 ---
 
@@ -296,11 +299,11 @@ fn add(int left, int right) -> int {
   `return;` is valid only in a function that returns no value, and
   `return value;` requires an exact type match with the declared return type
   (Section 18.6).
-- Visibility modifiers `public` and `private` may appear on function
-  declarations. Their exact placement, defaults, and effect are **deferred**.
-  Provisionally (Section 17), the parser accepts a single optional modifier
-  before a top-level `fn` or `struct`; it does not accept modifiers on struct
-  fields or local variables.
+- Visibility modifiers `public` and `private` may appear before a top-level `fn`
+  or `struct`. `public` makes the declaration visible to other modules; the
+  default is private, so an unmarked declaration is visible only within its own
+  module (Section 22). Modifiers are not accepted on struct fields or local
+  variables.
 - Function overloading, method semantics, default arguments, and variadic
   parameters are **deferred**.
 
@@ -467,9 +470,10 @@ one per phase:
 | --- | --- | --- |
 | `lexer` | Source text → tokens | Implemented (Phase 1) |
 | `parser` | Tokens → syntax tree | Implemented (Phase 2A) |
+| `loader` | Source files → parsed modules, resolving imports | Implemented (Phase 3C) |
 | `checker` | Semantic analysis and type checking | Implemented (Phase 2B) |
-| `codegen` | Checked tree → C source | Implemented (Phase 2C) |
-| `runtime` | C runtime: GC initialization, allocation, print, string equality | Implemented (Phase 2C) |
+| `codegen` | Checked modules → C source | Implemented (Phase 2C) |
+| `runtime` | C runtime: GC initialization, allocation, strings, arrays, file reads, print | Implemented (Phase 2C) |
 
 Supporting layout:
 
@@ -478,10 +482,10 @@ Supporting layout:
 - `tests/` — `.ktn` programs and matching `.expected` output files. They are
   compiled and executed by the end-to-end tests.
 
-Pipeline: source → lexer → parser → checker → C code generator → C
-compiler/linker → link with Boehm GC → native executable. All stages are
-implemented for the host platform. See Section 19 for the compilation model and
-its limitations.
+Pipeline: root source → loader (file access, parsing, import resolution) →
+checker (all modules) → C code generator → C compiler/linker → link with Boehm
+GC → native executable. All stages are implemented for the host platform. See
+Section 19 for the compilation model and Section 22 for modules.
 
 Phase boundaries are strict: a package must not take on another phase's
 responsibility, and later phases are not started without explicit authorization.
@@ -520,15 +524,15 @@ outcome here.
 
 **Visibility and declarations**
 
-- Default visibility for top-level declarations and struct members. The parser
-  and checker accept `public`/`private` on top-level `fn` and `struct`
-  (Section 17.4), but the checker gives visibility no semantic effect yet; it is
-  recorded and ignored.
+- Default visibility for top-level declarations is **private** (module-local);
+  `public` makes a declaration visible to other modules (Section 22). Struct
+  members do not take visibility modifiers and remain visible wherever the
+  struct type is.
 - Exactly which declarations accept `public` and `private`, and where the
-  modifier is written, beyond top-level `fn` and `struct`.
+  modifier is written: top-level `fn` and `struct` only.
 - Whether `fn main() -> void` is accepted in addition to `fn main()`: **yes**,
-  both are accepted and equivalent (Section 18.6). Entry-point requirements and
-  startup behavior remain **deferred** to the compilation phase.
+  both are accepted and equivalent (Section 18.6). The entry point must be in
+  the root module (Section 22).
 - Whether a variable initializer is mandatory: **it is optional**
   (Section 18.4). Reading an uninitialized variable is not diagnosed.
 - Whether reading an uninitialized variable should be an error.
@@ -558,10 +562,13 @@ outcome here.
 
 **Modules and program structure**
 
-- Imports and modules, including whether a file maps to a module.
+- Imports and modules: **implemented** (Section 22). A source file is one
+  module; modules import one another by relative path.
 - Entry-point requirements and program startup. The native build requires a
-  zero-parameter, void-returning `main` (Section 19); the language itself has no
-  implicit `main`, and `main` is an ordinary function to the checker.
+  zero-parameter, void-returning `main` declared in the root module
+  (Sections 19 and 22); the language itself has no implicit `main`, and `main`
+  is an ordinary function to the checker.
+- Qualified names, re-exporting, and non-transitive imports are **deferred**.
 
 **Errors, concurrency, and runtime**
 
@@ -611,8 +618,9 @@ input.
 ```text
 program          = { declaration } EOF ;
 
-declaration      = [ visibility ] ( function | struct ) ;
+declaration      = [ visibility ] ( function | struct ) | import ;
 visibility       = "public" | "private" ;
+import           = "import" STRING ";" ;
 
 function         = "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
 parameters       = parameter { "," parameter } ;
@@ -879,10 +887,10 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Two functions are provided by the language: `print` and `length`. Both are
-represented in the semantic environment rather than special-cased in expression
-checking. A user-defined top-level declaration with the same name shadows the
-built-in.
+Three functions are provided by the language: `print`, `length`, and
+`read_file`. All are represented in the semantic environment rather than
+special-cased in expression checking. A user-defined top-level declaration with
+the same name shadows the built-in.
 
 **`print`**
 
@@ -899,6 +907,15 @@ built-in.
 - Calling it with no arguments, more than one argument, or a non-array argument
   is an error.
 - Its return type is `int`, and it is not variadic.
+
+**`read_file`**
+
+- `read_file(path)` takes exactly one `string` argument and returns a `string`
+  holding the entire contents of the file at that path (Section 22.2).
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error.
+- A failed read is a fatal runtime error, not a recoverable result; see
+  Section 22.2.
 
 ### 18.9 Diagnostics
 
@@ -924,13 +941,14 @@ malformed or incomplete syntax trees.
 6. Relational operators are numeric-only; equality is primitive-only.
 7. A variable initializer is optional, and reading an uninitialized variable is
    not diagnosed.
-8. Visibility modifiers are accepted on top-level `fn` and `struct` but have no
-   semantic effect yet.
+8. Visibility modifiers are accepted on top-level `fn` and `struct`; the default
+   is private (module-local) and `public` exports a declaration (Section 22).
 9. Return-path analysis is conservative: loops never definitely return, and
    unreachable code is not diagnosed.
 10. Struct literals must initialize every field.
 11. Checker errors are fail-fast: only the first error is reported.
-12. There is no implicit `main` or entry-point check.
+12. There is no implicit `main`; the entry point is validated at build time and
+    must be in the root module (Sections 19 and 22).
 
 ---
 
@@ -991,7 +1009,7 @@ is **deferred**.
   by hand.
 - The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
   `ktn_rt_string_append`, `ktn_rt_array_new`, `ktn_rt_array_at`,
-  `ktn_rt_array_length`, and the built-in print helpers.
+  `ktn_rt_array_length`, `ktn_rt_read_file`, and the built-in print helpers.
 - Strings are pointers to bytes, so structs may still contain pointers (to
   strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1098,6 +1116,10 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     roadmap is recorded in AGENTS.md.
 12. Arrays are GC-managed references with pointer-copy assignment; elements are
     zero-initialized; access is bounds-checked at runtime (Section 21).
+13. A program may span several modules; a file is a module, imports resolve by
+    relative path, and default visibility is private (Section 22).
+14. File reading is limited to `read_file`, and a failed read is fatal
+    (Section 22.2).
 
 ---
 
@@ -1320,3 +1342,156 @@ The following are **not** implemented in this revision and must not be assumed:
    revision.
 9. Element access compiles to a single C l-value, so compound assignment and
    increment evaluate the array and index exactly once.
+
+---
+
+## 22. File I/O and modules (provisional)
+
+This section records how a Kitten program reads files and how a program can be
+split across several source files. It is **provisional**: the module model is a
+first working design and may evolve.
+
+### 22.1 Modules
+
+- One source file is one **module**. A module's identity is the canonical
+  (absolute, cleaned) path of its file.
+- A module begins with any number of **import declarations**:
+
+  ```text
+  import "geometry.ktn";
+  import "util/text.ktn";
+  ```
+
+  The path is a string literal naming a file relative to the directory of the
+  file that contains the import. Escapes in the literal are decoded as in any
+  string (Section 6.3). Imports are top-level declarations and may appear
+  anywhere among a module's declarations.
+- The module reachable from the file being compiled is the **root module**. The
+  root module and every module it imports, directly or indirectly, make up the
+  program.
+- Import declarations themselves introduce no names.
+
+### 22.2 File I/O
+
+One built-in function performs file input:
+
+- `read_file(path) -> string` reads the entire contents of the regular file at
+  `path` into a new GC-managed string. An empty file yields the empty string, so
+  an empty file is distinguishable from an error: a successful read of an empty
+  file returns `""`, while a failure terminates the program.
+- Failure is a **fatal runtime error**, not a recoverable result: a missing or
+  unreadable file, a path that is not a seekable regular file, a file larger
+  than the runtime's maximum read size (256 MiB), or a read error prints a
+  message on standard error and exits with a nonzero status. This is a
+  deliberate limitation: the type system has no result or optional type, so
+  recoverable I/O errors cannot be represented cleanly yet.
+- The file is always closed, including on failure paths.
+- The returned string is NUL-terminated. Because strings cannot contain an
+  embedded NUL byte (Section 20.1), content after the first NUL byte in the file
+  is not represented. Non-UTF-8 bytes are otherwise preserved as byte
+  sequences.
+- The string is a snapshot of the file at the time of the read. If the file
+  changes while it is being read, the result is the bytes read up to the
+  originally observed size.
+
+Writing, directory traversal, and other filesystem operations are **not**
+implemented.
+
+### 22.3 Visibility and name resolution
+
+- A top-level `fn` or `struct` is visible to other modules only when it is
+  marked `public`. The default is **private**: an unmarked declaration is
+  visible only within its own module. Struct fields and local variables do not
+  take visibility modifiers.
+- Within a module, a name resolves against the module's own declarations first
+  (its private and public declarations), then against the public declarations of
+  all modules in the program, then against the built-ins.
+- The public declarations of all loaded modules form one shared namespace, so a
+  public declaration is visible to every module, including transitively imported
+  ones.
+- Two modules may each declare a private declaration with the same name; private
+  names are module-local and do not conflict. Two modules may **not** declare
+  public declarations with the same name: that is a duplicate-declaration error
+  that names both modules.
+- Referencing a name that is declared privately in another module is a
+  **private access** error that names the module that declared it.
+
+### 22.4 Import resolution and the resolution root
+
+- Import paths are resolved relative to the directory of the file that contains
+  the import, then canonicalized.
+- The **resolution root** is the directory of the root source file. An import
+  whose canonical path lies outside that directory (for example `../outside.ktn`
+  from the root) is rejected with an error. This keeps a program's sources
+  inside the directory the compilation was started from.
+- Resolution does not depend on the current working directory, only on the root
+  file's location.
+- A module is loaded at most once, keyed by its canonical path, so importing the
+  same file through different relative paths loads it once.
+
+### 22.5 Import cycles
+
+Import cycles are **allowed**. Because the loader records a module before
+loading its imports and because name resolution is order-independent, two
+modules may import each other. Mutual recursion between modules is therefore
+supported.
+
+### 22.6 Multi-file compilation
+
+- The compiler loads the root module, then its imports, and checks every module
+  together.
+- Declarations from every module are emitted into one C translation unit.
+- To prevent private declarations in different modules from colliding in C,
+  imported modules mangle top-level names with their module number: a
+  root-module function `f` becomes `ktn_fn_f`, and the same name in imported
+  module 1 becomes `ktn_fn_1_f`. Struct types use `ktn_s_1_F` and constructors
+  `ktn_new_1_F`. Because a Kitten identifier cannot begin with a digit, a
+  mangled imported name can never collide with a root-module name, and distinct
+  module numbers keep imported modules distinct. Local variables, parameters,
+  and struct fields are not mangled.
+- Single-file programs are unaffected: the root module has no prefix, so their
+  generated C is unchanged.
+
+### 22.7 Entry point
+
+- An executable program must declare a zero-parameter, void-returning `main` in
+  its **root module**. Imported modules are never entry points, even if they
+  declare a `main`.
+- A missing or malformed entry point is rejected at build time with a
+  diagnostic; the compiler never invents a `main`.
+
+### 22.8 Command line
+
+`kitten build <file.ktn> [-o <output>]` and `kitten run <file.ktn>` are
+unchanged in shape. `<file.ktn>` is the root module; imported modules are found
+relative to it. Diagnostics name the file an error was found in, with a
+line and column where the error is inside a source file.
+
+### 22.9 Deferred module and I/O features
+
+The following are **not** implemented and must not be assumed:
+
+- Qualified or namespaced references to imported declarations; imported names
+  are unqualified.
+- Selective imports, aliases, and re-exporting.
+- Search paths, package manifests, and dependency resolution beyond relative
+  paths.
+- Writing files, directory listing, file metadata, and other filesystem
+  operations.
+- Recoverable I/O errors (they require a result or optional type).
+- Separate compilation or incremental builds; the whole program is reloaded and
+  recompiled each time.
+- Compiled module caching.
+
+### 22.10 Provisional decisions recorded
+
+1. A file is a module; a module is identified by its canonical path.
+2. Import syntax is `import "relative/path";`, resolved relative to the
+   importing file and restricted to the root source's directory.
+3. Imports are transitive: public declarations form one shared namespace.
+4. Default visibility is private; `public` exports a declaration.
+5. Import cycles are allowed.
+6. Imported modules mangle top-level C names with their module number.
+7. The entry point must be in the root module.
+8. `read_file` is fatal on failure; recoverable I/O errors are deferred.
+9. The whole program is loaded and compiled together, with no caching.

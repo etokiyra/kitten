@@ -98,6 +98,30 @@ void *ktn_rt_array_at(const ktn_array *array, int64_t index);
 int64_t ktn_rt_array_length(const ktn_array *array);
 
 /*
+ * The largest file, in bytes, that ktn_rt_read_file will read. Larger files are
+ * rejected instead of allocated, so a program cannot be made to allocate an
+ * unbounded buffer from a file on disk.
+ */
+#define KTN_RT_MAX_FILE_SIZE ((size_t)256 * 1024 * 1024)
+
+/*
+ * Reads the entire contents of the regular file at path into a new,
+ * GC-managed, NUL-terminated string and returns it. An empty file yields the
+ * empty string.
+ *
+ * The path is a Kitten string. Failure is fatal: a missing or unreadable file,
+ * a path that is not a seekable regular file, a file larger than
+ * KTN_RT_MAX_FILE_SIZE, or a read error terminates the program with a message
+ * on standard error and a nonzero exit status. The file is always closed.
+ *
+ * Because strings are NUL-terminated, content after the first NUL byte in the
+ * file is not represented. The returned string is a snapshot of the file at the
+ * time of the read; if the file shrinks while it is being read, fewer bytes are
+ * returned.
+ */
+const char *ktn_rt_read_file(const char *path);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

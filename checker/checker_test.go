@@ -2,6 +2,7 @@ package checker
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1103,7 +1104,7 @@ fn main() {
 	}
 
 	// Expression types, reached by walking the AST.
-	mainFunction := result.Program.Declarations[1].(*parser.FunctionDecl)
+	mainFunction := result.Modules[0].Program.Declarations[1].(*parser.FunctionDecl)
 	declaration := mainFunction.Body.Statements[0].(*parser.VarDeclStmt)
 	call := declaration.Initializer.(*parser.CallExpr)
 	if result.ExpressionTypes[call] != IntType {
@@ -1298,4 +1299,201 @@ func TestMalformedProgramsReturnErrorsNotPanics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// modulesFromSources parses each source into a module, numbered by its position.
+func modulesFromSources(t *testing.T, sources ...string) []*parser.Module {
+	t.Helper()
+
+	modules := make([]*parser.Module, 0, len(sources))
+	for index, source := range sources {
+		tokens, err := lexer.Lex(source)
+		if err != nil {
+			t.Fatalf("lexing module %d: %v", index, err)
+		}
+		program, err := parser.Parse(tokens)
+		if err != nil {
+			t.Fatalf("parsing module %d: %v", index, err)
+		}
+		modules = append(modules, &parser.Module{
+			Path:    fmt.Sprintf("module%d.ktn", index),
+			ID:      index,
+			Program: program,
+		})
+	}
+	return modules
+}
+
+func assertModulesOK(t *testing.T, sources ...string) *Result {
+	t.Helper()
+
+	result, err := CheckModules(modulesFromSources(t, sources...))
+	if err != nil {
+		t.Fatalf("CheckModules returned unexpected error: %v", err)
+	}
+	return result
+}
+
+func assertModuleError(t *testing.T, kind ErrorKind, contains string, sources ...string) *Error {
+	t.Helper()
+
+	_, err := CheckModules(modulesFromSources(t, sources...))
+	if err == nil {
+		t.Fatalf("CheckModules succeeded, want %s", kind)
+	}
+	var checkError *Error
+	if !errors.As(err, &checkError) {
+		t.Fatalf("error is %T (%v), want *checker.Error", err, err)
+	}
+	if checkError.Kind != kind {
+		t.Errorf("error kind = %s, want %s (%v)", checkError.Kind, kind, checkError)
+	}
+	if contains != "" && !strings.Contains(checkError.Message, contains) {
+		t.Errorf("message %q does not contain %q", checkError.Message, contains)
+	}
+	return checkError
+}
+
+func TestModulesResolvePublicDeclarations(t *testing.T) {
+	result := assertModulesOK(t,
+		`fn main() {
+    Rectangle room = Rectangle { width = 3, height = 4 };
+    print(label(), area(room));
+}
+`,
+		`public struct Rectangle {
+    int width;
+    int height;
+}
+public fn label() -> string {
+    return "lib";
+}
+public fn area(Rectangle rectangle) -> int {
+    return rectangle.width * rectangle.height;
+}
+`,
+	)
+
+	// The root module's by-name view sees the imported public declarations.
+	if result.StructTypes["Rectangle"] == nil {
+		t.Errorf("Rectangle is not visible to the root module")
+	}
+	if result.Functions["area"] == nil {
+		t.Errorf("area is not visible to the root module")
+	}
+	if len(result.Modules) != 2 {
+		t.Errorf("result has %d modules, want 2", len(result.Modules))
+	}
+}
+
+func TestModuleUsesItsOwnPrivateDeclarations(t *testing.T) {
+	assertModulesOK(t,
+		`fn main() {
+    print(helper());
+}
+private fn helper() -> int {
+    return 1;
+}
+`,
+	)
+}
+
+func TestModulePrivateNamesDoNotCollideAcrossModules(t *testing.T) {
+	// Two modules may each declare their own private helper with different
+	// signatures, because private names are module-local.
+	assertModulesOK(t,
+		`fn main() {
+    print(helper());
+}
+private fn helper() -> int {
+    return 1;
+}
+`,
+		`private fn helper() -> string {
+    return "other";
+}
+`,
+	)
+}
+
+func TestModulePublicFunctionCallsAnotherModule(t *testing.T) {
+	assertModulesOK(t,
+		`import "lib.ktn";
+fn main() {
+    print(combined());
+}
+`,
+		`public fn combined() -> int {
+    return base() + extra();
+}
+public fn base() -> int {
+    return 2;
+}
+private fn extra() -> int {
+    return 3;
+}
+`,
+	)
+}
+
+func TestModulePrivateFunctionAccessIsRejected(t *testing.T) {
+	checkError := assertModuleError(t, PrivateAccess, "private to", `fn main() {
+    print(secret());
+}
+`,
+		`private fn secret() -> int {
+    return 1;
+}
+`,
+	)
+	if checkError.File != "module0.ktn" {
+		t.Errorf("error file = %q, want module0.ktn", checkError.File)
+	}
+}
+
+func TestModulePrivateTypeAccessIsRejected(t *testing.T) {
+	assertModuleError(t, PrivateAccess, "private to", `fn main() {
+    Hidden hidden = Hidden { value = 1 };
+    print(hidden.value);
+}
+`,
+		`private struct Hidden {
+    int value;
+}
+`,
+	)
+}
+
+func TestModuleDuplicatePublicDeclarationIsRejected(t *testing.T) {
+	assertModuleError(t, DuplicateDeclaration, "duplicate public declaration", `fn main() {
+    print(shared());
+}
+`,
+		`public fn shared() -> int {
+    return 1;
+}
+`,
+		`public fn shared() -> int {
+    return 2;
+}
+`,
+	)
+}
+
+func TestModuleUndefinedNameIsRejected(t *testing.T) {
+	assertModuleError(t, UndefinedName, "undefined function", `fn main() {
+    print(nowhere());
+}
+`,
+	)
+}
+
+func TestModuleLocalDuplicateIsRejected(t *testing.T) {
+	assertModuleError(t, DuplicateDeclaration, "duplicate declaration", `fn main() {
+}
+fn main() {
+    print(1);
+}
+`,
+	)
 }

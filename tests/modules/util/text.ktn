@@ -1,0 +1,9 @@
+import "../geometry.ktn";
+
+public fn describe(string name) -> string {
+    return decorate(label() + "/" + name);
+}
+
+private fn decorate(string text) -> string {
+    return "[" + text + "]";
+}

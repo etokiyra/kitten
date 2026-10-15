@@ -6,13 +6,16 @@
 // provides:
 //
 //   - garbage-collector initialization and managed allocation, backed by the
-//     Boehm-Demers-Weiser conservative collector; and
-//   - helpers for the built-in print function and for string value equality.
+//     Boehm-Demers-Weiser conservative collector;
+//   - string operations: value equality, concatenation, and append;
+//   - dynamic arrays: allocation, bounds-checked element access, and length;
+//   - whole-file reading; and
+//   - helpers for the built-in print function.
 //
 // HeaderSource and Source return the embedded C sources; the compiler writes
 // them alongside generated code and compiles them together. The package
 // performs no compilation or execution itself.
 //
-// The runtime is intentionally minimal. Dynamic strings, string concatenation,
-// arrays, exceptions, and other runtime features are not implemented.
+// The runtime is intentionally minimal. Maps, exceptions, finalizers, and file
+// writing are not implemented.
 package runtime

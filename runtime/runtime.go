@@ -49,6 +49,9 @@ const (
 	// ArrayLengthFunction returns the number of elements in an array.
 	ArrayLengthFunction = "ktn_rt_array_length"
 
+	// ReadFileFunction reads a whole file into a new string.
+	ReadFileFunction = "ktn_rt_read_file"
+
 	// PrintIntFunction, PrintFloatFunction, PrintBoolFunction, and
 	// PrintStringFunction write one value of the corresponding primitive type.
 	PrintIntFunction    = "ktn_rt_print_int"

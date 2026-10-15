@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func generateSource(t *testing.T, source string) string {
 	if err != nil {
 		t.Fatalf("checking: %v", err)
 	}
-	generated, err := Generate(program, checked)
+	generated, err := Generate([]*parser.Module{{ID: 0, Program: program}}, checked)
 	if err != nil {
 		t.Fatalf("generating: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestEntryPointErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("checking: %v", err)
 			}
-			_, err = Generate(program, checked)
+			_, err = Generate([]*parser.Module{{ID: 0, Program: program}}, checked)
 			if err == nil {
 				t.Fatalf("Generate succeeded, want an error")
 			}
@@ -403,10 +404,32 @@ func emptyResult() *checker.Result {
 	return &checker.Result{
 		Functions:       map[string]*checker.Function{},
 		StructTypes:     map[string]*checker.Type{},
+		FunctionDecls:   map[*parser.FunctionDecl]*checker.Function{},
+		StructDecls:     map[*parser.StructDecl]*checker.Type{},
 		ExpressionTypes: map[parser.Expr]*checker.Type{},
 		TypeRefs:        map[*parser.TypeRef]*checker.Type{},
 		Symbols:         map[*parser.Identifier]*checker.Symbol{},
 	}
+}
+
+// resultForMain builds a checker result that registers the declarations of a
+// hand-built program, so code generation proceeds far enough to reach the
+// malformed syntax the test is exercising.
+func resultForMain(program *parser.Program) *checker.Result {
+	result := emptyResult()
+	for _, declaration := range program.Declarations {
+		switch d := declaration.(type) {
+		case *parser.FunctionDecl:
+			result.FunctionDecls[d] = &checker.Function{Name: d.Name, ReturnType: checker.VoidType}
+		case *parser.StructDecl:
+			result.StructDecls[d] = &checker.Type{
+				Kind:   checker.KindStruct,
+				Name:   d.Name,
+				Struct: &checker.StructInfo{Name: d.Name, FieldIndex: map[string]*checker.StructField{}},
+			}
+		}
+	}
+	return result
 }
 
 func TestGenerateRejectsMalformedTrees(t *testing.T) {
@@ -480,10 +503,9 @@ func TestGenerateRejectsMalformedTrees(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			checked := testCase.checked
 			if checked == nil {
-				checked = emptyResult()
-				checked.Functions["main"] = &checker.Function{Name: "main", ReturnType: checker.VoidType}
+				checked = resultForMain(testCase.program)
 			}
-			if _, err := Generate(testCase.program, checked); err == nil {
+			if _, err := Generate([]*parser.Module{{ID: 0, Program: testCase.program}}, checked); err == nil {
 				t.Fatalf("Generate succeeded, want an error")
 			}
 		})
@@ -526,5 +548,136 @@ func TestCStringLiteral(t *testing.T) {
 				t.Errorf("cStringLiteral(%q) = %q, want %q", testCase.input, got, testCase.want)
 			}
 		})
+	}
+}
+
+// generateModules parses each source into a module, checks them together, and
+// generates C.
+func generateModules(t *testing.T, sources ...string) (string, error) {
+	t.Helper()
+
+	modules := make([]*parser.Module, 0, len(sources))
+	for index, source := range sources {
+		tokens, err := lexer.Lex(source)
+		if err != nil {
+			t.Fatalf("lexing module %d: %v", index, err)
+		}
+		program, err := parser.Parse(tokens)
+		if err != nil {
+			t.Fatalf("parsing module %d: %v", index, err)
+		}
+		modules = append(modules, &parser.Module{
+			Path:    fmt.Sprintf("module%d.ktn", index),
+			ID:      index,
+			Program: program,
+		})
+	}
+	checked, err := checker.CheckModules(modules)
+	if err != nil {
+		t.Fatalf("checking: %v", err)
+	}
+	return Generate(modules, checked)
+}
+
+func TestModuleNamesAreMangled(t *testing.T) {
+	generated, err := generateModules(t,
+		`fn main() {
+    Point point = Point { x = 1 };
+    print(scale(point), helper());
+}
+`,
+		`public struct Point {
+    int x;
+}
+public fn scale(Point point) -> int {
+    return point.x * factor();
+}
+public fn helper() -> int {
+    return factor();
+}
+private fn factor() -> int {
+    return 2;
+}
+`,
+	)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+
+	// Root-module names keep their plain form.
+	assertContains(t, generated, "void ktn_fn_main(void)")
+	// Imported declarations are prefixed with the module ID.
+	assertContains(t, generated, "ktn_s_1_Point")
+	assertContains(t, generated, "ktn_new_1_Point")
+	assertContains(t, generated, "ktn_fn_1_scale")
+	assertContains(t, generated, "ktn_fn_1_helper")
+	assertContains(t, generated, "ktn_fn_1_factor")
+}
+
+func TestPrivateNamesAcrossModulesDoNotCollideInC(t *testing.T) {
+	generated, err := generateModules(t,
+		`fn main() {
+    print(helper());
+}
+private fn helper() -> int {
+    return 1;
+}
+`,
+		`private fn helper() -> string {
+    return "other";
+}
+`,
+	)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	assertContains(t, generated, "int64_t ktn_fn_helper(void)")
+	assertContains(t, generated, "const char * ktn_fn_1_helper(void)")
+}
+
+func TestEntryPointMustBeInTheRootModule(t *testing.T) {
+	_, err := generateModules(t,
+		`fn helper() -> int {
+    return 1;
+}
+`,
+		`public fn main() {
+}
+`,
+	)
+	if err == nil {
+		t.Fatalf("Generate succeeded, want a missing-entry-point error")
+	}
+	if !strings.Contains(err.Error(), "no entry point") {
+		t.Errorf("error %q does not mention the entry point", err.Error())
+	}
+}
+
+func TestMultiModuleGenerationIsDeterministic(t *testing.T) {
+	sources := []string{
+		`fn main() {
+    Point point = Point { x = 2 };
+    print(scale(point));
+}
+`,
+		`public struct Point {
+    int x;
+}
+public fn scale(Point point) -> int {
+    return point.x * 3;
+}
+`,
+	}
+
+	first, err := generateModules(t, sources...)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	second, err := generateModules(t, sources...)
+	if err != nil {
+		t.Fatalf("generating: %v", err)
+	}
+	if first != second {
+		t.Errorf("multi-module generation is not deterministic")
 	}
 }

@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strconv"
 
 	"kitten/checker"
 	"kitten/parser"
@@ -23,21 +24,40 @@ const (
 	objectName = "ktn_object"
 )
 
-// functionName maps a Kitten function name to its C identifier.
-func functionName(name string) string { return functionPrefix + name }
+// modulePrefix returns the C name prefix for a module. The root module (ID 0)
+// has no prefix, so single-module programs generate the same names as before.
+// Imported modules use "<id>_"; because a Kitten identifier cannot begin with a
+// digit, a mangled imported name can never collide with a root-module name, and
+// distinct IDs keep imported modules distinct.
+func modulePrefix(module int) string {
+	if module <= 0 {
+		return ""
+	}
+	return strconv.Itoa(module) + "_"
+}
+
+// functionName maps a Kitten function name in a module to its C identifier.
+func functionName(name string, module int) string {
+	return functionPrefix + modulePrefix(module) + name
+}
 
 // variableName maps a Kitten variable or parameter name to its C identifier.
+// Local names are not module-scoped, so they are not mangled.
 func variableName(name string) string { return variablePrefix + name }
 
-// structName maps a Kitten struct name to its C struct type name.
-func structName(name string) string { return structPrefix + name }
+// structName maps a Kitten struct name in a module to its C struct type name.
+func structName(name string, module int) string {
+	return structPrefix + modulePrefix(module) + name
+}
 
 // fieldName maps a Kitten struct field name to its C member name.
 func fieldName(name string) string { return fieldPrefix + name }
 
-// constructorName maps a Kitten struct name to the name of the function that
-// allocates and initializes one instance.
-func constructorName(name string) string { return constructorPrefix + name }
+// constructorName maps a Kitten struct name in a module to the name of the
+// function that allocates and initializes one instance.
+func constructorName(name string, module int) string {
+	return constructorPrefix + modulePrefix(module) + name
+}
 
 // argumentName maps a struct field name to the parameter name used in the
 // generated constructor.
@@ -69,7 +89,7 @@ func cType(kittenType *checker.Type) (string, error) {
 	case kittenType.Kind == checker.KindArray:
 		return "ktn_array *", nil
 	case kittenType.Kind == checker.KindStruct:
-		return structName(kittenType.Name) + " *", nil
+		return structName(kittenType.Name, kittenType.Module) + " *", nil
 	default:
 		return "", fmt.Errorf("unsupported type %q", kittenType)
 	}

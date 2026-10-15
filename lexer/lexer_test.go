@@ -71,6 +71,7 @@ func TestKeywords(t *testing.T) {
 		{"return", Return},
 		{"fn", Fn},
 		{"new", New},
+		{"import", Import},
 		{"public", Public},
 		{"private", Private},
 	}
@@ -492,6 +493,46 @@ func TestEveryFixtureLexes(t *testing.T) {
 			}
 			if last := tokens[len(tokens)-1]; last.Kind != EOF {
 				t.Errorf("Lex(%s) ended with %v, want EOF", path, last)
+			}
+		})
+	}
+}
+
+func TestDecodeString(t *testing.T) {
+	cases := []struct {
+		name    string
+		literal string
+		want    string
+		wantErr bool
+	}{
+		{name: "plain", literal: `"hello"`, want: "hello"},
+		{name: "empty", literal: `""`, want: ""},
+		{name: "spaces", literal: `"hello, kitten"`, want: "hello, kitten"},
+		{name: "newline", literal: `"a\nb"`, want: "a\nb"},
+		{name: "tab", literal: `"a\tb"`, want: "a\tb"},
+		{name: "quote", literal: `"a\"b"`, want: `a"b`},
+		{name: "backslash", literal: `"a\\b"`, want: `a\b`},
+		{name: "utf8", literal: `"é"`, want: "é"},
+		{name: "malformed", literal: "hello", wantErr: true},
+		{name: "unsupported escape", literal: `"a\qb"`, wantErr: true},
+		{name: "trailing backslash", literal: `"abc\`, wantErr: true},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := DecodeString(testCase.literal)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("DecodeString(%q) = %q, want an error", testCase.literal, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeString(%q) returned error: %v", testCase.literal, err)
+			}
+			if got != testCase.want {
+				t.Errorf("DecodeString(%q) = %q, want %q", testCase.literal, got, testCase.want)
 			}
 		})
 	}

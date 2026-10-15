@@ -3,6 +3,7 @@
  */
 #include "kitten_runtime.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,16 @@ static void ktn_rt_fail(const char *message) {
     fputs(message, stderr);
     fputc('\n', stderr);
     exit(1);
+}
+
+/*
+ * Reports an unrecoverable error that concerns a path, including the operating
+ * system message for a saved errno value.
+ */
+static void ktn_rt_fail_path(const char *action, const char *path, int error) {
+    char message[1024];
+    snprintf(message, sizeof(message), "%s '%s': %s", action, path, strerror(error));
+    ktn_rt_fail(message);
 }
 
 void ktn_rt_init(void) {
@@ -109,6 +120,53 @@ int64_t ktn_rt_array_length(const ktn_array *array) {
         ktn_rt_fail("length of a null array reference");
     }
     return array->length;
+}
+
+const char *ktn_rt_read_file(const char *path) {
+    if (path == NULL) {
+        ktn_rt_fail("read_file: path is null");
+    }
+
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        int error = errno;
+        ktn_rt_fail_path("read_file: cannot open", path, error);
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        int error = errno;
+        fclose(file);
+        ktn_rt_fail_path("read_file: cannot determine the size of", path, error);
+    }
+
+    long length = ftell(file);
+    if (length < 0) {
+        int error = errno;
+        fclose(file);
+        ktn_rt_fail_path("read_file: cannot determine the size of", path, error);
+    }
+    if ((unsigned long)length > KTN_RT_MAX_FILE_SIZE) {
+        fclose(file);
+        ktn_rt_fail("read_file: file is larger than the maximum supported size");
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        int error = errno;
+        fclose(file);
+        ktn_rt_fail_path("read_file: cannot rewind", path, error);
+    }
+
+    char *buffer = (char *)ktn_rt_alloc((size_t)length + 1);
+    size_t read = fread(buffer, 1, (size_t)length, file);
+    if (ferror(file)) {
+        int error = errno;
+        fclose(file);
+        ktn_rt_fail_path("read_file: cannot read", path, error);
+    }
+
+    buffer[read] = '\0';
+    fclose(file);
+    return buffer;
 }
 
 void ktn_rt_print_int(int64_t value) {

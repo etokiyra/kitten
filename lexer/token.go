@@ -43,6 +43,7 @@ const (
 	Return
 	Fn
 	New
+	Import
 	Public
 	Private
 
@@ -111,6 +112,7 @@ var kindNames = map[Kind]string{
 	Return:  "Return",
 	Fn:      "Fn",
 	New:     "New",
+	Import:  "Import",
 	Public:  "Public",
 	Private: "Private",
 

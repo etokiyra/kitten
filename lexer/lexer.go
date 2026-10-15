@@ -27,6 +27,7 @@ var keywords = map[string]Kind{
 	"return":  Return,
 	"fn":      Fn,
 	"new":     New,
+	"import":  Import,
 	"public":  Public,
 	"private": Private,
 

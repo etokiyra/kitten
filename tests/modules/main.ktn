@@ -1,0 +1,9 @@
+import "geometry.ktn";
+import "util/text.ktn";
+
+fn main() {
+    Rectangle room = Rectangle { width = 4, height = 5 };
+    print(label(), area(room));
+    print(width_of(room));
+    print(describe("room"));
+}

@@ -166,9 +166,33 @@ func (p *parser) parseDeclaration() (Decl, error) {
 		return p.parseFunction(start, visibility)
 	case lexer.Struct:
 		return p.parseStruct(start, visibility)
+	case lexer.Import:
+		if visibility != VisibilityDefault {
+			return nil, p.errorAt(token, "an import declaration cannot have a visibility modifier")
+		}
+		return p.parseImport(token)
 	default:
-		return nil, p.errorAt(token, "expected a declaration ('fn' or 'struct'), found %s", describe(token))
+		return nil, p.errorAt(token, "expected a declaration ('fn', 'struct', or 'import'), found %s", describe(token))
 	}
+}
+
+// parseImport parses an import declaration, "import \"path\";". The path is a
+// string literal whose escapes are decoded.
+func (p *parser) parseImport(keyword lexer.Token) (Decl, error) {
+	p.advance() // 'import'
+
+	pathToken, err := p.expect(lexer.String, "a quoted import path", "after 'import'")
+	if err != nil {
+		return nil, err
+	}
+	path, err := lexer.DecodeString(pathToken.Text)
+	if err != nil {
+		return nil, p.errorAt(pathToken, "%s", err.Error())
+	}
+	if _, err := p.expect(lexer.Semicolon, "';'", "after the import path"); err != nil {
+		return nil, err
+	}
+	return &ImportDecl{At: positionOf(keyword), Path: path}, nil
 }
 
 // parseFunction parses a function declaration. "start" is the first token of

@@ -904,6 +904,27 @@ func TestParseErrors(t *testing.T) {
 			column:   8,
 			contains: "an identifier",
 		},
+		{
+			name:     "import without a path",
+			source:   "import;\n",
+			line:     1,
+			column:   7,
+			contains: "a quoted import path",
+		},
+		{
+			name:     "import with a non-string path",
+			source:   "import 5;\n",
+			line:     1,
+			column:   8,
+			contains: "a quoted import path",
+		},
+		{
+			name:     "import without a semicolon",
+			source:   "import \"a.ktn\"",
+			line:     1,
+			column:   15,
+			contains: "';'",
+		},
 	}
 
 	for _, testCase := range cases {
@@ -1043,5 +1064,51 @@ func TestParseFixtureMathShape(t *testing.T) {
 	want := []string{"factorial", "collatz_steps", "main"}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("function names = %v, want %v", names, want)
+	}
+}
+
+func TestImportDeclaration(t *testing.T) {
+	program, err := ParseSource("import \"geometry.ktn\";\nimport \"sub/text.ktn\";\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	if len(program.Declarations) != 2 {
+		t.Fatalf("got %d declarations, want 2", len(program.Declarations))
+	}
+
+	first, ok := program.Declarations[0].(*ImportDecl)
+	if !ok {
+		t.Fatalf("declaration 0 is %T, want *ImportDecl", program.Declarations[0])
+	}
+	if first.Path != "geometry.ktn" {
+		t.Errorf("path = %q, want %q", first.Path, "geometry.ktn")
+	}
+	if first.At != at(1, 1) {
+		t.Errorf("position = %v, want 1:1", first.At)
+	}
+
+	second, ok := program.Declarations[1].(*ImportDecl)
+	if !ok {
+		t.Fatalf("declaration 1 is %T, want *ImportDecl", program.Declarations[1])
+	}
+	if second.Path != "sub/text.ktn" {
+		t.Errorf("path = %q, want %q", second.Path, "sub/text.ktn")
+	}
+	if second.At != at(2, 1) {
+		t.Errorf("position = %v, want 2:1", second.At)
+	}
+}
+
+func TestImportPathDecodesEscapes(t *testing.T) {
+	program, err := ParseSource(`import "a\\b.ktn";`)
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	importDeclaration, ok := program.Declarations[0].(*ImportDecl)
+	if !ok {
+		t.Fatalf("declaration is %T, want *ImportDecl", program.Declarations[0])
+	}
+	if importDeclaration.Path != `a\b.ktn` {
+		t.Errorf("path = %q, want %q", importDeclaration.Path, `a\b.ktn`)
 	}
 }

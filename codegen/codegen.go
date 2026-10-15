@@ -11,6 +11,10 @@ import (
 
 // Error describes a code generation error and the position it relates to.
 type Error struct {
+	// File is the source file the error relates to. It is empty when the
+	// program has no file identity.
+	File string
+
 	// Line is the one-based line of the offending syntax.
 	Line int
 
@@ -21,38 +25,50 @@ type Error struct {
 	Message string
 }
 
-// Error implements the error interface, formatting the position as line:column.
+// Error implements the error interface, formatting the position as [file:]line:column.
 func (e *Error) Error() string {
+	if e.File != "" {
+		return fmt.Sprintf("%s:%d:%d: %s", e.File, e.Line, e.Column, e.Message)
+	}
 	return fmt.Sprintf("%d:%d: %s", e.Line, e.Column, e.Message)
 }
 
-// Generate translates a checked Kitten program into C source.
+// Generate translates a checked program into C source. The first module is the
+// root module and the others are its imports; declarations from every module are
+// emitted into one translation unit. Names from imported modules are mangled so
+// that private declarations with the same name in different modules cannot
+// collide.
 //
 // It consumes the checked result for resolved types and symbols and never
 // re-resolves names or re-checks types. The output is deterministic for a given
-// program: declarations are emitted in source order and generated names follow
-// a fixed scheme.
+// program: modules and declarations are emitted in order and generated names
+// follow a fixed scheme.
 //
 // Generate requires a valid entry point: a zero-parameter function named "main"
-// that returns no value. A missing or malformed entry point is reported as an
-// error rather than silently replaced. Generate returns an error rather than
-// panicking on an inconsistent syntax tree.
-func Generate(program *parser.Program, checked *checker.Result) (string, error) {
-	if program == nil || checked == nil {
-		return "", &Error{Line: 1, Column: 1, Message: "cannot generate C without a program and a checked result"}
+// that returns no value, declared in the root module. A missing or malformed
+// entry point is reported as an error rather than silently replaced. Generate
+// returns an error rather than panicking on an inconsistent syntax tree.
+func Generate(modules []*parser.Module, checked *checker.Result) (string, error) {
+	if len(modules) == 0 || checked == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "cannot generate C without modules and a checked result"}
+	}
+	for _, module := range modules {
+		if module == nil || module.Program == nil {
+			return "", &Error{Line: 1, Column: 1, Message: "module has no parsed program"}
+		}
 	}
 
 	g := &generator{
-		program: program,
+		modules: modules,
 		checked: checked,
 		buffer:  &strings.Builder{},
 	}
 	return g.generate()
 }
 
-// generator accumulates C source for one program.
+// generator accumulates C source for one translation unit.
 type generator struct {
-	program *parser.Program
+	modules []*parser.Module
 	checked *checker.Result
 	buffer  *strings.Builder
 	indent  int
@@ -79,6 +95,18 @@ func (g *generator) line(format string, args ...any) {
 		fmt.Fprintf(g.buffer, format, args...)
 	}
 	g.buffer.WriteByte('\n')
+}
+
+// moduleStruct pairs a struct declaration with the ID of its module.
+type moduleStruct struct {
+	module      int
+	declaration *parser.StructDecl
+}
+
+// moduleFunction pairs a function declaration with the ID of its module.
+type moduleFunction struct {
+	module      int
+	declaration *parser.FunctionDecl
 }
 
 // generate emits the whole translation unit.
@@ -111,56 +139,83 @@ func (g *generator) generate() (string, error) {
 	return g.buffer.String(), nil
 }
 
-// validateEntryPoint requires a zero-parameter, void-returning "main".
-func (g *generator) validateEntryPoint() error {
-	function, ok := g.checked.Functions["main"]
-	if !ok || function == nil {
-		return &Error{Line: 1, Column: 1, Message: `program has no entry point: define fn main()`}
-	}
-	position := parser.Position{Line: 1, Column: 1}
-	if function.Decl != nil {
-		position = function.Decl.At
-	}
-	if len(function.ParameterTypes) != 0 {
-		return &Error{Line: position.Line, Column: position.Column, Message: "entry point main must take no parameters"}
-	}
-	if !function.ReturnType.IsVoid() {
-		return &Error{Line: position.Line, Column: position.Column, Message: fmt.Sprintf("entry point main must not return a value, but returns %s", function.ReturnType)}
-	}
-	return nil
+// rootModule returns the module being compiled, which holds the entry point.
+func (g *generator) rootModule() *parser.Module {
+	return g.modules[0]
 }
 
-// structDeclarations returns the struct declarations in source order.
-func (g *generator) structDeclarations() []*parser.StructDecl {
-	var declarations []*parser.StructDecl
-	for _, declaration := range g.program.Declarations {
-		if structDeclaration, ok := declaration.(*parser.StructDecl); ok && structDeclaration != nil {
-			declarations = append(declarations, structDeclaration)
+// validateEntryPoint requires a zero-parameter, void-returning "main" in the
+// root module. Imported modules are never entry points.
+func (g *generator) validateEntryPoint() error {
+	root := g.rootModule()
+	for _, declaration := range root.Program.Declarations {
+		function, ok := declaration.(*parser.FunctionDecl)
+		if !ok || function == nil || function.Name != "main" {
+			continue
+		}
+
+		info := g.checked.FunctionDecls[function]
+		if info == nil {
+			return g.errorAt(root.Path, function.At, "entry point main was not checked")
+		}
+		if len(info.ParameterTypes) != 0 {
+			return g.errorAt(root.Path, function.At, "entry point main must take no parameters")
+		}
+		if !info.ReturnType.IsVoid() {
+			return g.errorAt(root.Path, function.At, "entry point main must not return a value, but returns %s", info.ReturnType)
+		}
+		return nil
+	}
+	return g.errorAt(root.Path, parser.Position{Line: 1, Column: 1}, "program has no entry point: define fn main() in the root module")
+}
+
+// errorAt builds a code generation error attached to a file.
+func (g *generator) errorAt(file string, position parser.Position, format string, args ...any) error {
+	return &Error{
+		File:    file,
+		Line:    position.Line,
+		Column:  position.Column,
+		Message: fmt.Sprintf(format, args...),
+	}
+}
+
+// structDeclarations returns every struct declaration, in module and source
+// order.
+func (g *generator) structDeclarations() []moduleStruct {
+	var declarations []moduleStruct
+	for _, module := range g.modules {
+		for _, declaration := range module.Program.Declarations {
+			if structDeclaration, ok := declaration.(*parser.StructDecl); ok && structDeclaration != nil {
+				declarations = append(declarations, moduleStruct{module: module.ID, declaration: structDeclaration})
+			}
 		}
 	}
 	return declarations
 }
 
-// functionDeclarations returns the function declarations in source order.
-func (g *generator) functionDeclarations() []*parser.FunctionDecl {
-	var declarations []*parser.FunctionDecl
-	for _, declaration := range g.program.Declarations {
-		if functionDeclaration, ok := declaration.(*parser.FunctionDecl); ok && functionDeclaration != nil {
-			declarations = append(declarations, functionDeclaration)
+// functionDeclarations returns every function declaration, in module and source
+// order.
+func (g *generator) functionDeclarations() []moduleFunction {
+	var declarations []moduleFunction
+	for _, module := range g.modules {
+		for _, declaration := range module.Program.Declarations {
+			if functionDeclaration, ok := declaration.(*parser.FunctionDecl); ok && functionDeclaration != nil {
+				declarations = append(declarations, moduleFunction{module: module.ID, declaration: functionDeclaration})
+			}
 		}
 	}
 	return declarations
 }
 
 // emitStructForwardDeclarations emits typedefs so that struct bodies may refer
-// to structs declared later in the program.
+// to structs declared later, in this module or another.
 func (g *generator) emitStructForwardDeclarations() error {
 	declarations := g.structDeclarations()
 	if len(declarations) == 0 {
 		return nil
 	}
-	for _, declaration := range declarations {
-		name := structName(declaration.Name)
+	for _, entry := range declarations {
+		name := structName(entry.declaration.Name, entry.module)
 		g.line("typedef struct %s %s;", name, name)
 	}
 	g.line("")
@@ -168,15 +223,15 @@ func (g *generator) emitStructForwardDeclarations() error {
 }
 
 // emitFunctionPrototypes emits prototypes so that functions may call functions
-// declared later in the program, including recursive and mutually recursive
-// functions.
+// declared later, in this module or another, including recursive and mutually
+// recursive functions.
 func (g *generator) emitFunctionPrototypes() error {
 	declarations := g.functionDeclarations()
 	if len(declarations) == 0 {
 		return nil
 	}
-	for _, declaration := range declarations {
-		signature, err := g.functionSignature(declaration)
+	for _, entry := range declarations {
+		signature, err := g.functionSignature(entry.module, entry.declaration)
 		if err != nil {
 			return err
 		}
@@ -187,8 +242,8 @@ func (g *generator) emitFunctionPrototypes() error {
 }
 
 // functionSignature returns "returnType name(parameterTypes)" for a function.
-func (g *generator) functionSignature(declaration *parser.FunctionDecl) (string, error) {
-	function := g.checked.Functions[declaration.Name]
+func (g *generator) functionSignature(module int, declaration *parser.FunctionDecl) (string, error) {
+	function := g.checked.FunctionDecls[declaration]
 	if function == nil {
 		return "", &Error{Line: declaration.At.Line, Column: declaration.At.Column, Message: fmt.Sprintf("function %q was not checked", declaration.Name)}
 	}
@@ -210,7 +265,7 @@ func (g *generator) functionSignature(declaration *parser.FunctionDecl) (string,
 		parameters = append(parameters, "void")
 	}
 
-	return fmt.Sprintf("%s %s(%s)", returnType, functionName(declaration.Name), strings.Join(parameters, ", ")), nil
+	return fmt.Sprintf("%s %s(%s)", returnType, functionName(declaration.Name, module), strings.Join(parameters, ", ")), nil
 }
 
 // emitStructDefinitions emits the C struct bodies.
@@ -219,12 +274,12 @@ func (g *generator) emitStructDefinitions() error {
 	if len(declarations) == 0 {
 		return nil
 	}
-	for _, declaration := range declarations {
-		structType := g.checked.StructTypes[declaration.Name]
+	for _, entry := range declarations {
+		structType := g.checked.StructDecls[entry.declaration]
 		if structType == nil || structType.Struct == nil {
-			return &Error{Line: declaration.At.Line, Column: declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", declaration.Name)}
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", entry.declaration.Name)}
 		}
-		g.line("struct %s {", structName(declaration.Name))
+		g.line("struct %s {", structName(entry.declaration.Name, entry.module))
 		g.indent++
 		for _, field := range structType.Struct.Fields {
 			fieldType, err := cType(field.Type)
@@ -248,13 +303,13 @@ func (g *generator) emitConstructors() error {
 	if len(declarations) == 0 {
 		return nil
 	}
-	for _, declaration := range declarations {
-		structType := g.checked.StructTypes[declaration.Name]
+	for _, entry := range declarations {
+		structType := g.checked.StructDecls[entry.declaration]
 		if structType == nil || structType.Struct == nil {
-			return &Error{Line: declaration.At.Line, Column: declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", declaration.Name)}
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("struct %q was not checked", entry.declaration.Name)}
 		}
 
-		cStruct := structName(declaration.Name)
+		cStruct := structName(entry.declaration.Name, entry.module)
 		parameters := make([]string, 0, len(structType.Struct.Fields))
 		for _, field := range structType.Struct.Fields {
 			fieldType, err := cType(field.Type)
@@ -267,7 +322,7 @@ func (g *generator) emitConstructors() error {
 			parameters = append(parameters, "void")
 		}
 
-		g.line("%s *%s(%s) {", cStruct, constructorName(declaration.Name), strings.Join(parameters, ", "))
+		g.line("%s *%s(%s) {", cStruct, constructorName(entry.declaration.Name, entry.module), strings.Join(parameters, ", "))
 		g.indent++
 		g.line("%s *%s = (%s *)%s(sizeof(%s));", cStruct, objectName, cStruct, runtime.AllocFunction, cStruct)
 		for _, field := range structType.Struct.Fields {
@@ -283,17 +338,17 @@ func (g *generator) emitConstructors() error {
 
 // emitFunctionDefinitions emits the body of every user-defined function.
 func (g *generator) emitFunctionDefinitions() error {
-	for _, declaration := range g.functionDeclarations() {
-		if declaration.Body == nil {
-			return &Error{Line: declaration.At.Line, Column: declaration.At.Column, Message: fmt.Sprintf("function %q has no body", declaration.Name)}
+	for _, entry := range g.functionDeclarations() {
+		if entry.declaration.Body == nil {
+			return &Error{Line: entry.declaration.At.Line, Column: entry.declaration.At.Column, Message: fmt.Sprintf("function %q has no body", entry.declaration.Name)}
 		}
-		signature, err := g.functionSignature(declaration)
+		signature, err := g.functionSignature(entry.module, entry.declaration)
 		if err != nil {
 			return err
 		}
 		g.writeIndent()
 		g.write(signature + " ")
-		if err := g.emitBlock(declaration.Body); err != nil {
+		if err := g.emitBlock(entry.declaration.Body); err != nil {
 			return err
 		}
 		g.line("")
@@ -302,13 +357,13 @@ func (g *generator) emitFunctionDefinitions() error {
 }
 
 // emitEntryPoint emits the C entry point, which initializes the runtime and
-// calls the Kitten main function. The C name "main" cannot collide with the
-// Kitten main function, which is emitted as "ktn_fn_main".
+// calls the Kitten main function of the root module. The C name "main" cannot
+// collide with the Kitten main function, which is emitted as "ktn_fn_main".
 func (g *generator) emitEntryPoint() {
 	g.line("int main(void) {")
 	g.indent++
 	g.line("%s();", runtime.InitFunction)
-	g.line("%s();", functionName("main"))
+	g.line("%s();", functionName("main", g.rootModule().ID))
 	g.line("return 0;")
 	g.indent--
 	g.line("}")
