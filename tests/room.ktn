@@ -1,0 +1,17 @@
+struct Rectangle {
+    int width;
+    int height;
+}
+
+fn area(Rectangle rectangle) -> int {
+    return rectangle.width * rectangle.height;
+}
+
+fn main() {
+    Rectangle room = Rectangle {
+        width = 4,
+        height = 5
+    };
+
+    print("area:", area(room));
+}

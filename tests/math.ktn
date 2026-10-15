@@ -1,0 +1,29 @@
+fn factorial(int value) -> int {
+    if (value <= 1) {
+        return 1;
+    }
+
+    return value * factorial(value - 1);
+}
+
+fn collatz_steps(int start) -> int {
+    int current = start;
+    int steps = 0;
+
+    while (current != 1) {
+        if (current % 2 == 0) {
+            current = current / 2;
+        } else {
+            current = current * 3 + 1;
+        }
+
+        steps++;
+    }
+
+    return steps;
+}
+
+fn main() {
+    print("5! =", factorial(5));
+    print("collatz(27) steps:", collatz_steps(27));
+}
