@@ -4,10 +4,10 @@ Status: **Provisional.** This document describes the agreed direction for the
 Kitten language. Syntax in this document is fixed for Phase 1. Semantics marked
 as deferred are not decided and must not be assumed by any component.
 
-This revision covers the language surface. The lexer and the parser are
-implemented; the checker, code generator, and runtime are not. Where this
-document mentions behavior that does not yet exist, it describes intent, not
-current capability.
+This revision covers the language surface and its static semantics. The lexer,
+parser, and checker are implemented; the code generator and runtime are not.
+Where this document mentions behavior that does not yet exist, it describes
+intent, not current capability.
 
 ---
 
@@ -152,6 +152,11 @@ The built-in type names are:
 - `string`
 - `void`
 
+`void` denotes "no value". It is permitted only as a function return type; it
+is never the type of a variable, parameter, or struct field. Whether
+`fn main() -> void` is accepted in addition to `fn main()` is answered in
+Section 18.6: both are accepted and mean the same thing.
+
 `true` and `false` are the boolean literal keywords.
 
 `var` is **not** a keyword. Variables are declared with an explicit type
@@ -169,6 +174,7 @@ they default to, and which declarations they apply to are **deferred**
 
 Integer literals are sequences of decimal digits, for example `0`, `123`, `42`.
 A leading minus sign is not part of the literal; it is the unary minus operator.
+An `int` value is a signed 64-bit integer (Section 18.1).
 
 Not supported in this revision (and therefore not to be added without a
 specification change): hexadecimal, binary, and octal forms; digit separators;
@@ -185,7 +191,9 @@ by a decimal digit. Consequently:
 - `1.` tokenizes as an integer (`1`) followed by a dot (`.`);
 - `.5` tokenizes as a dot (`.`) followed by an integer (`5`).
 
-Range, precision, and rounding of floating-point values are **deferred**.
+A `float` value is an IEEE 754 binary64 (double-precision) value
+(Section 18.1). Rounding, range, and the runtime behavior of floating-point
+operations are **deferred**. Literal syntax is fixed: only the forms above.
 
 ### 6.3 String literals
 
@@ -278,13 +286,13 @@ fn add(int left, int right) -> int {
 - The return type follows the parameter list after `->`.
 - A function without a return type annotation returns no value; write the bare
   form `fn main()` and omit the arrow entirely.
-- `void` remains a built-in type name and may be written where a return type is
-  expected. Whether `fn main() -> void` is accepted in addition to `fn main()`
-  is **unresolved** (Section 16). The parser accepts the syntax `-> void` and
-  records it as a return type named `void`; whether that is treated as
-  equivalent to no return type is a semantic decision.
-- `return value;` returns a value. How a bare `return;` interacts with a
-  declared return type is **deferred**. The parser accepts both forms.
+- A return type may be written after `->`. Writing `-> void` is accepted and is
+  exactly equivalent to omitting the return type: the function returns no value
+  (Section 18.6).
+- `return value;` returns a value; a bare `return;` returns no value. A bare
+  `return;` is valid only in a function that returns no value, and
+  `return value;` requires an exact type match with the declared return type
+  (Section 18.6).
 - Visibility modifiers `public` and `private` may appear on function
   declarations. Their exact placement, defaults, and effect are **deferred**.
   Provisionally (Section 17), the parser accepts a single optional modifier
@@ -311,10 +319,11 @@ string username = "kitten";
   `var` is not part of the language.
 - **Variables are mutable by default.** This revision introduces no immutability
   modifier such as `const`, `let`, or `final`.
-- The initializer is **optional** in the grammar: both `int x;` and `int x = 1;`
-  parse (Section 17). Whether an initializer is required is **deferred** to the
-  checker.
-- The scope and lifetime rules for variables are **deferred**.
+- The initializer is **optional** in the language: both `int x;` and
+  `int x = 1;` are valid (Section 17 and Section 18.4). A declaration without
+  an initializer leaves the variable uninitialized; reading it before assigning
+  is not diagnosed in this revision (Section 18.10).
+- The scope and lifetime rules for variables are defined in Section 18.5.
 - Local variables do not take visibility modifiers.
 
 ---
@@ -340,7 +349,10 @@ Rectangle room = Rectangle {
 ```
 
 - The lexer recognizes this syntax but does not validate field names, field
-  order, or struct semantics. Those checks belong to the checker.
+  order, or struct semantics. The checker validates all of these
+  (Section 18.7): field types must exist and not be `void`, field names must be
+  unique, and a struct literal must name a struct and initialize every field
+  exactly once with a value of the declared type.
 - A struct literal is recognized whenever an identifier is immediately followed
   by `{` in an expression position (Section 17). This means a missing `)` before
   a block, as in `if (x {`, is interpreted as a struct literal named `x` and
@@ -348,12 +360,13 @@ Rectangle room = Rectangle {
 - Struct fields take no initializer in this revision: they are written
   `type name;` (Section 17). Whether fields may be initialized at the
   declaration is **deferred**.
-- Whether every field must be initialized, whether fields may be omitted, and
-  whether positional literals are allowed are **deferred**.
+- Every field must be supplied in a struct literal. Omitting a field is an
+  error; whether fields may be omitted later is **deferred**.
 - Trailing commas are **not** accepted in struct literals in this revision
   (Section 17).
 - Field visibility and the default visibility of struct members are
-  **deferred**.
+  **deferred**. All fields are mutable and writable in this revision
+  (Section 18.7).
 
 ---
 
@@ -404,12 +417,16 @@ print("5! =", factorial(5));
 - `print` is **not** a reserved keyword; it tokenizes as an ordinary identifier
   (`Ident`). Reserving it is unnecessary because a program may name other things
   `print`-adjacent, and the parser can resolve it by name.
-- `print` accepts one or more arguments. The exact formatting rules — how
-  multiple arguments are separated, how numbers and strings are rendered, and
-  whether a trailing newline is always emitted — are **deferred**. The `.ktn`
-  fixtures under `tests/` document the intended results for the current
-  examples.
-- `print` is not executable in this phase. The lexer only tokenizes it.
+- `print` accepts one or more arguments. The checker models it as a built-in
+  function that accepts one or more arguments, each of type `int`, `float`,
+  `bool`, or `string`. Calling it with no arguments, or with a struct value, is
+  a semantic error (Section 18.8). A user-defined `print` shadows the built-in.
+- The formatting rules — how multiple arguments are separated, how values are
+  rendered, and whether a trailing newline is emitted — are **deferred** to the
+  runtime and code-generation phases. The `.ktn` fixtures under `tests/`
+  document the intended results.
+- `print` is not executable in this phase: the checker validates calls to it,
+  but no code is generated and nothing runs.
 
 ---
 
@@ -436,7 +453,7 @@ one per phase:
 | --- | --- | --- |
 | `lexer` | Source text → tokens | Implemented (Phase 1) |
 | `parser` | Tokens → syntax tree | Implemented (Phase 2A) |
-| `checker` | Semantic analysis and type checking | Not implemented |
+| `checker` | Semantic analysis and type checking | Implemented (Phase 2B) |
 | `codegen` | Checked tree → C source | Not implemented |
 | `runtime` | Support code linked into compiled programs, including GC integration | Not implemented |
 
@@ -444,12 +461,15 @@ Supporting layout:
 
 - `cmd/kitten` — the `kitten` command-line entry point. It recognizes
   `kitten build <file.ktn>` and `kitten run <file.ktn>`. Neither command is
-  implemented; each reports that clearly instead of pretending to succeed.
+  implemented; each reports that clearly instead of pretending to succeed. The
+  checker is not yet wired into the command line.
 - `tests/` — `.ktn` programs and matching `.expected` output files. They are
-  lexer and parser inputs today and executable-program tests in later phases.
+  lexer, parser, and checker inputs today and executable-program tests in later
+  phases.
 
 Pipeline (intended): source → lexer → parser → checker → code generator (C) →
-system C compiler → link with Boehm GC → native executable.
+system C compiler → link with Boehm GC → native executable. The lexer, parser,
+and checker are implemented; the remaining stages are not.
 
 Phase boundaries are strict: a package must not take on another phase's
 responsibility, and later phases are not started without explicit authorization.
@@ -464,8 +484,13 @@ outcome here.
 
 **Types and numbers**
 
-- Exact bit widths of `int` and `float`, and integer overflow behavior.
-- Numeric conversions and promotion rules.
+- Exact bit widths of `int` and `float` are now provisionally fixed as signed
+  64-bit and IEEE 754 binary64 (Section 18.1). Integer overflow behavior and
+  runtime rounding remain **deferred** to the code-generation and runtime
+  phases.
+- Numeric conversions and promotion rules: **no implicit conversions** exist
+  (Section 18.2). Explicit conversion syntax is **deferred**; there are no casts
+  yet.
 - Whether additional numeric types (for example sized or unsigned integers)
   exist.
 
@@ -477,11 +502,18 @@ outcome here.
 
 **Visibility and declarations**
 
-- Default visibility for top-level declarations and struct members.
+- Default visibility for top-level declarations and struct members. The parser
+  and checker accept `public`/`private` on top-level `fn` and `struct`
+  (Section 17.4), but the checker gives visibility no semantic effect yet; it is
+  recorded and ignored.
 - Exactly which declarations accept `public` and `private`, and where the
-  modifier is written.
-- Whether `fn main() -> void` is accepted in addition to `fn main()`.
-- Whether a variable initializer is mandatory.
+  modifier is written, beyond top-level `fn` and `struct`.
+- Whether `fn main() -> void` is accepted in addition to `fn main()`: **yes**,
+  both are accepted and equivalent (Section 18.6). Entry-point requirements and
+  startup behavior remain **deferred** to the compilation phase.
+- Whether a variable initializer is mandatory: **it is optional**
+  (Section 18.4). Reading an uninitialized variable is not diagnosed.
+- Whether reading an uninitialized variable should be an error.
 
 **Functions and types**
 
@@ -498,8 +530,11 @@ outcome here.
   Section 17. A future revision may change it, which would be a breaking
   change.
 - Whether `break` and `continue` exist. They are not keywords in this revision.
-- Whether a bare `return;` is allowed and how it interacts with return types.
-  The parser accepts it (Section 17).
+- Whether a bare `return;` is allowed and how it interacts with return types: a
+  bare `return;` is valid only in a function that returns no value, and
+  `return value;` must match the declared return type (Section 18.6).
+- Whether return-path analysis should account for loops and other constructs
+  that the conservative analysis currently ignores (Section 18.6).
 - The full set of statement forms.
 
 **Modules and program structure**
@@ -524,9 +559,10 @@ outcome here.
 **Implementation status**
 
 - The parser is implemented (Phase 2A) and accepts the grammar in Section 17.
-- The checker, code generator, and runtime are not implemented.
-- The `.ktn` fixtures lex and parse successfully but do not execute; only the
-  lexer and parser process them.
+- The checker is implemented (Phase 2B) and enforces the rules in Section 18.
+- The code generator and runtime are not implemented.
+- The `.ktn` fixtures lex, parse, and check successfully but do not execute;
+  the lexer, parser, and checker process them, and no native code is produced.
 
 ---
 
@@ -657,3 +693,191 @@ These decisions were needed to parse the language. Each is provisional:
 9. Assignment is an expression with no syntactic restriction on its target;
    whether the target is assignable is deferred to the checker.
 10. The parser is fail-fast: it reports the first syntax error and stops.
+
+---
+
+## 18. Semantic analysis and type rules (provisional)
+
+This section records the semantic rules the checker enforces. It is
+**provisional**: the rules are sufficient to check the currently supported
+language and may change in a later revision. The checker is fail-fast: it
+reports the first error it finds and stops. Every diagnostic carries a one-based
+`line:column` position and a category.
+
+### 18.1 Primitive types
+
+| Name | Meaning |
+| --- | --- |
+| `int` | Signed 64-bit integer. |
+| `float` | IEEE 754 binary64 floating-point value. |
+| `bool` | Boolean. |
+| `string` | String value. |
+| `void` | No value. Permitted only as a function return type. |
+
+`int` and `float` widths are provisional language semantics, not a commitment
+about the runtime representation. Integer overflow behavior and floating-point
+rounding are **deferred**. `void` is never the type of a variable, parameter, or
+struct field; using it there is an error.
+
+### 18.2 Type compatibility
+
+Types are compared by **exact matching**, with no implicit conversions. An `int`
+is not interchangeable with a `float`, and mixing them in one operation is an
+error. There are no casts, and no generic or parameterized types.
+
+A value of type `void` may not be used as a value: it may not be assigned,
+returned, passed as an argument, used as a condition or operand, or used to
+initialize a variable or field.
+
+### 18.3 Operator rules
+
+| Operators | Operand types | Result |
+| --- | --- | --- |
+| `+` `-` `*` `/` | two `int`, or two `float` | the operand type |
+| `%` | two `int` | `int` |
+| `<` `<=` `>` `>=` | two `int`, or two `float` | `bool` |
+| `==` `!=` | two of the same primitive type | `bool` |
+| `&&` `\|\|` | two `bool` | `bool` |
+| unary `-` | one `int` or `float` | the operand type |
+| unary `!` | one `bool` | `bool` |
+
+Notes:
+
+- Both operands of a binary operation must have the same type. Mixing `int` and
+  `float` is an error, not a promotion.
+- `%` is not defined for `float`.
+- String concatenation with `+` is **not** supported in this revision; `+` on
+  strings is an error.
+- Relational operators are numeric-only; comparing `bool` or `string` values
+  with `<` is an error.
+- Equality is defined for the primitive types only. Comparing two struct values
+  with `==` is an error.
+- There is no unary `+` operator: the grammar in Section 17 does not include it.
+- The checker does not diagnose constant division by zero and does not guarantee
+  overflow behavior; those are **deferred**.
+
+### 18.4 Variables and assignment
+
+- A variable declaration names a type and a name, with an optional initializer.
+  The declared type must exist and must not be `void`.
+- If an initializer is present, its type must exactly match the declared type.
+- Assignment (`=`) requires the value type to match the target type exactly.
+- The assignment target must be a mutable l-value: a local variable, a
+  parameter, or a struct field reached through an l-value. Assigning to a
+  literal, a call, or any other expression is an error.
+- Compound assignment (`+=`, `-=`) requires both operands to be the same numeric
+  type. The result has the target's type.
+- Prefix and postfix `++`/`--` require a mutable numeric l-value (`int` or
+  `float`) and produce the operand's type. They are not defined for `string`,
+  `bool`, or struct values.
+- An assignment expression's value has the target's type, so a chain such as
+  `a = b = c` type-checks when the types agree.
+
+### 18.5 Scopes and names
+
+- Top-level functions and structs share **one** namespace. Declaring two
+  top-level names that are equal is a duplicate-declaration error, whether they
+  are two functions, two structs, or one of each.
+- A function's parameters and the function body's outermost statements share one
+  scope. Declaring a local with the same name as a parameter is an error.
+- Each nested block introduces a new scope. An inner scope may shadow names from
+  an outer scope, including a parameter or an outer local.
+- Declaring the same name twice in one scope is a duplicate-declaration error.
+- A local variable is not visible before its declaration, including in its own
+  initializer, so `int x = x;` is an undefined-name error.
+- A `for` loop introduces its own scope containing the initializer, so an
+  initializer variable is visible in the condition, the increment, and the body,
+  but not after the loop.
+- `print` is provided by the language on its own (Section 18.8). A user-defined
+  top-level `print` shadows the built-in and is not a duplicate declaration.
+- Name resolution inside a function searches local scopes first, then top-level
+  functions, then built-ins.
+
+### 18.6 Functions and returns
+
+- Every argument in a call must match the corresponding parameter type exactly,
+  and the number of arguments must match the number of parameters.
+- The callee must be a plain identifier naming a user function or a built-in.
+  Calling a variable, a type name, a member, or any other expression is an
+  error.
+- A function whose return type is `void` may not return a value: only a bare
+  `return;` (or falling off the end) is allowed.
+- A function whose return type is not `void` must return a value of exactly that
+  type. A bare `return;` in such a function is an error, and a returned value of
+  the wrong type is an error.
+- Writing `-> void` is exactly equivalent to omitting the return type.
+- Return-path analysis is conservative. A non-void function is accepted if its
+  body **definitely returns**, defined as:
+  - a `return value;` statement definitely returns;
+  - a block definitely returns if any of its statements definitely returns;
+  - an `if` statement definitely returns only when it has an `else` branch and
+    both the `then` and `else` branches definitely return.
+  - `while` and `for` loops never definitely return, even with a constant
+    condition, and expression statements never definitely return.
+  A non-void function that does not definitely return is an error. Unreachable
+  code is not diagnosed, and loops are not analyzed for termination; a function
+  can satisfy this rule with a return in a loop that is provably reached.
+- There is no implicit `main`. `main` is an ordinary function; entry-point
+  requirements and startup behavior are **deferred** to the compilation phase.
+
+### 18.7 Structs
+
+- A struct declaration must reference field types that exist, and a field type
+  may not be `void`. Duplicate field names are an error.
+- A struct may contain fields of struct type, including another struct declared
+  later in the file.
+- A struct literal must name a struct type. Every supplied field must exist in
+  that struct, must be initialized at most once, and its value must exactly
+  match the field's declared type.
+- Every field of the struct must be initialized in a struct literal. Omitting a
+  field is an error.
+- Member access requires the receiver to be a struct value; accessing a member
+  of a primitive or of a `void` value is an error. The member must be a field of
+  that struct, and the member expression has the field's type.
+- Struct fields are mutable; a field reached through an l-value is assignable.
+- Methods, inheritance, and implicit constructors are **not** implemented.
+  Whether a struct may contain itself, directly or indirectly, is **deferred**.
+
+### 18.8 Built-in `print`
+
+- `print` is a built-in function, represented in the semantic environment rather
+  than special-cased in expression checking.
+- It accepts **one or more** arguments, and every argument must be `int`,
+  `float`, `bool`, or `string`. Calling it with no arguments, or with a struct
+  value, is an error.
+- Its return type is `void`, so a call to `print` cannot be used as a value.
+- A user-defined top-level `print` shadows the built-in.
+- The output format and whether a trailing newline is emitted are **deferred**
+  to the runtime and code-generation phases.
+
+### 18.9 Diagnostics
+
+The checker reports a single `Error` containing:
+
+- a **category**: undefined name, duplicate declaration, invalid operator, type
+  mismatch, invalid assignment, bad call, invalid return, invalid type, or
+  invalid expression;
+- a one-based `line:column` position taken from the AST (the checker never
+  re-lexes source); and
+- a message naming the actual mismatch or unresolved name.
+
+Diagnostics are deterministic for the same input. The checker does not panic on
+malformed or incomplete syntax trees.
+
+### 18.10 Provisional decisions recorded
+
+1. `int` is signed 64-bit and `float` is IEEE 754 binary64.
+2. Types match exactly; there are no implicit conversions and no casts.
+3. `void` is only a function return type.
+4. `-> void` is equivalent to no return type.
+5. String concatenation and struct equality are not supported.
+6. Relational operators are numeric-only; equality is primitive-only.
+7. A variable initializer is optional, and reading an uninitialized variable is
+   not diagnosed.
+8. Visibility modifiers are accepted on top-level `fn` and `struct` but have no
+   semantic effect yet.
+9. Return-path analysis is conservative: loops never definitely return, and
+   unreachable code is not diagnosed.
+10. Struct literals must initialize every field.
+11. Checker errors are fail-fast: only the first error is reported.
+12. There is no implicit `main` or entry-point check.

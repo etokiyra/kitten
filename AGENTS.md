@@ -22,11 +22,11 @@ Project instructions for everyone (human or AI) working on Kitten.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
-The current `.ktn` files under `tests/` are lexer and parser inputs and future
-executable-program tests. Their `.expected` files document intended program
-output. The current compiler cannot execute them; the lexer tokenizes them and
-the parser builds a syntax tree from them. Do not describe them as passing run
-tests.
+The current `.ktn` files under `tests/` are lexer, parser, and checker inputs
+and future executable-program tests. Their `.expected` files document intended
+program output. The current compiler cannot execute them: the lexer tokenizes
+them, the parser builds a syntax tree from them, and the checker validates them.
+Do not describe them as passing run tests.
 
 ## Architecture
 
@@ -51,9 +51,10 @@ tests.
 
 Phase 1 delivered the project skeleton, the provisional specification, the
 example programs, and the lexer. Phase 2A delivered the parser and the abstract
-syntax tree. The checker, code generator, and runtime are still intentionally
-unimplemented: do not add implementation code to `checker/`, `codegen/`, or
-`runtime/` without explicit authorization, and do not begin later phases.
+syntax tree. Phase 2B delivered semantic analysis and the type checker. The
+code generator and runtime are still intentionally unimplemented: do not add
+implementation code to `codegen/` or `runtime/` without explicit authorization,
+do not wire the checker into the CLI, and do not begin later phases.
 
 ## Roadmap
 

@@ -1,0 +1,96 @@
+package checker
+
+import "kitten/parser"
+
+// SymbolKind distinguishes the kinds of name a scope can hold.
+type SymbolKind int
+
+const (
+	// SymbolVariable is a local variable or a function parameter.
+	SymbolVariable SymbolKind = iota
+
+	// SymbolFunction is a function (user-defined or built-in).
+	SymbolFunction
+)
+
+// Symbol is a resolved name.
+type Symbol struct {
+	// Name is the declared name.
+	Name string
+
+	// Kind is what the name refers to.
+	Kind SymbolKind
+
+	// Type is the variable's type, or the function's return type.
+	Type *Type
+
+	// Function is set when Kind is SymbolFunction.
+	Function *Function
+
+	// At is the position where the name was declared.
+	At parser.Position
+}
+
+// Function is a resolved function signature, either user-defined or built-in.
+type Function struct {
+	// Name is the function name.
+	Name string
+
+	// ParameterNames are the parameter names in order. Empty for a built-in.
+	ParameterNames []string
+
+	// ParameterTypes are the parameter types in order.
+	ParameterTypes []*Type
+
+	// ReturnType is the declared return type, or void when none was written.
+	ReturnType *Type
+
+	// Builtin is true for functions provided by the language.
+	Builtin bool
+
+	// Variadic is true for a built-in that accepts one or more arguments, each
+	// of which must be one of AllowedTypes. print uses this form.
+	Variadic bool
+
+	// AllowedTypes lists the argument types a variadic built-in accepts.
+	AllowedTypes []*Type
+
+	// Decl is the syntax node for a user-defined function. It is nil for a
+	// built-in.
+	Decl *parser.FunctionDecl
+}
+
+// Scope is a lexical scope: a set of names plus an optional enclosing scope.
+type Scope struct {
+	parent  *Scope
+	symbols map[string]*Symbol
+}
+
+// newScope returns an empty scope nested inside parent. A nil parent is the
+// outermost scope.
+func newScope(parent *Scope) *Scope {
+	return &Scope{parent: parent, symbols: map[string]*Symbol{}}
+}
+
+// declare adds symbol to this scope. If a symbol with the same name already
+// exists in this scope, declare returns it and adds nothing, so the caller can
+// report a duplicate. Names in enclosing scopes are not consulted, which is
+// what allows an inner scope to shadow an outer one.
+func (s *Scope) declare(symbol *Symbol) *Symbol {
+	if existing, ok := s.symbols[symbol.Name]; ok {
+		return existing
+	}
+	s.symbols[symbol.Name] = symbol
+	return nil
+}
+
+// lookup returns the symbol for name, searching this scope and then enclosing
+// scopes.
+func (s *Scope) lookup(name string) (*Symbol, bool) {
+	for current := s; current != nil; current = current.parent {
+		if symbol, ok := current.symbols[name]; ok {
+			return symbol, true
+		}
+	}
+	return nil, false
+}
