@@ -1,0 +1,353 @@
+// printer.ktn - the canonical rendering of the Kitten AST.
+//
+// print_ast writes one line per node, depth-first, in a fixed order. Each line
+// is an indented node kind followed by the fields that determine its identity:
+// positions, names, operators, and literal text. Children follow on the next
+// lines, indented one level further.
+//
+// The format exists so that two implementations can be compared as text: the Go
+// bootstrap repository's differential harness renders the reference AST in
+// exactly this format and compares the two byte for byte. It is deterministic
+// and contains no addresses or other implementation detail, and it is also the
+// human-readable trace the parser driver prints.
+//
+// A node's indentation is part of its label rather than a separate printed
+// argument, because print separates arguments with spaces and an empty argument
+// would otherwise add a stray space at the start of every top-level line.
+
+import "ast.ktn";
+
+// indent returns two spaces per depth level.
+fn indent(int depth) -> string {
+    string result = "";
+    int level = 0;
+    while (level < depth) {
+        result += "  ";
+        level++;
+    }
+    return result;
+}
+
+// bool_name renders a boolean as the language writes it.
+fn bool_name(bool value) -> string {
+    if (value) {
+        return "true";
+    }
+    return "false";
+}
+
+// fixity_name renders whether a unary operator was written before or after its
+// operand.
+fn fixity_name(bool postfix) -> string {
+    if (postfix) {
+        return "postfix";
+    }
+    return "prefix";
+}
+
+// visibility_name renders a visibility modifier's spelling.
+public fn visibility_name(Visibility visibility) -> string {
+    match (visibility) {
+        Default { return "default"; }
+        Public { return "public"; }
+        Private { return "private"; }
+    }
+}
+
+// print_ast writes the whole program.
+public fn print_ast(Program program) {
+    print(indent(0) + "program");
+    int index = 0;
+    while (index < program.declaration_count) {
+        print_declaration(program.declarations[index], 1);
+        index++;
+    }
+}
+
+// print_declaration writes one top-level declaration.
+fn print_declaration(Decl declaration, int depth) {
+    Position at = decl_position(declaration);
+    match (declaration) {
+        Import(keyword, path) {
+            print(indent(depth) + "import", at.line, at.column, path);
+        }
+        Function(at_token, visibility, name, parameters, parameter_count, return_type, body) {
+            print(indent(depth) + "fn", at.line, at.column, visibility_name(visibility), name.text);
+            int index = 0;
+            while (index < parameter_count) {
+                print_parameter(parameters[index], depth + 1);
+                index++;
+            }
+            print_optional_type(return_type, depth + 1);
+            print_statement(body, depth + 1);
+        }
+        Struct(at_token, visibility, name, fields, field_count) {
+            print(indent(depth) + "struct", at.line, at.column, visibility_name(visibility), name.text);
+            int index = 0;
+            while (index < field_count) {
+                print_field(fields[index], depth + 1);
+                index++;
+            }
+        }
+        Enum(at_token, visibility, name, cases, case_count) {
+            print(indent(depth) + "enum", at.line, at.column, visibility_name(visibility), name.text);
+            int index = 0;
+            while (index < case_count) {
+                print(indent(depth + 1) + "case", cases[index].name.line, cases[index].name.column, cases[index].name.text);
+                index++;
+            }
+        }
+        Union(at_token, visibility, name, variants, variant_count) {
+            print(indent(depth) + "union", at.line, at.column, visibility_name(visibility), name.text);
+            int index = 0;
+            while (index < variant_count) {
+                print_variant(variants[index], depth + 1);
+                index++;
+            }
+        }
+    }
+}
+
+// print_parameter writes one parameter and its type.
+fn print_parameter(Parameter parameter, int depth) {
+    Position at = type_position(parameter.type);
+    print(indent(depth) + "param", at.line, at.column, parameter.name.text);
+    print_type(parameter.type, depth + 1);
+}
+
+// print_field writes one struct or variant field and its type.
+fn print_field(Field field, int depth) {
+    Position at = type_position(field.type);
+    print(indent(depth) + "field", at.line, at.column, field.name.text);
+    print_type(field.type, depth + 1);
+}
+
+// print_variant writes one union variant and its fields.
+fn print_variant(VariantDecl variant, int depth) {
+    print(indent(depth) + "variant", variant.name.line, variant.name.column, variant.name.text);
+    int index = 0;
+    while (index < variant.field_count) {
+        print_field(variant.fields[index], depth + 1);
+        index++;
+    }
+}
+
+// print_optional_type writes a function's return type, or "ret-none" when none
+// was written.
+fn print_optional_type(OptionalType reference, int depth) {
+    match (reference) {
+        Absent {
+            print(indent(depth) + "ret-none");
+        }
+        Present(type_ref) {
+            Position at = type_position(type_ref);
+            print(indent(depth) + "ret", at.line, at.column);
+            print_type(type_ref, depth + 1);
+        }
+    }
+}
+
+// print_type writes a type reference. An array or map type's children follow.
+fn print_type(TypeRef reference, int depth) {
+    Position at = type_position(reference);
+    match (reference) {
+        Named(name) {
+            print(indent(depth) + "type-name", at.line, at.column, name.text);
+        }
+        Array(element) {
+            print(indent(depth) + "type-array", at.line, at.column);
+            print_type(element, depth + 1);
+        }
+        Map(keyword, key, value) {
+            print(indent(depth) + "type-map", at.line, at.column);
+            print_type(key, depth + 1);
+            print_type(value, depth + 1);
+        }
+    }
+}
+
+// print_statement writes one statement.
+fn print_statement(Stmt statement, int depth) {
+    Position at = stmt_position(statement);
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            print(indent(depth) + "block", at.line, at.column);
+            int index = 0;
+            while (index < statement_count) {
+                print_statement(statements[index], depth + 1);
+                index++;
+            }
+        }
+        VarDecl(type_ref, name, initializer) {
+            print(indent(depth) + "var", at.line, at.column, name.text);
+            print_type(type_ref, depth + 1);
+            print_optional_expression(initializer, depth + 1);
+        }
+        Expression(expression) {
+            print(indent(depth) + "expr-stmt", at.line, at.column);
+            print_expression(expression, depth + 1);
+        }
+        If(at_token, condition, then_branch, else_branch) {
+            print(indent(depth) + "if", at.line, at.column);
+            print_expression(condition, depth + 1);
+            print_statement(then_branch, depth + 1);
+            print_optional_statement(else_branch, depth + 1);
+        }
+        While(at_token, condition, body) {
+            print(indent(depth) + "while", at.line, at.column);
+            print_expression(condition, depth + 1);
+            print_statement(body, depth + 1);
+        }
+        For(at_token, initializer, condition, increment, body) {
+            print(indent(depth) + "for", at.line, at.column);
+            print_optional_statement(initializer, depth + 1);
+            print_optional_expression(condition, depth + 1);
+            print_optional_expression(increment, depth + 1);
+            print_statement(body, depth + 1);
+        }
+        Return(at_token, value) {
+            print(indent(depth) + "return", at.line, at.column);
+            print_optional_expression(value, depth + 1);
+        }
+        Match(at_token, scrutinee, arms, arm_count) {
+            print(indent(depth) + "match", at.line, at.column);
+            print_expression(scrutinee, depth + 1);
+            int index = 0;
+            while (index < arm_count) {
+                print_arm(arms[index], depth + 1);
+                index++;
+            }
+        }
+    }
+}
+
+// print_arm writes one match arm: its variant, its bindings, and its body.
+fn print_arm(MatchArm arm, int depth) {
+    print(indent(depth) + "arm", arm.variant.line, arm.variant.column, arm.variant.text, arm.binding_count);
+    int index = 0;
+    while (index < arm.binding_count) {
+        print(indent(depth + 1) + "binding", arm.bindings[index].line, arm.bindings[index].column, arm.bindings[index].text);
+        index++;
+    }
+    print_statement(arm.body, depth + 1);
+}
+
+// print_optional_expression writes "absent" or the present expression.
+fn print_optional_expression(OptionalExpr optional, int depth) {
+    match (optional) {
+        Absent {
+            print(indent(depth) + "absent");
+        }
+        Present(expression) {
+            print(indent(depth) + "present");
+            print_expression(expression, depth + 1);
+        }
+    }
+}
+
+// print_optional_statement writes "absent" or the present statement.
+fn print_optional_statement(OptionalStmt optional, int depth) {
+    match (optional) {
+        Absent {
+            print(indent(depth) + "absent");
+        }
+        Present(statement) {
+            print(indent(depth) + "present");
+            print_statement(statement, depth + 1);
+        }
+    }
+}
+
+// print_expression writes one expression.
+fn print_expression(Expr expression, int depth) {
+    match (expression) {
+        Identifier(token) {
+            print(indent(depth) + "ident", token.line, token.column, token.text);
+        }
+        Integer(token) {
+            print(indent(depth) + "int", token.line, token.column, token.text);
+        }
+        Float(token) {
+            print(indent(depth) + "float", token.line, token.column, token.text);
+        }
+        String(token) {
+            print(indent(depth) + "string", token.line, token.column, token.text);
+        }
+        Boolean(token, value) {
+            print(indent(depth) + "bool", token.line, token.column, bool_name(value));
+        }
+        Unary(operator, operand, postfix) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "unary", at.line, at.column, operator.line, operator.column, operator.text, fixity_name(postfix));
+            print_expression(operand, depth + 1);
+        }
+        Binary(operator, left, right) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "binary", at.line, at.column, operator.line, operator.column, operator.text);
+            print_expression(left, depth + 1);
+            print_expression(right, depth + 1);
+        }
+        Assign(operator, target, value) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "assign", at.line, at.column, operator.line, operator.column, operator.text);
+            print_expression(target, depth + 1);
+            print_expression(value, depth + 1);
+        }
+        Call(open_paren, callee, arguments, argument_count) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "call", at.line, at.column, open_paren.line, open_paren.column);
+            print_expression(callee, depth + 1);
+            int index = 0;
+            while (index < argument_count) {
+                print_expression(arguments[index], depth + 1);
+                index++;
+            }
+        }
+        Member(dot, receiver, member) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "member", at.line, at.column, dot.line, dot.column, member.text);
+            print_expression(receiver, depth + 1);
+        }
+        StructLiteral(type_ref, open_brace, fields, field_count) {
+            Position at = type_position(type_ref);
+            print(indent(depth) + "struct-literal", at.line, at.column, open_brace.line, open_brace.column);
+            print_type(type_ref, depth + 1);
+            int index = 0;
+            while (index < field_count) {
+                print_field_init(fields[index], depth + 1);
+                index++;
+            }
+        }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
+            Position at = type_position(type_ref);
+            print(indent(depth) + "variant-literal", at.line, at.column, open_brace.line, open_brace.column, variant.text);
+            print_type(type_ref, depth + 1);
+            int index = 0;
+            while (index < field_count) {
+                print_field_init(fields[index], depth + 1);
+                index++;
+            }
+        }
+        NewArray(at, element, length) {
+            print(indent(depth) + "new-array", at.line, at.column);
+            print_type(element, depth + 1);
+            print_expression(length, depth + 1);
+        }
+        NewMap(at, map_type) {
+            print(indent(depth) + "new-map", at.line, at.column);
+            print_type(map_type, depth + 1);
+        }
+        Index(bracket, target, index) {
+            Position at = expr_position(expression);
+            print(indent(depth) + "index", at.line, at.column, bracket.line, bracket.column);
+            print_expression(target, depth + 1);
+            print_expression(index, depth + 1);
+        }
+    }
+}
+
+// print_field_init writes one "name = value" literal entry.
+fn print_field_init(FieldInit field, int depth) {
+    print(indent(depth) + "field-init", field.name.line, field.name.column, field.name.text);
+    print_expression(field.value, depth + 1);
+}

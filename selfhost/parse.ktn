@@ -1,0 +1,53 @@
+// parse.ktn - the runnable driver for the Kitten-written parser.
+//
+// It reads one source file, lexes it with the Kitten-written lexer, parses the
+// tokens with the Kitten-written parser, and prints the result:
+//
+//     <canonical AST lines>          on a successful parse
+//     error <line> <column> <message> on a lexical or syntax error
+//
+// The AST rendering is the format printer.ktn defines, which the Go bootstrap
+// repository's differential harness reproduces from the reference AST so that
+// the two can be compared byte for byte.
+//
+// Input selection: the Kitten runtime does not expose command-line arguments or
+// environment variables to a program, so this driver cannot take a path from the
+// command line. It reads the fixed relative path "input.txt", which makes it
+// parameterized by its working directory: a caller chooses the input by choosing
+// the directory to run in.
+//
+// This file is the driver rather than selfhost/parser/main.ktn because the
+// loader requires every import to resolve inside the directory of the file being
+// compiled. A driver that uses both the lexer and the parser must therefore sit
+// above both directories, in selfhost/.
+//
+// A missing or unreadable input file is a fatal runtime error from read_file, as
+// documented in SPEC.md 22.2.
+
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+import "parser/printer.ktn";
+
+fn main() {
+    string source = read_file("input.txt");
+    LexResult lexed = lex(source);
+
+    match (lexed) {
+        Success(tokens, count) {
+            ParseResult parsed = parse(tokens, count);
+            match (parsed) {
+                Success(program) {
+                    print_ast(program);
+                }
+                Failure(error) {
+                    print("error", error.line, error.column, error.message);
+                }
+            }
+        }
+        Failure(line, column, message) {
+            print("error", line, column, message);
+        }
+    }
+}

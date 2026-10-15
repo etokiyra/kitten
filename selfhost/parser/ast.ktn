@@ -1,0 +1,240 @@
+// ast.ktn - the abstract syntax tree produced by the Kitten-written parser.
+//
+// The tree mirrors the Go reference AST in parser/ast.go: the same node kinds,
+// the same fields, and the same positions. It carries no semantic information:
+// it does not resolve names, assign types, or decide whether a construct is
+// meaningful. Those decisions belong to a future checker.
+//
+// Every node's position is computed from the token that begins it, exactly as
+// the Go AST's Pos method does, so no position is stored twice and the AST holds
+// references to the lexer's tokens rather than copies of their text. A node that
+// needs a lexeme or a position keeps the whole Token, which already carries the
+// kind, the text, and the one-based line and column.
+//
+// Optional sub-nodes (an else branch, a variable initializer, a return value, a
+// for-loop clause, a function's return type) are modelled as explicit unions
+// with an Absent case, because Kitten has no null value: a union reference is
+// either a constructed object or an undefined local, and there is no literal
+// that denotes "no object". The Absent case makes absence a value that a match
+// must handle, and it is what a printer renders as a missing part of the tree.
+
+import "../lexer/tokens.ktn";
+
+// Position is a one-based source location.
+public struct Position {
+    int line;
+    int column;
+}
+
+// position_of_token converts a token's location into a Position.
+public fn position_of_token(Token token) -> Position {
+    return Position { line = token.line, column = token.column };
+}
+
+// Visibility is the optional access modifier written before a top-level
+// declaration. Whether a modifier is required, what it defaults to, and its
+// effect are deferred to a checker; the parser only records what was written.
+public enum Visibility {
+    Default,
+    Public,
+    Private
+}
+
+// TypeRef names a type: a named type, an array of an element type, or a map
+// from a key type to a value type.
+public union TypeRef {
+    Named { Token name; }
+    Array { TypeRef element; }
+    Map { Token keyword; TypeRef key; TypeRef value; }
+}
+
+// type_position reports where a type begins, matching TypeRef.Pos in the Go AST:
+// a named type at its name, an array type at its element type, and a map type at
+// the "map" keyword.
+public fn type_position(TypeRef reference) -> Position {
+    match (reference) {
+        Named(name) { return position_of_token(name); }
+        Array(element) { return type_position(element); }
+        Map(keyword, key, value) { return position_of_token(keyword); }
+    }
+}
+
+// OptionalType is a type that may be absent, such as a function's return type.
+public union OptionalType {
+    Absent
+    Present { TypeRef type_ref; }
+}
+
+// OptionalExpr is an expression that may be absent, such as a variable
+// initializer, a return value, or a for-loop clause.
+public union OptionalExpr {
+    Absent
+    Present { Expr expression; }
+}
+
+// OptionalStmt is a statement that may be absent, such as a for-loop
+// initializer. It also carries an else branch, which is either absent or one of
+// the two statements an else clause can be.
+public union OptionalStmt {
+    Absent
+    Present { Stmt statement; }
+}
+
+// Parameter is a single function parameter, written "type name".
+public struct Parameter {
+    Token name;
+    TypeRef type;
+}
+
+// Field is a struct or variant field, written "type name;".
+public struct Field {
+    Token name;
+    TypeRef type;
+}
+
+// FieldInit is one "name = value" entry inside a struct or variant literal.
+public struct FieldInit {
+    Token name;
+    Expr value;
+}
+
+// EnumCase is one alternative of an enum.
+public struct EnumCase {
+    Token name;
+}
+
+// VariantDecl is one alternative of a tagged union. A variant with no fields is
+// written with just its name.
+public struct VariantDecl {
+    Token name;
+    Field[] fields;
+    int field_count;
+}
+
+// MatchArm is one variant arm of a match statement. The bindings name the
+// variant's fields inside the arm body, in field order; each binding keeps its
+// token, which carries its name and position.
+public struct MatchArm {
+    Token variant;
+    Token[] bindings;
+    int binding_count;
+    Stmt body;
+}
+
+// Decl is a top-level declaration.
+public union Decl {
+    Import { Token keyword; string path; }
+    Function { Token at; Visibility visibility; Token name; Parameter[] parameters; int parameter_count; OptionalType return_type; Stmt body; }
+    Struct { Token at; Visibility visibility; Token name; Field[] fields; int field_count; }
+    Enum { Token at; Visibility visibility; Token name; EnumCase[] cases; int case_count; }
+    Union { Token at; Visibility visibility; Token name; VariantDecl[] variants; int variant_count; }
+}
+
+// decl_position reports where a declaration begins, including any visibility
+// modifier, matching the At field of the Go AST's declaration nodes.
+public fn decl_position(Decl declaration) -> Position {
+    match (declaration) {
+        Import(keyword, path) { return position_of_token(keyword); }
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) { return position_of_token(at); }
+        Struct(at, visibility, name, fields, field_count) { return position_of_token(at); }
+        Enum(at, visibility, name, cases, case_count) { return position_of_token(at); }
+        Union(at, visibility, name, variants, variant_count) { return position_of_token(at); }
+    }
+}
+
+// Stmt is a statement.
+public union Stmt {
+    Block { Token open_brace; Stmt[] statements; int statement_count; }
+    VarDecl { TypeRef type; Token name; OptionalExpr initializer; }
+    Expression { Expr expression; }
+    If { Token at; Expr condition; Stmt then_branch; OptionalStmt else_branch; }
+    While { Token at; Expr condition; Stmt body; }
+    For { Token at; OptionalStmt initializer; OptionalExpr condition; OptionalExpr increment; Stmt body; }
+    Return { Token at; OptionalExpr value; }
+    Match { Token at; Expr scrutinee; MatchArm[] arms; int arm_count; }
+}
+
+// stmt_position reports where a statement begins, matching the Pos method of the
+// corresponding Go AST node.
+public fn stmt_position(Stmt statement) -> Position {
+    match (statement) {
+        Block(open_brace, statements, statement_count) { return position_of_token(open_brace); }
+        VarDecl(type_ref, name, initializer) { return type_position(type_ref); }
+        Expression(expression) { return expr_position(expression); }
+        If(at, condition, then_branch, else_branch) { return position_of_token(at); }
+        While(at, condition, body) { return position_of_token(at); }
+        For(at, initializer, condition, increment, body) { return position_of_token(at); }
+        Return(at, value) { return position_of_token(at); }
+        Match(at, scrutinee, arms, arm_count) { return position_of_token(at); }
+    }
+}
+
+// Expr is an expression.
+public union Expr {
+    Identifier { Token token; }
+    Integer { Token token; }
+    Float { Token token; }
+    String { Token token; }
+    Boolean { Token token; bool value; }
+    Unary { Token operator; Expr operand; bool postfix; }
+    Binary { Token operator; Expr left; Expr right; }
+    Assign { Token operator; Expr target; Expr value; }
+    Call { Token open_paren; Expr callee; Expr[] arguments; int argument_count; }
+    Member { Token dot; Expr receiver; Token member; }
+    StructLiteral { TypeRef type; Token open_brace; FieldInit[] fields; int field_count; }
+    VariantLiteral { TypeRef type; Token variant; Token open_brace; FieldInit[] fields; int field_count; }
+    NewArray { Token at; TypeRef element; Expr length; }
+    NewMap { Token at; TypeRef map_type; }
+    Index { Token bracket; Expr target; Expr index; }
+}
+
+// expr_position reports where an expression begins, matching the Pos method of
+// the corresponding Go AST node: a prefix unary expression at its operator, a
+// postfix one at its operand, a binary or assignment at its left operand, a call
+// or member access at its receiver, and an index at its target.
+public fn expr_position(Expr expression) -> Position {
+    match (expression) {
+        Identifier(token) { return position_of_token(token); }
+        Integer(token) { return position_of_token(token); }
+        Float(token) { return position_of_token(token); }
+        String(token) { return position_of_token(token); }
+        Boolean(token, value) { return position_of_token(token); }
+        Unary(operator, operand, postfix) {
+            if (postfix) {
+                return expr_position(operand);
+            }
+            return position_of_token(operator);
+        }
+        Binary(operator, left, right) { return expr_position(left); }
+        Assign(operator, target, value) { return expr_position(target); }
+        Call(open_paren, callee, arguments, argument_count) { return expr_position(callee); }
+        Member(dot, receiver, member) { return expr_position(receiver); }
+        StructLiteral(type_ref, open_brace, fields, field_count) { return type_position(type_ref); }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return type_position(type_ref); }
+        NewArray(at, element, length) { return position_of_token(at); }
+        NewMap(at, map_type) { return position_of_token(at); }
+        Index(bracket, target, index) { return expr_position(target); }
+    }
+}
+
+// Program is a parsed source file: a sequence of top-level declarations.
+public struct Program {
+    Decl[] declarations;
+    int declaration_count;
+}
+
+// ParseError describes a syntax error and the position at which it was detected.
+public struct ParseError {
+    int line;
+    int column;
+    string message;
+}
+
+// ParseResult distinguishes a successful parse from a syntax error.
+//
+// A failed parse carries no program, mirroring the reference parser, which stops
+// at the first error. The parser never panics on malformed input.
+public union ParseResult {
+    Success { Program program; }
+    Failure { ParseError error; }
+}

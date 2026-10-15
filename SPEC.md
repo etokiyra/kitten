@@ -599,6 +599,14 @@ outcome here.
   program cannot take a path from the command line and cannot report failure
   except through a fatal runtime error (Section 25.4).
 
+**Parser clarifications deferred**
+
+- Whether an empty `enum` body (`enum E {}`, no cases) and an empty `union` body
+  (`union U {}`, no variants) are legal. The reference parser accepts both, while
+  Section 23.1 and Section 23.2 require at least one case or variant, so the
+  grammar and the parser disagree (Section 17.4). The discrepancy is documented
+  and neither implementation was changed.
+
 **Lexical clarifications deferred**
 
 - Whether identifiers may contain non-ASCII letters. The current lexer accepts
@@ -618,6 +626,10 @@ outcome here.
 - A lexer written in Kitten itself exists under `selfhost/lexer` and is compared
   against the Go reference lexer by a differential test, but it is not part of
   the production pipeline (Section 25).
+- A parser written in Kitten itself exists under `selfhost/parser`, with its
+  driver in `selfhost/parse.ktn`, and is compared against the Go reference parser
+  by a differential test. It also is not part of the production pipeline
+  (Section 26).
 - Self-hosting, a native (LLVM or assembly) backend, and the standard library
   are not implemented (Section 19.8).
 
@@ -777,6 +789,26 @@ These decisions were needed to parse the language. Each is provisional:
 9. Assignment is an expression with no syntactic restriction on its target;
    whether the target is assignable is deferred to the checker.
 10. The parser is fail-fast: it reports the first syntax error and stops.
+
+**Observed inconsistencies between the grammar and the reference parser**
+
+The reference parser accepts two bodies the grammar above does not:
+
+- `enum E {}` is accepted with no cases, although `enum` requires at least one
+  `case` and Section 23.1 states that an enum must have at least one case.
+- `union U {}` is accepted with no variants, although Section 23.2 states that a
+  union must have at least one variant. The grammar above does allow an empty
+  union body (`{ variant }`), so only the prose in Section 23.2 disagrees with the
+  parser.
+
+`struct S {}` with no fields is accepted and is consistent with both the grammar
+and Section 11.
+
+Both discrepancies are **documented, not resolved**: changing either the grammar
+or the reference parser would change accepted programs, so the choice between
+tightening the grammar and relaxing the prose is deferred (Section 16). The
+Kitten-written parser accepts what the reference parser accepts, so the two stay
+in step, and the differential corpus includes both empty bodies.
 
 ---
 
@@ -1661,7 +1693,9 @@ enum TokenKind {
 ```
 
 - A case is written with a comma between cases; a trailing comma is not allowed.
-  An enum must have at least one case.
+  An enum must have at least one case. (The reference parser accepts
+  `enum E {}` with no cases, which contradicts this sentence; the discrepancy is
+  recorded in Section 17.4.)
 - A value of the enum type is one of its cases. A case reference is written
   `EnumName.CaseName` and has the enum type.
 - Enum types match exactly. A `TokenKind` is not an `int`, and there is no
@@ -1687,6 +1721,8 @@ union Expression {
 - A variant with fields is written `VariantName { type name; ... }`; a variant
   with no fields is just `VariantName`. Variants are self-delimiting, so no
   separator is needed between them. A union must have at least one variant.
+  (The reference parser accepts `union U {}` with no variants, which contradicts
+  this sentence; the discrepancy is recorded in Section 17.4.)
 - A variant name must be unique within its union, and a field name must be
   unique within its variant.
 - A union value is a **reference** to a GC-managed object, like a struct value.
@@ -2052,3 +2088,93 @@ The following are **not** implemented and must not be assumed:
   tokens and lexical errors only.
 - Command-line arguments, standard error, and program-selected exit statuses.
 - Code-point (UTF-8) aware positions and messages.
+
+---
+
+## 26. Kitten-written parser (experimental)
+
+This section records a second component written in Kitten itself, alongside the
+lexer of Section 25. It is **not** the production front end: `kitten build` and
+`kitten run` continue to use the Go parser in `parser/`, and Section 17 remains
+the normative description of the grammar. The section exists so that the
+artifact, its design decisions, and its known limits are documented rather than
+assumed.
+
+### 26.1 Location and role
+
+The sources are:
+
+- `selfhost/parser/ast.ktn` — the abstract syntax tree types and the position
+  helpers that compute each node's position.
+- `selfhost/parser/parser.ktn` — the parser and the public `parse` function.
+- `selfhost/parser/printer.ktn` — the canonical rendering of the tree.
+- `selfhost/parse.ktn` — the driver, which reads a file, lexes it with the
+  Kitten-written lexer, parses the tokens, and prints the result.
+
+The driver is `selfhost/parse.ktn` rather than a file inside `selfhost/parser/`
+because imports must resolve inside the directory of the file being compiled
+(Section 22.4), so a driver that uses both the lexer and the parser has to sit
+above both directories. `selfhost/parser/README.md` describes how to build and
+run it. The parser parses one token stream and performs no module resolution,
+exactly like the reference parser.
+
+### 26.2 Fidelity to the reference parser
+
+The Kitten parser accepts the grammar of Section 17, applies the precedence and
+associativity of Section 17.3, and produces the same tree as the Go reference
+parser: the same node kinds, the same fields, the same positions, the same
+fail-fast diagnostics, and the same messages. A differential test in
+`cmd/kitten` compiles the parser and compares its rendering of the tree against
+the reference implementation's rendering of the same source, over a corpus that
+includes every grammar production, every precedence boundary, deeply nested
+constructs, malformed input, every fixture, and the self-hosted sources;
+`selfhost/parser/README.md` records the corpus and the results.
+
+### 26.3 The abstract syntax tree
+
+- The tree mirrors `parser/ast.go`: declarations, types, statements, and
+  expressions, with a position for every node. It carries no semantic
+  information and resolves no names.
+- A node that needs a lexeme keeps the lexer's token, which already carries the
+  kind, the text, and the position, so no lexeme or position is stored twice. A
+  node's position is computed from the token that begins it, by the same rules
+  the reference AST uses.
+- **Absence is explicit.** Kitten has no null value: a local declared without an
+  initializer is undefined rather than empty, and no literal denotes "no object".
+  The optional parts of the grammar — an else branch, a variable initializer, a
+  return value, a for-loop clause, a function's return type — are modelled as
+  unions with an `Absent` case and a `Present` case, so a `match` must handle
+  absence and no code path can forget it. A null or optional type in the language
+  would be an alternative and is **deferred** (Section 16).
+- Failure is a value: every step that can fail returns a result carrying either
+  the value or a `ParseError`, and the first error wins, as in Section 17.4.
+
+### 26.4 Documented differences
+
+The parser introduces no difference of its own. Because the driver lexes with the
+Kitten-written lexer, the differences recorded in Section 25.4 appear here too: a
+column after a byte at or above 128 can differ from the reference lexer's
+code-point column, and an error message that quotes such a byte names the byte.
+The differential test therefore requires exact equality for input whose bytes are
+all ASCII, and compares the AST shape and error positions for other input.
+
+### 26.5 Performance
+
+Parsing is roughly linear in the input size. Each AST list is allocated with a
+capacity derived from the extent of the enclosing delimited group — the tokens up
+to the first unmatched closing delimiter — rather than from the size of the file,
+so a small list inside a large file does not allocate space proportional to the
+whole file. Measured on the development machine, including the cost of rendering
+the tree and starting the process, parsing takes about 15 ms for 11 KB, 111 ms for
+109 KB, and 423 ms for 436 KB of generated declarations.
+
+### 26.6 Deferred
+
+The following are **not** implemented and must not be assumed:
+
+- A Kitten-written semantic checker, code generator, or compiler driver. This
+  section covers the parser and its tree only.
+- Module resolution, import loading, and multi-file parsing.
+- Recovery from a syntax error: the parser reports the first error and stops.
+- A null or optional type in the language, which would replace the explicit
+  `Absent`/`Present` unions of Section 26.3.

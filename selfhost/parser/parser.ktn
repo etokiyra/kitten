@@ -1,0 +1,1752 @@
+// parser.ktn - a parser for Kitten, written in Kitten.
+//
+// This module consumes the token array produced by the Kitten-written lexer and
+// builds the AST in ast.ktn. It mirrors the Go reference parser in
+// parser/parser.go: the same accepted grammar, the same precedence and
+// associativity, the same node shapes, and the same fail-fast diagnostics with
+// the same messages and positions.
+//
+// Failure handling. Kitten has no exceptions, so every step that can fail
+// returns a small result union carrying either the value or a ParseError, and a
+// caller propagates the first failure unchanged. That makes propagation
+// explicit: a caller cannot reach a value without having handled the failure
+// case, and the first error always wins, exactly as the reference parser does.
+//
+// Termination. The parser never reads past the token array: peek and peek_at
+// return the end-of-input token for any position outside it. Every loop either
+// consumes a token or returns, so no input can make the parser spin. The only
+// unbounded recursion follows the nesting of the source, exactly as the
+// reference parser's does.
+//
+// Arrays. Kitten arrays are fixed-size, so the parser sizes every AST array by
+// the token count. That bound is safe because each array element consumes at
+// least one token, and it is checked by the array bounds check rather than
+// assumed. The parser stores a separate count with each array and never reads
+// past it.
+
+import "ast.ktn";
+import "../lexer/tokens.ktn";
+
+// ParseError is declared in ast.ktn; the result unions below pair a value with
+// the error that prevented it, or with the value that was produced.
+union TokenResult {
+    Ok { Token token; }
+    Failed { ParseError error; }
+}
+
+union ExprResult {
+    Ok { Expr expression; }
+    Failed { ParseError error; }
+}
+
+union StmtResult {
+    Ok { Stmt statement; }
+    Failed { ParseError error; }
+}
+
+union DeclResult {
+    Ok { Decl declaration; }
+    Failed { ParseError error; }
+}
+
+union TypeResult {
+    Ok { TypeRef type_ref; }
+    Failed { ParseError error; }
+}
+
+union ParameterListResult {
+    Ok { Parameter[] parameters; int count; }
+    Failed { ParseError error; }
+}
+
+union ExpressionListResult {
+    Ok { Expr[] expressions; int count; }
+    Failed { ParseError error; }
+}
+
+union FieldInitListResult {
+    Ok { FieldInit[] fields; int count; Token open_brace; }
+    Failed { ParseError error; }
+}
+
+// Parser holds the token stream and the current read position.
+struct Parser {
+    Token[] tokens;
+    int count;
+    int position;
+
+    // eof is the token returned when a read goes past the end of the stream.
+    Token eof;
+}
+
+// --- Value extraction from result unions -------------------------------------
+//
+// Each pair of helpers below tests a result and reads its value. The value
+// accessor is only called after the test has succeeded; its failure branch
+// returns a sentinel built from the parser's end-of-input token, which no caller
+// can observe.
+
+fn token_ok(TokenResult result) -> bool {
+    match (result) {
+        Ok(token) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+fn token_value(Parser parser, TokenResult result) -> Token {
+    match (result) {
+        Ok(token) { return token; }
+        Failed(error) { return parser.eof; }
+    }
+}
+
+fn token_error(TokenResult result) -> ParseError {
+    match (result) {
+        Ok(token) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+fn expression_ok(ExprResult result) -> bool {
+    match (result) {
+        Ok(expression) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+fn expression_value(Parser parser, ExprResult result) -> Expr {
+    match (result) {
+        Ok(expression) { return expression; }
+        Failed(error) { return Expr.Identifier { token = parser.eof }; }
+    }
+}
+
+fn expression_error(ExprResult result) -> ParseError {
+    match (result) {
+        Ok(expression) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+fn statement_ok(StmtResult result) -> bool {
+    match (result) {
+        Ok(statement) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+fn statement_value(Parser parser, StmtResult result) -> Stmt {
+    match (result) {
+        Ok(statement) { return statement; }
+        Failed(error) { return empty_block(parser); }
+    }
+}
+
+fn statement_error(StmtResult result) -> ParseError {
+    match (result) {
+        Ok(statement) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+fn declaration_ok(DeclResult result) -> bool {
+    match (result) {
+        Ok(declaration) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+fn declaration_error(DeclResult result) -> ParseError {
+    match (result) {
+        Ok(declaration) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+fn type_ok(TypeResult result) -> bool {
+    match (result) {
+        Ok(type_ref) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+fn type_value(Parser parser, TypeResult result) -> TypeRef {
+    match (result) {
+        Ok(type_ref) { return type_ref; }
+        Failed(error) { return TypeRef.Named { name = parser.eof }; }
+    }
+}
+
+fn type_error(TypeResult result) -> ParseError {
+    match (result) {
+        Ok(type_ref) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+// --- Error construction ------------------------------------------------------
+
+// no_error builds the error used by the value accessors above. It is never
+// reported: an accessor is only called after its result tested as successful.
+fn no_error() -> ParseError {
+    return ParseError { line = 0, column = 0, message = "" };
+}
+
+// error_at builds a syntax error positioned at a token.
+fn error_at(Token token, string message) -> ParseError {
+    return ParseError { line = token.line, column = token.column, message = message };
+}
+
+// expected_error builds the "expected X, found Y" diagnostic.
+fn expected_error(Token token, string want, string context) -> ParseError {
+    return error_at(token, "expected " + want + " " + context + ", found " + describe(token));
+}
+
+// describe renders a token for use in an error message, exactly as the reference
+// parser's describe does.
+fn describe(Token token) -> string {
+    if (token.kind == TokenKind.EOF) {
+        return "end of input";
+    }
+    return kind_name(token.kind) + " " + quote_string(token.text);
+}
+
+// quote_string renders a string the way Go's %q verb renders one: the four
+// control escapes Go uses by name, an escape for the quote and the backslash,
+// printable ASCII unchanged, and \xNN for every other byte.
+//
+// For text that is printable ASCII this matches Go exactly. A byte at or above
+// 128 is rendered as \xNN, where Go would decode UTF-8 and print a printable
+// code point, so a diagnostic that quotes non-ASCII token text can differ; the
+// difference is the byte-oriented one documented for the lexer, and the
+// differential harness records it.
+fn quote_string(string text) -> string {
+    string result = "\"";
+    int size = length(text);
+    int index = 0;
+    while (index < size) {
+        int byte = text[index];
+        if (byte == 34) {
+            result += "\\\"";
+        } else if (byte == 92) {
+            result += "\\\\";
+        } else if (byte == 7) {
+            result += "\\a";
+        } else if (byte == 8) {
+            result += "\\b";
+        } else if (byte == 9) {
+            result += "\\t";
+        } else if (byte == 10) {
+            result += "\\n";
+        } else if (byte == 11) {
+            result += "\\v";
+        } else if (byte == 12) {
+            result += "\\f";
+        } else if (byte == 13) {
+            result += "\\r";
+        } else if (byte >= 32 && byte <= 126) {
+            result += substring(text, index, index + 1);
+        } else {
+            result += "\\x" + hex_pair(byte);
+        }
+        index++;
+    }
+    return result + "\"";
+}
+
+// hex_pair returns the two lowercase hexadecimal digits of a byte.
+fn hex_pair(int byte) -> string {
+    string digits = "0123456789abcdef";
+    int high = byte / 16;
+    int low = byte % 16;
+    return substring(digits, high, high + 1) + substring(digits, low, low + 1);
+}
+
+// decode_string decodes a string literal token into the bytes it denotes,
+// mirroring the reference lexer's DecodeString.
+//
+// The four escapes the language defines are resolved; the surrounding quotes are
+// removed. The lexer has already rejected every other escape and every
+// unterminated literal, so any other byte - including a backslash before an
+// unsupported escape - is copied verbatim and the result is exactly what the
+// reference decoder produces for a token that reached the parser.
+fn decode_string(string literal) -> string {
+    int size = length(literal);
+    string result = "";
+    int index = 1;
+    while (index < size - 1) {
+        int byte = literal[index];
+        if (byte == 92 && index + 1 < size - 1) {
+            int escaped = literal[index + 1];
+            if (escaped == 110) {
+                result += substring("\n", 0, 1);
+            } else if (escaped == 116) {
+                result += substring("\t", 0, 1);
+            } else if (escaped == 34) {
+                result += "\"";
+            } else if (escaped == 92) {
+                result += "\\";
+            } else {
+                result += substring(literal, index, index + 1);
+                result += substring(literal, index + 1, index + 2);
+            }
+            index += 2;
+        } else {
+            result += substring(literal, index, index + 1);
+            index++;
+        }
+    }
+    return result;
+}
+
+// --- Token access ------------------------------------------------------------
+
+// peek returns the current token without consuming it, or the end-of-input
+// token when the read position is past the end of the stream.
+fn peek(Parser parser) -> Token {
+    if (parser.position < parser.count) {
+        return parser.tokens[parser.position];
+    }
+    return parser.eof;
+}
+
+// peek_at returns the token offset positions ahead of the current one, or the
+// end-of-input token when that position is past the end.
+fn peek_at(Parser parser, int offset) -> Token {
+    int index = parser.position + offset;
+    if (index >= 0 && index < parser.count) {
+        return parser.tokens[index];
+    }
+    return parser.eof;
+}
+
+// peek_kind returns the kind of the current token.
+fn peek_kind(Parser parser) -> TokenKind {
+    return peek(parser).kind;
+}
+
+// peek_at_kind returns the kind of the token offset positions ahead.
+fn peek_at_kind(Parser parser, int offset) -> TokenKind {
+    return peek_at(parser, offset).kind;
+}
+
+// advance consumes and returns the current token. At end of input it returns the
+// end-of-input token without moving past it.
+fn advance(Parser parser) -> Token {
+    Token token = peek(parser);
+    if (parser.position < parser.count) {
+        parser.position = parser.position + 1;
+    }
+    return token;
+}
+
+// expect_token consumes the next token when it has the given kind, and otherwise
+// builds the diagnostic for what was expected. "want" is the spelling of the
+// expected token and "context" explains where.
+fn expect_token(Parser parser, TokenKind kind, string want, string context) -> TokenResult {
+    Token token = peek(parser);
+    if (token.kind != kind) {
+        return TokenResult.Failed { error = expected_error(token, want, context) };
+    }
+    return TokenResult.Ok { token = advance(parser) };
+}
+
+// empty_block returns a block with no statements, used as the sentinel value for
+// a failed statement.
+fn empty_block(Parser parser) -> Stmt {
+    return Stmt.Block { open_brace = parser.eof, statements = new Stmt[0], statement_count = 0 };
+}
+
+// group_extent counts the tokens from the current position up to the first
+// closing delimiter that no opening delimiter matches, or up to end of input.
+//
+// A list is parsed inside a delimited group, and every element of the list
+// consumes at least one token, so the extent of that group is a safe capacity
+// for the list: it is local to the construct being parsed rather than the size
+// of the whole file. Without it, a small list inside a large file - an argument
+// list in a call, or a statement list in a function body - would allocate space
+// proportional to the whole file, and a file with many such lists would cost
+// quadratically in memory and collection work.
+//
+// A capacity that were too small would be a fatal bounds error, never an
+// out-of-bounds write, so the bound is checked by the runtime rather than
+// assumed. It cannot be too small for a well-formed list: elements are delimited
+// by the group's closing token or by end of input, so none of them lies past the
+// extent.
+fn group_extent(Parser parser) -> int {
+    int depth = 0;
+    int index = parser.position;
+    while (index < parser.count) {
+        TokenKind kind = parser.tokens[index].kind;
+        if (kind == TokenKind.LParen || kind == TokenKind.LBracket || kind == TokenKind.LBrace) {
+            depth++;
+        } else if (kind == TokenKind.RParen || kind == TokenKind.RBracket || kind == TokenKind.RBrace) {
+            if (depth == 0) {
+                return index - parser.position;
+            }
+            depth--;
+        } else if (kind == TokenKind.EOF) {
+            return index - parser.position;
+        }
+        index++;
+    }
+    return parser.count - parser.position;
+}
+
+// list_capacity returns the capacity to allocate for a list starting at the
+// current position. One extra slot keeps the capacity positive for an empty
+// list, whose extent is zero.
+fn list_capacity(Parser parser) -> int {
+    return group_extent(parser) + 1;
+}
+
+// is_type_keyword reports whether a token kind begins a built-in type name.
+fn is_type_keyword(TokenKind kind) -> bool {
+    if (kind == TokenKind.TypeInt) { return true; }
+    if (kind == TokenKind.TypeFloat) { return true; }
+    if (kind == TokenKind.TypeBool) { return true; }
+    if (kind == TokenKind.TypeString) { return true; }
+    if (kind == TokenKind.TypeVoid) { return true; }
+    if (kind == TokenKind.Map) { return true; }
+    return false;
+}
+
+// --- Entry point -------------------------------------------------------------
+
+// eof_token returns the end-of-input token to use when the parser reads past the
+// end of the supplied stream, mirroring the reference parser.
+fn eof_token(Token[] tokens, int count) -> Token {
+    if (count == 0) {
+        return Token { kind = TokenKind.EOF, text = "", line = 1, column = 1 };
+    }
+    Token last = tokens[count - 1];
+    if (last.kind == TokenKind.EOF) {
+        return last;
+    }
+    return Token { kind = TokenKind.EOF, text = "", line = last.line, column = last.column };
+}
+
+// parse builds a syntax tree from a token stream produced by the lexer.
+//
+// The stream is expected to end with an EOF token. parse is fail-fast: it
+// reports the first syntax error and returns no program, and it never reads past
+// the tokens it was given.
+public fn parse(Token[] tokens, int count) -> ParseResult {
+    Parser parser = Parser { tokens = tokens, count = count, position = 0, eof = eof_token(tokens, count) };
+    return parse_program(parser);
+}
+
+// parse_program parses top-level declarations until end of input.
+fn parse_program(Parser parser) -> ParseResult {
+    Decl[] declarations = new Decl[list_capacity(parser)];
+    int declaration_count = 0;
+
+    while (peek_kind(parser) != TokenKind.EOF) {
+        DeclResult result = parse_declaration(parser);
+        if (!declaration_ok(result)) {
+            return ParseResult.Failure { error = declaration_error(result) };
+        }
+        declarations[declaration_count] = declaration_value(result);
+        declaration_count++;
+    }
+
+    return ParseResult.Success {
+        program = Program { declarations = declarations, declaration_count = declaration_count }
+    };
+}
+
+// declaration_value reads the declaration from a successful result.
+fn declaration_value(DeclResult result) -> Decl {
+    match (result) {
+        Ok(declaration) { return declaration; }
+        Failed(error) { return Decl.Import { keyword = eof_marker(), path = "" }; }
+    }
+}
+
+// eof_marker returns a token used as the sentinel of a failed declaration read.
+fn eof_marker() -> Token {
+    return Token { kind = TokenKind.EOF, text = "", line = 0, column = 0 };
+}
+
+// --- Top-level declarations --------------------------------------------------
+
+// parse_declaration parses a top-level declaration, preceded by an optional
+// visibility modifier.
+fn parse_declaration(Parser parser) -> DeclResult {
+    Token start = peek(parser);
+
+    Visibility visibility = Visibility.Default;
+    if (start.kind == TokenKind.Public) {
+        visibility = Visibility.Public;
+        advance(parser);
+    } else if (start.kind == TokenKind.Private) {
+        visibility = Visibility.Private;
+        advance(parser);
+    }
+
+    Token token = peek(parser);
+    if (token.kind == TokenKind.Fn) {
+        return parse_function(parser, start, visibility);
+    }
+    if (token.kind == TokenKind.Struct) {
+        return parse_struct(parser, start, visibility);
+    }
+    if (token.kind == TokenKind.Enum) {
+        return parse_enum(parser, start, visibility);
+    }
+    if (token.kind == TokenKind.Union) {
+        return parse_union(parser, start, visibility);
+    }
+    if (token.kind == TokenKind.Import) {
+        if (visibility != Visibility.Default) {
+            return DeclResult.Failed { error = error_at(token, "an import declaration cannot have a visibility modifier") };
+        }
+        return parse_import(parser);
+    }
+    return DeclResult.Failed {
+        error = error_at(token, "expected a declaration ('fn', 'struct', 'enum', 'union', or 'import'), found " + describe(token))
+    };
+}
+
+// parse_import parses an import declaration, "import \"path\";".
+fn parse_import(Parser parser) -> DeclResult {
+    Token keyword = advance(parser);
+
+    TokenResult path_result = expect_token(parser, TokenKind.String, "a quoted import path", "after 'import'");
+    if (!token_ok(path_result)) {
+        return DeclResult.Failed { error = token_error(path_result) };
+    }
+    Token path_token = token_value(parser, path_result);
+    string path = decode_string(path_token.text);
+
+    TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the import path");
+    if (!token_ok(semicolon)) {
+        return DeclResult.Failed { error = token_error(semicolon) };
+    }
+    return DeclResult.Ok { declaration = Decl.Import { keyword = keyword, path = path } };
+}
+
+// parse_function parses a function declaration.
+fn parse_function(Parser parser, Token start, Visibility visibility) -> DeclResult {
+    advance(parser); // 'fn'
+
+    TokenResult name_result = expect_token(parser, TokenKind.Ident, "a function name", "after 'fn'");
+    if (!token_ok(name_result)) {
+        return DeclResult.Failed { error = token_error(name_result) };
+    }
+    Token name = token_value(parser, name_result);
+
+    TokenResult open = expect_token(parser, TokenKind.LParen, "'('", "after the function name");
+    if (!token_ok(open)) {
+        return DeclResult.Failed { error = token_error(open) };
+    }
+
+    ParameterListResult parameters_result = parse_parameters(parser);
+    match (parameters_result) {
+        Ok(parameters, parameter_count) {
+            TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the parameter list");
+            if (!token_ok(close)) {
+                return DeclResult.Failed { error = token_error(close) };
+            }
+
+            OptionalType return_type = OptionalType.Absent;
+            if (peek_kind(parser) == TokenKind.Arrow) {
+                advance(parser);
+                TypeResult type_result = parse_type(parser);
+                if (!type_ok(type_result)) {
+                    return DeclResult.Failed { error = type_error(type_result) };
+                }
+                return_type = OptionalType.Present { type_ref = type_value(parser, type_result) };
+            }
+
+            StmtResult body_result = parse_block(parser);
+            if (!statement_ok(body_result)) {
+                return DeclResult.Failed { error = statement_error(body_result) };
+            }
+
+            return DeclResult.Ok {
+                declaration = Decl.Function {
+                    at = start,
+                    visibility = visibility,
+                    name = name,
+                    parameters = parameters,
+                    parameter_count = parameter_count,
+                    return_type = return_type,
+                    body = statement_value(parser, body_result)
+                }
+            };
+        }
+        Failed(error) {
+            return DeclResult.Failed { error = error };
+        }
+    }
+}
+
+// parse_parameters parses a comma-separated parameter list up to, but not
+// including, the closing parenthesis.
+fn parse_parameters(Parser parser) -> ParameterListResult {
+    Parameter[] parameters = new Parameter[list_capacity(parser)];
+    int count = 0;
+
+    if (peek_kind(parser) == TokenKind.RParen) {
+        return ParameterListResult.Ok { parameters = parameters, count = count };
+    }
+
+    bool parsing = true;
+    while (parsing) {
+        TypeResult type_result = parse_type(parser);
+        if (!type_ok(type_result)) {
+            return ParameterListResult.Failed { error = type_error(type_result) };
+        }
+        TypeRef type_ref = type_value(parser, type_result);
+
+        TokenResult name_result = expect_token(parser, TokenKind.Ident, "a parameter name", "after the parameter type");
+        if (!token_ok(name_result)) {
+            return ParameterListResult.Failed { error = token_error(name_result) };
+        }
+        parameters[count] = Parameter { name = token_value(parser, name_result), type = type_ref };
+        count++;
+
+        if (peek_kind(parser) != TokenKind.Comma) {
+            parsing = false;
+        } else {
+            advance(parser); // ','
+            if (peek_kind(parser) == TokenKind.RParen) {
+                return ParameterListResult.Failed {
+                    error = error_at(peek(parser), "trailing comma is not allowed in a parameter list")
+                };
+            }
+        }
+    }
+
+    return ParameterListResult.Ok { parameters = parameters, count = count };
+}
+
+// parse_struct parses a struct declaration.
+fn parse_struct(Parser parser, Token start, Visibility visibility) -> DeclResult {
+    advance(parser); // 'struct'
+
+    TokenResult name_result = expect_token(parser, TokenKind.Ident, "a type name", "after 'struct'");
+    if (!token_ok(name_result)) {
+        return DeclResult.Failed { error = token_error(name_result) };
+    }
+    Token name = token_value(parser, name_result);
+
+    TokenResult open = expect_token(parser, TokenKind.LBrace, "'{'", "to start the struct body");
+    if (!token_ok(open)) {
+        return DeclResult.Failed { error = token_error(open) };
+    }
+
+    Field[] fields = new Field[list_capacity(parser)];
+    int field_count = 0;
+    bool parsing = true;
+    while (parsing) {
+        Token token = peek(parser);
+        if (token.kind == TokenKind.RBrace) {
+            advance(parser);
+            parsing = false;
+        } else if (token.kind == TokenKind.EOF) {
+            return DeclResult.Failed {
+                error = error_at(token, "expected '}' to close the struct body, found end of input")
+            };
+        } else {
+            TypeResult type_result = parse_type(parser);
+            if (!type_ok(type_result)) {
+                return DeclResult.Failed { error = type_error(type_result) };
+            }
+            TypeRef type_ref = type_value(parser, type_result);
+
+            TokenResult field_name = expect_token(parser, TokenKind.Ident, "a field name", "after the field type");
+            if (!token_ok(field_name)) {
+                return DeclResult.Failed { error = token_error(field_name) };
+            }
+            TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the struct field");
+            if (!token_ok(semicolon)) {
+                return DeclResult.Failed { error = token_error(semicolon) };
+            }
+
+            fields[field_count] = Field { name = token_value(parser, field_name), type = type_ref };
+            field_count++;
+        }
+    }
+
+    return DeclResult.Ok {
+        declaration = Decl.Struct {
+            at = start,
+            visibility = visibility,
+            name = name,
+            fields = fields,
+            field_count = field_count
+        }
+    };
+}
+
+// parse_enum parses "enum Name { Case, Case, ... }".
+fn parse_enum(Parser parser, Token start, Visibility visibility) -> DeclResult {
+    advance(parser); // 'enum'
+
+    TokenResult name_result = expect_token(parser, TokenKind.Ident, "a type name", "after 'enum'");
+    if (!token_ok(name_result)) {
+        return DeclResult.Failed { error = token_error(name_result) };
+    }
+    Token name = token_value(parser, name_result);
+
+    TokenResult open = expect_token(parser, TokenKind.LBrace, "'{'", "to start the enum body");
+    if (!token_ok(open)) {
+        return DeclResult.Failed { error = token_error(open) };
+    }
+
+    EnumCase[] cases = new EnumCase[list_capacity(parser)];
+    int case_count = 0;
+
+    if (peek_kind(parser) == TokenKind.RBrace) {
+        advance(parser);
+        return DeclResult.Ok {
+            declaration = Decl.Enum {
+                at = start,
+                visibility = visibility,
+                name = name,
+                cases = cases,
+                case_count = case_count
+            }
+        };
+    }
+
+    bool parsing = true;
+    while (parsing) {
+        TokenResult case_result = expect_token(parser, TokenKind.Ident, "a case name", "in the enum body");
+        if (!token_ok(case_result)) {
+            return DeclResult.Failed { error = token_error(case_result) };
+        }
+        cases[case_count] = EnumCase { name = token_value(parser, case_result) };
+        case_count++;
+
+        if (peek_kind(parser) != TokenKind.Comma) {
+            parsing = false;
+        } else {
+            advance(parser); // ','
+            if (peek_kind(parser) == TokenKind.RBrace) {
+                return DeclResult.Failed {
+                    error = error_at(peek(parser), "trailing comma is not allowed in an enum")
+                };
+            }
+        }
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RBrace, "'}'", "to close the enum body");
+    if (!token_ok(close)) {
+        return DeclResult.Failed { error = token_error(close) };
+    }
+
+    return DeclResult.Ok {
+        declaration = Decl.Enum {
+            at = start,
+            visibility = visibility,
+            name = name,
+            cases = cases,
+            case_count = case_count
+        }
+    };
+}
+
+// parse_union parses "union Name { Variant { fields } Variant ... }".
+fn parse_union(Parser parser, Token start, Visibility visibility) -> DeclResult {
+    advance(parser); // 'union'
+
+    TokenResult name_result = expect_token(parser, TokenKind.Ident, "a type name", "after 'union'");
+    if (!token_ok(name_result)) {
+        return DeclResult.Failed { error = token_error(name_result) };
+    }
+    Token name = token_value(parser, name_result);
+
+    TokenResult open = expect_token(parser, TokenKind.LBrace, "'{'", "to start the union body");
+    if (!token_ok(open)) {
+        return DeclResult.Failed { error = token_error(open) };
+    }
+
+    VariantDecl[] variants = new VariantDecl[list_capacity(parser)];
+    int variant_count = 0;
+
+    bool parsing = true;
+    while (parsing) {
+        Token token = peek(parser);
+        if (token.kind == TokenKind.RBrace) {
+            advance(parser);
+            parsing = false;
+        } else if (token.kind == TokenKind.EOF) {
+            return DeclResult.Failed {
+                error = error_at(token, "expected '}' to close the union body, found end of input")
+            };
+        } else {
+            TokenResult variant_name = expect_token(parser, TokenKind.Ident, "a variant name", "in the union body");
+            if (!token_ok(variant_name)) {
+                return DeclResult.Failed { error = token_error(variant_name) };
+            }
+
+            Field[] fields = new Field[list_capacity(parser)];
+            int field_count = 0;
+
+            if (peek_kind(parser) == TokenKind.LBrace) {
+                advance(parser); // '{'
+                bool variant_parsing = true;
+                while (variant_parsing) {
+                    Token field_token = peek(parser);
+                    if (field_token.kind == TokenKind.RBrace) {
+                        advance(parser);
+                        variant_parsing = false;
+                    } else if (field_token.kind == TokenKind.EOF) {
+                        return DeclResult.Failed {
+                            error = error_at(field_token, "expected '}' to close the variant body, found end of input")
+                        };
+                    } else {
+                        TypeResult type_result = parse_type(parser);
+                        if (!type_ok(type_result)) {
+                            return DeclResult.Failed { error = type_error(type_result) };
+                        }
+                        TypeRef type_ref = type_value(parser, type_result);
+
+                        TokenResult field_name = expect_token(parser, TokenKind.Ident, "a field name", "after the field type");
+                        if (!token_ok(field_name)) {
+                            return DeclResult.Failed { error = token_error(field_name) };
+                        }
+                        TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the struct field");
+                        if (!token_ok(semicolon)) {
+                            return DeclResult.Failed { error = token_error(semicolon) };
+                        }
+
+                        fields[field_count] = Field { name = token_value(parser, field_name), type = type_ref };
+                        field_count++;
+                    }
+                }
+            }
+
+            variants[variant_count] = VariantDecl {
+                name = token_value(parser, variant_name),
+                fields = fields,
+                field_count = field_count
+            };
+            variant_count++;
+        }
+    }
+
+    return DeclResult.Ok {
+        declaration = Decl.Union {
+            at = start,
+            visibility = visibility,
+            name = name,
+            variants = variants,
+            variant_count = variant_count
+        }
+    };
+}
+
+// --- Types -------------------------------------------------------------------
+
+// parse_type parses a type: a built-in type keyword or a user-defined
+// identifier, a map type, or any of those followed by "[]" array suffixes.
+fn parse_type(Parser parser) -> TypeResult {
+    TypeResult base_result = parse_base_type(parser);
+    if (!type_ok(base_result)) {
+        return base_result;
+    }
+    TypeRef base = type_value(parser, base_result);
+
+    while (peek_kind(parser) == TokenKind.LBracket && peek_at_kind(parser, 1) == TokenKind.RBracket) {
+        advance(parser); // '['
+        advance(parser); // ']'
+        base = TypeRef.Array { element = base };
+    }
+    return TypeResult.Ok { type_ref = base };
+}
+
+// parse_base_type parses a single type name without array suffixes, or a map
+// type.
+fn parse_base_type(Parser parser) -> TypeResult {
+    Token token = peek(parser);
+    if (token.kind == TokenKind.Map) {
+        return parse_map_type(parser);
+    }
+    if (token.kind == TokenKind.TypeInt ||
+        token.kind == TokenKind.TypeFloat ||
+        token.kind == TokenKind.TypeBool ||
+        token.kind == TokenKind.TypeString ||
+        token.kind == TokenKind.TypeVoid ||
+        token.kind == TokenKind.Ident) {
+        advance(parser);
+        return TypeResult.Ok { type_ref = TypeRef.Named { name = token } };
+    }
+    return TypeResult.Failed { error = error_at(token, "expected a type, found " + describe(token)) };
+}
+
+// parse_map_type parses "map[KeyType]ValueType".
+fn parse_map_type(Parser parser) -> TypeResult {
+    Token keyword = advance(parser); // 'map'
+
+    TokenResult open = expect_token(parser, TokenKind.LBracket, "'['", "after 'map'");
+    if (!token_ok(open)) {
+        return TypeResult.Failed { error = token_error(open) };
+    }
+
+    TypeResult key_result = parse_type(parser);
+    if (!type_ok(key_result)) {
+        return key_result;
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RBracket, "']'", "after the map key type");
+    if (!token_ok(close)) {
+        return TypeResult.Failed { error = token_error(close) };
+    }
+
+    TypeResult value_result = parse_type(parser);
+    if (!type_ok(value_result)) {
+        return value_result;
+    }
+
+    return TypeResult.Ok {
+        type_ref = TypeRef.Map {
+            keyword = keyword,
+            key = type_value(parser, key_result),
+            value = type_value(parser, value_result)
+        }
+    };
+}
+
+// --- Statements --------------------------------------------------------------
+
+// parse_block parses a brace-delimited block of statements.
+fn parse_block(Parser parser) -> StmtResult {
+    TokenResult open = expect_token(parser, TokenKind.LBrace, "'{'", "to start a block");
+    if (!token_ok(open)) {
+        return StmtResult.Failed { error = token_error(open) };
+    }
+
+    Stmt[] statements = new Stmt[list_capacity(parser)];
+    int statement_count = 0;
+    bool parsing = true;
+    while (parsing) {
+        Token token = peek(parser);
+        if (token.kind == TokenKind.RBrace) {
+            advance(parser);
+            parsing = false;
+        } else if (token.kind == TokenKind.EOF) {
+            return StmtResult.Failed {
+                error = error_at(token, "expected '}' to close the block, found end of input")
+            };
+        } else {
+            StmtResult statement_result = parse_statement(parser);
+            if (!statement_ok(statement_result)) {
+                return statement_result;
+            }
+            statements[statement_count] = statement_value(parser, statement_result);
+            statement_count++;
+        }
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.Block {
+            open_brace = token_value(parser, open),
+            statements = statements,
+            statement_count = statement_count
+        }
+    };
+}
+
+// parse_statement parses a single statement.
+fn parse_statement(Parser parser) -> StmtResult {
+    TokenKind kind = peek_kind(parser);
+    if (kind == TokenKind.LBrace) {
+        return parse_block(parser);
+    }
+    if (kind == TokenKind.If) {
+        return parse_if(parser);
+    }
+    if (kind == TokenKind.While) {
+        return parse_while(parser);
+    }
+    if (kind == TokenKind.For) {
+        return parse_for(parser);
+    }
+    if (kind == TokenKind.Return) {
+        return parse_return(parser);
+    }
+    if (kind == TokenKind.Match) {
+        return parse_match(parser);
+    }
+    if (starts_variable_declaration(parser)) {
+        return parse_var_decl_statement(parser);
+    }
+    return parse_expression_statement(parser);
+}
+
+// starts_variable_declaration reports whether the upcoming tokens begin a local
+// variable declaration, distinguishing "Rectangle room = ...;" and
+// "Rectangle[] rooms = ...;" from expression statements such as "room = ...;"
+// or "rooms[0] = ...;".
+fn starts_variable_declaration(Parser parser) -> bool {
+    if (is_type_keyword(peek_kind(parser))) {
+        return true;
+    }
+    if (peek_kind(parser) != TokenKind.Ident) {
+        return false;
+    }
+
+    int offset = 1;
+    while (peek_at_kind(parser, offset) == TokenKind.LBracket && peek_at_kind(parser, offset + 1) == TokenKind.RBracket) {
+        offset += 2;
+    }
+    return peek_at_kind(parser, offset) == TokenKind.Ident;
+}
+
+// parse_var_decl_statement parses a local variable declaration and its trailing
+// semicolon.
+fn parse_var_decl_statement(Parser parser) -> StmtResult {
+    StmtResult declaration = parse_var_decl(parser);
+    if (!statement_ok(declaration)) {
+        return declaration;
+    }
+
+    TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the variable declaration");
+    if (!token_ok(semicolon)) {
+        return StmtResult.Failed { error = token_error(semicolon) };
+    }
+    return declaration;
+}
+
+// parse_var_decl parses a local variable declaration without its trailing
+// semicolon, so that it can be reused inside a for-loop header. The initializer
+// is optional.
+fn parse_var_decl(Parser parser) -> StmtResult {
+    TypeResult type_result = parse_type(parser);
+    if (!type_ok(type_result)) {
+        return StmtResult.Failed { error = type_error(type_result) };
+    }
+    TypeRef type_ref = type_value(parser, type_result);
+
+    TokenResult name_result = expect_token(parser, TokenKind.Ident, "an identifier", "for the variable name");
+    if (!token_ok(name_result)) {
+        return StmtResult.Failed { error = token_error(name_result) };
+    }
+
+    OptionalExpr initializer = OptionalExpr.Absent;
+    if (peek_kind(parser) == TokenKind.Assign) {
+        advance(parser);
+        ExprResult value_result = parse_expression(parser);
+        if (!expression_ok(value_result)) {
+            return StmtResult.Failed { error = expression_error(value_result) };
+        }
+        initializer = OptionalExpr.Present { expression = expression_value(parser, value_result) };
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.VarDecl {
+            type = type_ref,
+            name = token_value(parser, name_result),
+            initializer = initializer
+        }
+    };
+}
+
+// parse_expression_statement parses an expression followed by a semicolon.
+fn parse_expression_statement(Parser parser) -> StmtResult {
+    ExprResult expression_result = parse_expression(parser);
+    if (!expression_ok(expression_result)) {
+        return StmtResult.Failed { error = expression_error(expression_result) };
+    }
+
+    TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the expression");
+    if (!token_ok(semicolon)) {
+        return StmtResult.Failed { error = token_error(semicolon) };
+    }
+    return StmtResult.Ok {
+        statement = Stmt.Expression { expression = expression_value(parser, expression_result) }
+    };
+}
+
+// parse_if parses an if statement, including any "else if" or "else" clause.
+fn parse_if(Parser parser) -> StmtResult {
+    Token keyword = advance(parser); // 'if'
+
+    TokenResult open = expect_token(parser, TokenKind.LParen, "'('", "after 'if'");
+    if (!token_ok(open)) {
+        return StmtResult.Failed { error = token_error(open) };
+    }
+
+    ExprResult condition_result = parse_expression(parser);
+    if (!expression_ok(condition_result)) {
+        return StmtResult.Failed { error = expression_error(condition_result) };
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the if condition");
+    if (!token_ok(close)) {
+        return StmtResult.Failed { error = token_error(close) };
+    }
+
+    StmtResult then_result = parse_block(parser);
+    if (!statement_ok(then_result)) {
+        return then_result;
+    }
+
+    OptionalStmt else_branch = OptionalStmt.Absent;
+    if (peek_kind(parser) == TokenKind.Else) {
+        advance(parser);
+        if (peek_kind(parser) == TokenKind.If) {
+            StmtResult else_if = parse_if(parser);
+            if (!statement_ok(else_if)) {
+                return else_if;
+            }
+            else_branch = OptionalStmt.Present { statement = statement_value(parser, else_if) };
+        } else {
+            StmtResult else_block = parse_block(parser);
+            if (!statement_ok(else_block)) {
+                return else_block;
+            }
+            else_branch = OptionalStmt.Present { statement = statement_value(parser, else_block) };
+        }
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.If {
+            at = keyword,
+            condition = expression_value(parser, condition_result),
+            then_branch = statement_value(parser, then_result),
+            else_branch = else_branch
+        }
+    };
+}
+
+// parse_while parses a while loop.
+fn parse_while(Parser parser) -> StmtResult {
+    Token keyword = advance(parser); // 'while'
+
+    TokenResult open = expect_token(parser, TokenKind.LParen, "'('", "after 'while'");
+    if (!token_ok(open)) {
+        return StmtResult.Failed { error = token_error(open) };
+    }
+
+    ExprResult condition_result = parse_expression(parser);
+    if (!expression_ok(condition_result)) {
+        return StmtResult.Failed { error = expression_error(condition_result) };
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the while condition");
+    if (!token_ok(close)) {
+        return StmtResult.Failed { error = token_error(close) };
+    }
+
+    StmtResult body_result = parse_block(parser);
+    if (!statement_ok(body_result)) {
+        return body_result;
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.While {
+            at = keyword,
+            condition = expression_value(parser, condition_result),
+            body = statement_value(parser, body_result)
+        }
+    };
+}
+
+// parse_for parses a C-style for loop. Each of the three header clauses may be
+// empty.
+fn parse_for(Parser parser) -> StmtResult {
+    Token keyword = advance(parser); // 'for'
+
+    TokenResult open = expect_token(parser, TokenKind.LParen, "'('", "after 'for'");
+    if (!token_ok(open)) {
+        return StmtResult.Failed { error = token_error(open) };
+    }
+
+    OptionalStmt initializer = OptionalStmt.Absent;
+    if (peek_kind(parser) != TokenKind.Semicolon) {
+        if (starts_variable_declaration(parser)) {
+            StmtResult declaration = parse_var_decl(parser);
+            if (!statement_ok(declaration)) {
+                return declaration;
+            }
+            initializer = OptionalStmt.Present { statement = statement_value(parser, declaration) };
+        } else {
+            ExprResult expression_result = parse_expression(parser);
+            if (!expression_ok(expression_result)) {
+                return StmtResult.Failed { error = expression_error(expression_result) };
+            }
+            initializer = OptionalStmt.Present {
+                statement = Stmt.Expression { expression = expression_value(parser, expression_result) }
+            };
+        }
+    }
+    TokenResult first_semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the for-loop initializer");
+    if (!token_ok(first_semicolon)) {
+        return StmtResult.Failed { error = token_error(first_semicolon) };
+    }
+
+    OptionalExpr condition = OptionalExpr.Absent;
+    if (peek_kind(parser) != TokenKind.Semicolon) {
+        ExprResult condition_result = parse_expression(parser);
+        if (!expression_ok(condition_result)) {
+            return StmtResult.Failed { error = expression_error(condition_result) };
+        }
+        condition = OptionalExpr.Present { expression = expression_value(parser, condition_result) };
+    }
+    TokenResult second_semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the for-loop condition");
+    if (!token_ok(second_semicolon)) {
+        return StmtResult.Failed { error = token_error(second_semicolon) };
+    }
+
+    OptionalExpr increment = OptionalExpr.Absent;
+    if (peek_kind(parser) != TokenKind.RParen) {
+        ExprResult increment_result = parse_expression(parser);
+        if (!expression_ok(increment_result)) {
+            return StmtResult.Failed { error = expression_error(increment_result) };
+        }
+        increment = OptionalExpr.Present { expression = expression_value(parser, increment_result) };
+    }
+    TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the for-loop header");
+    if (!token_ok(close)) {
+        return StmtResult.Failed { error = token_error(close) };
+    }
+
+    StmtResult body_result = parse_block(parser);
+    if (!statement_ok(body_result)) {
+        return body_result;
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.For {
+            at = keyword,
+            initializer = initializer,
+            condition = condition,
+            increment = increment,
+            body = statement_value(parser, body_result)
+        }
+    };
+}
+
+// parse_return parses a return statement, with or without a value.
+fn parse_return(Parser parser) -> StmtResult {
+    Token keyword = advance(parser); // 'return'
+
+    OptionalExpr value = OptionalExpr.Absent;
+    if (peek_kind(parser) != TokenKind.Semicolon) {
+        ExprResult value_result = parse_expression(parser);
+        if (!expression_ok(value_result)) {
+            return StmtResult.Failed { error = expression_error(value_result) };
+        }
+        value = OptionalExpr.Present { expression = expression_value(parser, value_result) };
+    }
+
+    TokenResult semicolon = expect_token(parser, TokenKind.Semicolon, "';'", "after the return statement");
+    if (!token_ok(semicolon)) {
+        return StmtResult.Failed { error = token_error(semicolon) };
+    }
+    return StmtResult.Ok { statement = Stmt.Return { at = keyword, value = value } };
+}
+
+// parse_match parses a match statement.
+fn parse_match(Parser parser) -> StmtResult {
+    Token keyword = advance(parser); // 'match'
+
+    TokenResult open = expect_token(parser, TokenKind.LParen, "'('", "after 'match'");
+    if (!token_ok(open)) {
+        return StmtResult.Failed { error = token_error(open) };
+    }
+
+    ExprResult scrutinee_result = parse_expression(parser);
+    if (!expression_ok(scrutinee_result)) {
+        return StmtResult.Failed { error = expression_error(scrutinee_result) };
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the match scrutinee");
+    if (!token_ok(close)) {
+        return StmtResult.Failed { error = token_error(close) };
+    }
+
+    TokenResult brace = expect_token(parser, TokenKind.LBrace, "'{'", "to start the match body");
+    if (!token_ok(brace)) {
+        return StmtResult.Failed { error = token_error(brace) };
+    }
+
+    MatchArm[] arms = new MatchArm[list_capacity(parser)];
+    int arm_count = 0;
+    bool parsing = true;
+    while (parsing) {
+        Token token = peek(parser);
+        if (token.kind == TokenKind.RBrace) {
+            advance(parser);
+            parsing = false;
+        } else if (token.kind == TokenKind.EOF) {
+            return StmtResult.Failed {
+                error = error_at(token, "expected '}' to close the match body, found end of input")
+            };
+        } else {
+            TokenResult variant_result = expect_token(parser, TokenKind.Ident, "a variant name", "in the match body");
+            if (!token_ok(variant_result)) {
+                return StmtResult.Failed { error = token_error(variant_result) };
+            }
+            Token variant = token_value(parser, variant_result);
+
+            Token[] bindings = new Token[list_capacity(parser)];
+            int binding_count = 0;
+
+            if (peek_kind(parser) == TokenKind.LParen) {
+                advance(parser); // '('
+                if (peek_kind(parser) != TokenKind.RParen) {
+                    bool binding_parsing = true;
+                    while (binding_parsing) {
+                        TokenResult binding_result = expect_token(parser, TokenKind.Ident, "a binding name", "in the match arm");
+                        if (!token_ok(binding_result)) {
+                            return StmtResult.Failed { error = token_error(binding_result) };
+                        }
+                        bindings[binding_count] = token_value(parser, binding_result);
+                        binding_count++;
+
+                        if (peek_kind(parser) != TokenKind.Comma) {
+                            binding_parsing = false;
+                        } else {
+                            advance(parser); // ','
+                            if (peek_kind(parser) == TokenKind.RParen) {
+                                return StmtResult.Failed {
+                                    error = error_at(peek(parser), "trailing comma is not allowed in a match arm")
+                                };
+                            }
+                        }
+                    }
+                }
+                TokenResult binding_close = expect_token(parser, TokenKind.RParen, "')'", "after the match arm bindings");
+                if (!token_ok(binding_close)) {
+                    return StmtResult.Failed { error = token_error(binding_close) };
+                }
+            }
+
+            StmtResult body_result = parse_block(parser);
+            if (!statement_ok(body_result)) {
+                return body_result;
+            }
+
+            arms[arm_count] = MatchArm {
+                variant = variant,
+                bindings = bindings,
+                binding_count = binding_count,
+                body = statement_value(parser, body_result)
+            };
+            arm_count++;
+        }
+    }
+
+    return StmtResult.Ok {
+        statement = Stmt.Match {
+            at = keyword,
+            scrutinee = expression_value(parser, scrutinee_result),
+            arms = arms,
+            arm_count = arm_count
+        }
+    };
+}
+
+// --- Expressions -------------------------------------------------------------
+
+// Expression precedence levels, from lowest to highest binding. Assignment is
+// the lowest and right-associative; the remaining binary operators are
+// left-associative.
+fn precedence_assignment() -> int { return 1; }
+fn precedence_logical_or() -> int { return 2; }
+fn precedence_logical_and() -> int { return 3; }
+fn precedence_equality() -> int { return 4; }
+fn precedence_relational() -> int { return 5; }
+fn precedence_additive() -> int { return 6; }
+fn precedence_multiplicative() -> int { return 7; }
+
+// binary_precedence returns the precedence of a binary or assignment operator,
+// or 0 when the token kind is not one.
+fn binary_precedence(TokenKind kind) -> int {
+    if (kind == TokenKind.Assign || kind == TokenKind.PlusAssign || kind == TokenKind.MinusAssign) {
+        return precedence_assignment();
+    }
+    if (kind == TokenKind.Or) { return precedence_logical_or(); }
+    if (kind == TokenKind.And) { return precedence_logical_and(); }
+    if (kind == TokenKind.Eq || kind == TokenKind.Neq) { return precedence_equality(); }
+    if (kind == TokenKind.Lt || kind == TokenKind.Lte || kind == TokenKind.Gt || kind == TokenKind.Gte) { return precedence_relational(); }
+    if (kind == TokenKind.Plus || kind == TokenKind.Minus) { return precedence_additive(); }
+    if (kind == TokenKind.Star || kind == TokenKind.Slash || kind == TokenKind.Percent) { return precedence_multiplicative(); }
+    return 0;
+}
+
+// is_assignment_operator reports whether a kind is one of the assignment
+// operators, which are the only right-associative ones.
+fn is_assignment_operator(TokenKind kind) -> bool {
+    if (kind == TokenKind.Assign) { return true; }
+    if (kind == TokenKind.PlusAssign) { return true; }
+    if (kind == TokenKind.MinusAssign) { return true; }
+    return false;
+}
+
+// parse_expression parses a full expression, including assignment.
+fn parse_expression(Parser parser) -> ExprResult {
+    return parse_binary(parser, precedence_assignment());
+}
+
+// parse_binary implements precedence climbing for the binary and assignment
+// operators, parsing operators whose precedence is at least min_precedence.
+fn parse_binary(Parser parser, int min_precedence) -> ExprResult {
+    ExprResult left_result = parse_unary(parser);
+    if (!expression_ok(left_result)) {
+        return left_result;
+    }
+    Expr left = expression_value(parser, left_result);
+
+    bool parsing = true;
+    while (parsing) {
+        Token operator = peek(parser);
+        int precedence = binary_precedence(operator.kind);
+        if (precedence == 0 || precedence < min_precedence) {
+            parsing = false;
+        } else {
+            advance(parser);
+
+            int next_precedence = precedence + 1;
+            if (is_assignment_operator(operator.kind)) {
+                next_precedence = precedence;
+            }
+            ExprResult right_result = parse_binary(parser, next_precedence);
+            if (!expression_ok(right_result)) {
+                return right_result;
+            }
+            Expr right = expression_value(parser, right_result);
+
+            if (is_assignment_operator(operator.kind)) {
+                left = Expr.Assign { operator = operator, target = left, value = right };
+            } else {
+                left = Expr.Binary { operator = operator, left = left, right = right };
+            }
+        }
+    }
+
+    return ExprResult.Ok { expression = left };
+}
+
+// parse_unary parses a prefix unary expression, or a postfix expression when no
+// prefix operator applies.
+fn parse_unary(Parser parser) -> ExprResult {
+    Token token = peek(parser);
+    if (token.kind == TokenKind.Minus || token.kind == TokenKind.Not ||
+        token.kind == TokenKind.Inc || token.kind == TokenKind.Dec) {
+        advance(parser);
+        ExprResult operand_result = parse_unary(parser);
+        if (!expression_ok(operand_result)) {
+            return operand_result;
+        }
+        return ExprResult.Ok {
+            expression = Expr.Unary {
+                operator = token,
+                operand = expression_value(parser, operand_result),
+                postfix = false
+            }
+        };
+    }
+    return parse_postfix(parser);
+}
+
+// parse_postfix parses a primary expression followed by any number of postfix
+// operations: calls, member access, indexing, and postfix "++"/"--".
+fn parse_postfix(Parser parser) -> ExprResult {
+    ExprResult expression_result = parse_primary(parser);
+    if (!expression_ok(expression_result)) {
+        return expression_result;
+    }
+    Expr expression = expression_value(parser, expression_result);
+
+    bool parsing = true;
+    while (parsing) {
+        Token token = peek(parser);
+        if (token.kind == TokenKind.LParen) {
+            advance(parser); // '('
+            ExpressionListResult arguments_result = parse_arguments(parser);
+            match (arguments_result) {
+                Ok(arguments, argument_count) {
+                    TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the argument list");
+                    if (!token_ok(close)) {
+                        return ExprResult.Failed { error = token_error(close) };
+                    }
+                    expression = Expr.Call {
+                        open_paren = token,
+                        callee = expression,
+                        arguments = arguments,
+                        argument_count = argument_count
+                    };
+                }
+                Failed(error) {
+                    return ExprResult.Failed { error = error };
+                }
+            }
+        } else if (token.kind == TokenKind.Dot) {
+            advance(parser); // '.'
+            TokenResult member_result = expect_token(parser, TokenKind.Ident, "a member name", "after '.'");
+            if (!token_ok(member_result)) {
+                return ExprResult.Failed { error = token_error(member_result) };
+            }
+            expression = Expr.Member {
+                dot = token,
+                receiver = expression,
+                member = token_value(parser, member_result)
+            };
+        } else if (token.kind == TokenKind.LBracket) {
+            advance(parser); // '['
+            ExprResult index_result = parse_expression(parser);
+            if (!expression_ok(index_result)) {
+                return index_result;
+            }
+            TokenResult close = expect_token(parser, TokenKind.RBracket, "']'", "after the index expression");
+            if (!token_ok(close)) {
+                return ExprResult.Failed { error = token_error(close) };
+            }
+            expression = Expr.Index {
+                bracket = token,
+                target = expression,
+                index = expression_value(parser, index_result)
+            };
+        } else if (token.kind == TokenKind.Inc || token.kind == TokenKind.Dec) {
+            advance(parser);
+            expression = Expr.Unary { operator = token, operand = expression, postfix = true };
+        } else {
+            parsing = false;
+        }
+    }
+
+    return ExprResult.Ok { expression = expression };
+}
+
+// parse_arguments parses a comma-separated argument list up to, but not
+// including, the closing parenthesis.
+fn parse_arguments(Parser parser) -> ExpressionListResult {
+    Expr[] arguments = new Expr[list_capacity(parser)];
+    int count = 0;
+
+    if (peek_kind(parser) == TokenKind.RParen) {
+        return ExpressionListResult.Ok { expressions = arguments, count = count };
+    }
+
+    bool parsing = true;
+    while (parsing) {
+        ExprResult argument_result = parse_expression(parser);
+        if (!expression_ok(argument_result)) {
+            return ExpressionListResult.Failed { error = expression_error(argument_result) };
+        }
+        arguments[count] = expression_value(parser, argument_result);
+        count++;
+
+        if (peek_kind(parser) != TokenKind.Comma) {
+            parsing = false;
+        } else {
+            advance(parser); // ','
+            if (peek_kind(parser) == TokenKind.RParen) {
+                return ExpressionListResult.Failed {
+                    error = error_at(peek(parser), "trailing comma is not allowed in an argument list")
+                };
+            }
+        }
+    }
+
+    return ExpressionListResult.Ok { expressions = arguments, count = count };
+}
+
+// parse_primary parses a literal, identifier, struct or variant literal, array
+// or map creation, or parenthesized expression.
+fn parse_primary(Parser parser) -> ExprResult {
+    Token token = peek(parser);
+
+    if (token.kind == TokenKind.Int) {
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.Integer { token = token } };
+    }
+    if (token.kind == TokenKind.Float) {
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.Float { token = token } };
+    }
+    if (token.kind == TokenKind.String) {
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.String { token = token } };
+    }
+    if (token.kind == TokenKind.True) {
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.Boolean { token = token, value = true } };
+    }
+    if (token.kind == TokenKind.False) {
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.Boolean { token = token, value = false } };
+    }
+    if (token.kind == TokenKind.New) {
+        return parse_new(parser);
+    }
+    if (token.kind == TokenKind.Ident) {
+        if (peek_at_kind(parser, 1) == TokenKind.LBrace) {
+            return parse_struct_literal(parser);
+        }
+        if (peek_at_kind(parser, 1) == TokenKind.Dot &&
+            peek_at_kind(parser, 2) == TokenKind.Ident &&
+            peek_at_kind(parser, 3) == TokenKind.LBrace) {
+            return parse_variant_literal(parser);
+        }
+        advance(parser);
+        return ExprResult.Ok { expression = Expr.Identifier { token = token } };
+    }
+    if (token.kind == TokenKind.LParen) {
+        advance(parser);
+        ExprResult inner_result = parse_expression(parser);
+        if (!expression_ok(inner_result)) {
+            return inner_result;
+        }
+        TokenResult close = expect_token(parser, TokenKind.RParen, "')'", "after the parenthesized expression");
+        if (!token_ok(close)) {
+            return ExprResult.Failed { error = token_error(close) };
+        }
+        return inner_result;
+    }
+
+    return ExprResult.Failed { error = error_at(token, "expected an expression, found " + describe(token)) };
+}
+
+// parse_new parses array or map creation.
+fn parse_new(Parser parser) -> ExprResult {
+    Token keyword = advance(parser); // 'new'
+
+    if (peek_kind(parser) == TokenKind.Map) {
+        TypeResult map_result = parse_map_type(parser);
+        if (!type_ok(map_result)) {
+            return ExprResult.Failed { error = type_error(map_result) };
+        }
+        return ExprResult.Ok { expression = Expr.NewMap { at = keyword, map_type = type_value(parser, map_result) } };
+    }
+
+    TypeResult element_result = parse_type(parser);
+    if (!type_ok(element_result)) {
+        return ExprResult.Failed { error = type_error(element_result) };
+    }
+    TypeRef element = type_value(parser, element_result);
+
+    TokenResult open = expect_token(parser, TokenKind.LBracket, "'['", "after the array element type");
+    if (!token_ok(open)) {
+        return ExprResult.Failed { error = token_error(open) };
+    }
+
+    ExprResult length_result = parse_expression(parser);
+    if (!expression_ok(length_result)) {
+        return length_result;
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RBracket, "']'", "after the array length");
+    if (!token_ok(close)) {
+        return ExprResult.Failed { error = token_error(close) };
+    }
+
+    return ExprResult.Ok {
+        expression = Expr.NewArray {
+            at = keyword,
+            element = element,
+            length = expression_value(parser, length_result)
+        }
+    };
+}
+
+// parse_struct_literal parses a struct literal expression.
+fn parse_struct_literal(Parser parser) -> ExprResult {
+    Token name = advance(parser); // type name
+
+    FieldInitListResult fields_result = parse_field_initializers(parser, "a struct literal");
+    match (fields_result) {
+        Ok(fields, field_count, open) {
+            return ExprResult.Ok {
+                expression = Expr.StructLiteral {
+                    type = TypeRef.Named { name = name },
+                    open_brace = open,
+                    fields = fields,
+                    field_count = field_count
+                }
+            };
+        }
+        Failed(error) {
+            return ExprResult.Failed { error = error };
+        }
+    }
+}
+
+// parse_variant_literal parses a tagged-union variant literal.
+fn parse_variant_literal(Parser parser) -> ExprResult {
+    Token name = advance(parser); // union type name
+    advance(parser);              // '.'
+    Token variant = advance(parser);
+
+    FieldInitListResult fields_result = parse_field_initializers(parser, "a variant literal");
+    match (fields_result) {
+        Ok(fields, field_count, open) {
+            return ExprResult.Ok {
+                expression = Expr.VariantLiteral {
+                    type = TypeRef.Named { name = name },
+                    variant = variant,
+                    open_brace = open,
+                    fields = fields,
+                    field_count = field_count
+                }
+            };
+        }
+        Failed(error) {
+            return ExprResult.Failed { error = error };
+        }
+    }
+}
+
+// parse_field_initializers parses "{ name = value, ... }" and returns the
+// initializers together with the position of the opening brace.
+fn parse_field_initializers(Parser parser, string context) -> FieldInitListResult {
+    TokenResult open_result = expect_token(parser, TokenKind.LBrace, "'{'", "to start " + context);
+    if (!token_ok(open_result)) {
+        return FieldInitListResult.Failed { error = token_error(open_result) };
+    }
+    Token open = token_value(parser, open_result);
+
+    FieldInit[] fields = new FieldInit[list_capacity(parser)];
+    int field_count = 0;
+
+    if (peek_kind(parser) == TokenKind.RBrace) {
+        advance(parser);
+        return FieldInitListResult.Ok { fields = fields, count = field_count, open_brace = open };
+    }
+
+    bool parsing = true;
+    while (parsing) {
+        TokenResult name_result = expect_token(parser, TokenKind.Ident, "a field name", "in the literal");
+        if (!token_ok(name_result)) {
+            return FieldInitListResult.Failed { error = token_error(name_result) };
+        }
+        Token name = token_value(parser, name_result);
+
+        TokenResult assign = expect_token(parser, TokenKind.Assign, "'='", "after the field name");
+        if (!token_ok(assign)) {
+            return FieldInitListResult.Failed { error = token_error(assign) };
+        }
+
+        ExprResult value_result = parse_expression(parser);
+        if (!expression_ok(value_result)) {
+            return FieldInitListResult.Failed { error = expression_error(value_result) };
+        }
+
+        fields[field_count] = FieldInit { name = name, value = expression_value(parser, value_result) };
+        field_count++;
+
+        if (peek_kind(parser) != TokenKind.Comma) {
+            parsing = false;
+        } else {
+            advance(parser); // ','
+            if (peek_kind(parser) == TokenKind.RBrace) {
+                return FieldInitListResult.Failed {
+                    error = error_at(peek(parser), "trailing comma is not allowed in " + context)
+                };
+            }
+        }
+    }
+
+    TokenResult close = expect_token(parser, TokenKind.RBrace, "'}'", "to close " + context);
+    if (!token_ok(close)) {
+        return FieldInitListResult.Failed { error = token_error(close) };
+    }
+    return FieldInitListResult.Ok { fields = fields, count = field_count, open_brace = open };
+}

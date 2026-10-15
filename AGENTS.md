@@ -79,15 +79,17 @@ delivered the first real component written in Kitten: a lexer under
 a differential corpus of 772 inputs in `cmd/kitten`. Phase 3H gave strings a
 stored byte length alongside the bytes, so `length` and indexing are
 constant-time while the bytes stay NUL-terminated; the observable string
-semantics did not change, and the Kitten-written lexer now scans linearly.
+semantics did not change, and the Kitten-written lexer now scans linearly. Phase
+4A added the next self-hosted component: a parser under `selfhost/parser`, driven
+by `selfhost/parse.ktn`, that reproduces the Go reference parser's grammar,
+precedence, tree, and diagnostics, and is checked against it by a differential
+corpus of 262 inputs in `cmd/kitten`.
 
-The Kitten-written lexer is not part of the production pipeline: `kitten build`
-and `kitten run` still use the Go lexer, which remains authoritative. Its
-deliberate differences (byte-oriented positions, no command-line arguments or
-chosen exit status) are documented in SPEC.md Section 25 and
-`selfhost/lexer/README.md`. Phase 3H gave strings a stored byte length, so
-`length` and indexing are constant-time and the Kitten lexer scans linearly;
-that change is documented in SPEC.md Sections 19, 20, and 25.
+Neither self-hosted component is part of the production pipeline: `kitten build`
+and `kitten run` still use the Go lexer and parser, which remain authoritative.
+Their deliberate differences (byte-oriented positions, no command-line arguments
+or chosen exit status) are documented in SPEC.md Sections 25 and 26,
+`selfhost/lexer/README.md`, and `selfhost/parser/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -102,7 +104,8 @@ authorization.
    modules; Phase 3D added enums and tagged unions; Phase 3E added typed maps;
    Phase 3F added string byte access; Phase 3G added a Kitten-written lexer
    checked against the Go lexer, without replacing it; Phase 3H made strings
-   length-carrying so that scanning is linear).
+   length-carrying so that scanning is linear; Phase 4A added a Kitten-written
+   parser checked against the Go parser, without replacing it).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

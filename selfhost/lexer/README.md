@@ -166,7 +166,9 @@ tokens.
 
 ## What is deliberately not here
 
-- A parser, checker, or code generator: this is a lexer only.
+- A checker or code generator. A parser that consumes these tokens now exists in
+  `selfhost/parser`, with its driver in `selfhost/parse.ktn`; it reproduces the
+  reference parser and is checked against it by its own differential corpus.
 - Code-point-aware positions and messages.
 - Command-line arguments, standard error, and program-selected exit statuses.
 - Any further optimization: the remaining cost is per-token allocation and the
