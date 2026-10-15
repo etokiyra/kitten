@@ -107,7 +107,8 @@ authorization.
    length-carrying so that scanning is linear; Phase 4A added a Kitten-written
    parser checked against the Go parser, without replacing it; Phase 4B added a
    Kitten-written semantic checker checked against the Go checker, without
-   replacing it).
+   replacing it; Phase 4C exposed the checker's resolved semantic model for a
+   future code generator).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

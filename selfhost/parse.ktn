@@ -38,7 +38,7 @@ fn main() {
         Success(tokens, count) {
             ParseResult parsed = parse(tokens, count);
             match (parsed) {
-                Success(program) {
+                Success(program, expression_count, type_ref_count) {
                     print_ast(program);
                 }
                 Failure(error) {

@@ -151,14 +151,14 @@ fn print_optional_type(OptionalType reference, int depth) {
 fn print_type(TypeRef reference, int depth) {
     Position at = type_position(reference);
     match (reference) {
-        Named(name) {
+        Named(node_id, name) {
             print(indent(depth) + "type-name", at.line, at.column, name.text);
         }
-        Array(element) {
+        Array(node_id, element) {
             print(indent(depth) + "type-array", at.line, at.column);
             print_type(element, depth + 1);
         }
-        Map(keyword, key, value) {
+        Map(node_id, keyword, key, value) {
             print(indent(depth) + "type-map", at.line, at.column);
             print_type(key, depth + 1);
             print_type(value, depth + 1);
@@ -261,39 +261,39 @@ fn print_optional_statement(OptionalStmt optional, int depth) {
 // print_expression writes one expression.
 fn print_expression(Expr expression, int depth) {
     match (expression) {
-        Identifier(token) {
+        Identifier(node_id, token) {
             print(indent(depth) + "ident", token.line, token.column, token.text);
         }
-        Integer(token) {
+        Integer(node_id, token) {
             print(indent(depth) + "int", token.line, token.column, token.text);
         }
-        Float(token) {
+        Float(node_id, token) {
             print(indent(depth) + "float", token.line, token.column, token.text);
         }
-        String(token) {
+        String(node_id, token) {
             print(indent(depth) + "string", token.line, token.column, token.text);
         }
-        Boolean(token, value) {
+        Boolean(node_id, token, value) {
             print(indent(depth) + "bool", token.line, token.column, bool_name(value));
         }
-        Unary(operator, operand, postfix) {
+        Unary(node_id, operator, operand, postfix) {
             Position at = expr_position(expression);
             print(indent(depth) + "unary", at.line, at.column, operator.line, operator.column, operator.text, fixity_name(postfix));
             print_expression(operand, depth + 1);
         }
-        Binary(operator, left, right) {
+        Binary(node_id, operator, left, right) {
             Position at = expr_position(expression);
             print(indent(depth) + "binary", at.line, at.column, operator.line, operator.column, operator.text);
             print_expression(left, depth + 1);
             print_expression(right, depth + 1);
         }
-        Assign(operator, target, value) {
+        Assign(node_id, operator, target, value) {
             Position at = expr_position(expression);
             print(indent(depth) + "assign", at.line, at.column, operator.line, operator.column, operator.text);
             print_expression(target, depth + 1);
             print_expression(value, depth + 1);
         }
-        Call(open_paren, callee, arguments, argument_count) {
+        Call(node_id, open_paren, callee, arguments, argument_count) {
             Position at = expr_position(expression);
             print(indent(depth) + "call", at.line, at.column, open_paren.line, open_paren.column);
             print_expression(callee, depth + 1);
@@ -303,12 +303,12 @@ fn print_expression(Expr expression, int depth) {
                 index++;
             }
         }
-        Member(dot, receiver, member) {
+        Member(node_id, dot, receiver, member) {
             Position at = expr_position(expression);
             print(indent(depth) + "member", at.line, at.column, dot.line, dot.column, member.text);
             print_expression(receiver, depth + 1);
         }
-        StructLiteral(type_ref, open_brace, fields, field_count) {
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
             Position at = type_position(type_ref);
             print(indent(depth) + "struct-literal", at.line, at.column, open_brace.line, open_brace.column);
             print_type(type_ref, depth + 1);
@@ -318,7 +318,7 @@ fn print_expression(Expr expression, int depth) {
                 index++;
             }
         }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
             Position at = type_position(type_ref);
             print(indent(depth) + "variant-literal", at.line, at.column, open_brace.line, open_brace.column, variant.text);
             print_type(type_ref, depth + 1);
@@ -328,16 +328,16 @@ fn print_expression(Expr expression, int depth) {
                 index++;
             }
         }
-        NewArray(at, element, length) {
+        NewArray(node_id, at, element, length) {
             print(indent(depth) + "new-array", at.line, at.column);
             print_type(element, depth + 1);
             print_expression(length, depth + 1);
         }
-        NewMap(at, map_type) {
+        NewMap(node_id, at, map_type) {
             print(indent(depth) + "new-map", at.line, at.column);
             print_type(map_type, depth + 1);
         }
-        Index(bracket, target, index) {
+        Index(node_id, bracket, target, index) {
             Position at = expr_position(expression);
             print(indent(depth) + "index", at.line, at.column, bracket.line, bracket.column);
             print_expression(target, depth + 1);

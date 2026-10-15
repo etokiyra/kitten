@@ -1,0 +1,422 @@
+// semantics.ktn - render the semantic model for verification.
+//
+// print_semantic_model walks each module's declarations and prints one line per
+// declaration and per annotated node, reading every fact from the SemanticModel
+// the checker built. The differential harness in the Go bootstrap repository
+// renders the reference checker's Result in the same format, in the same walk
+// order, and compares the two byte for byte.
+//
+// Line formats:
+//
+//	<m> decl-<kind> <line> <col> <name> <declared-type|-> <signature|->
+//	<m> typeref <line> <col> <resolved-type|->
+//	<m> <expression-kind> <line> <col> <type|-> <symbol|-> <variant|->
+//
+// A type is rendered structurally, with a named type's module, so that two
+// same-named types in different modules are distinguishable. A symbol carries
+// the position of its declaration, its kind, its type, and for a function its
+// signature and which built-in it is, so that a shadowed or cross-module name is
+// verifiable. "-" means the fact is absent, which is exactly when the reference
+// checker has no entry for that node.
+
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "model.ktn";
+import "state.ktn";
+
+// type_text renders a resolved type. A named type carries its module, because
+// two modules may declare the same type name.
+public fn type_text(Type value) -> string {
+    match (value.kind) {
+        None { return "<invalid>"; }
+        Array { return type_text(element_of(value)) + "[]"; }
+        Map { return "map[" + type_text(key_of(value)) + "]" + type_text(value_of(value)); }
+        Struct { return value.name + "@" + decimal(value.module); }
+        Enum { return value.name + "@" + decimal(value.module); }
+        Union { return value.name + "@" + decimal(value.module); }
+        Int { return value.name; }
+        Float { return value.name; }
+        Bool { return value.name; }
+        String { return value.name; }
+        Void { return value.name; }
+    }
+}
+
+// signature_text renders a function signature as "return(parameters)".
+public fn signature_text(Function function) -> string {
+    string result = type_text(function.return_type) + "(";
+    int index = 0;
+    while (index < function.parameter_count) {
+        if (index > 0) {
+            result += ",";
+        }
+        result += type_text(function.parameter_types[index]);
+        index++;
+    }
+    return result + ")";
+}
+
+// builtin_kind_name renders which built-in a function is, or "-" for a
+// user-defined function.
+public fn builtin_kind_name(BuiltinKind kind) -> string {
+    match (kind) {
+        NotBuiltin { return "-"; }
+        Print { return "Print"; }
+        Length { return "Length"; }
+        ReadFile { return "ReadFile"; }
+        MapHas { return "MapHas"; }
+        Substring { return "Substring"; }
+    }
+}
+
+// function_text renders a resolved function: its signature and built-in name.
+public fn function_text(OptionalFunction function) -> string {
+    match (function) {
+        Absent { return "-"; }
+        Present(value) { return signature_text(value) + ":" + builtin_kind_name(value.builtin); }
+    }
+}
+
+// optional_type_text renders a resolved type that may be absent.
+fn optional_type_text(OptionalResolvedType value) -> string {
+    match (value) {
+        Absent { return "-"; }
+        Present(inner) { return type_text(inner); }
+    }
+}
+
+// symbol_text renders a resolved symbol: name, declaration position, kind, type,
+// and for a function its signature.
+fn symbol_text(OptionalSymbol symbol) -> string {
+    match (symbol) {
+        Absent { return "-"; }
+        Present(value) {
+            string kind = "variable";
+            string callee = "";
+            if (value.kind == SymbolKind.Function) {
+                kind = "function";
+                callee = ":" + function_text(value.function);
+            }
+            return value.name + "@" + decimal(value.at.line) + ":" + decimal(value.at.column) + ":" + kind + ":" + type_text(value.type) + callee;
+        }
+    }
+}
+
+// variant_text renders a resolved enum case or union variant.
+fn variant_text(OptionalVariant variant) -> string {
+    match (variant) {
+        Absent { return "-"; }
+        Present(value) { return value.name + "#" + decimal(value.index); }
+    }
+}
+
+// --- Walking -----------------------------------------------------------------
+
+// print_semantic_model prints every annotation the model holds, in a fixed
+// order, so that two implementations can be compared as text.
+public fn print_semantic_model(SemanticModel model) {
+    int module_index = 0;
+    while (module_index < model.module_count) {
+        ModuleModel module = module_model(model, module_index);
+        print(module_index, "module", module.id, module.path);
+        print_visible_types(model, module_index);
+        print_visible_functions(model, module_index);
+
+        print_declarations(model, module_index);
+        module_index++;
+    }
+}
+
+// print_declarations prints one line per top-level declaration of a module,
+// followed by the annotations inside it.
+fn print_declarations(SemanticModel model, int module_index) {
+    ModuleModel module = module_model(model, module_index);
+    int index = 0;
+    while (index < module.program.declaration_count) {
+        Decl declaration = module.program.declarations[index];
+        match (declaration) {
+            Import(keyword, path) {
+                print(module_index, "decl-import", keyword.line, keyword.column, "-", "-", "-");
+            }
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                OptionalFunction function = declaration_function(module, name.text);
+                print(module_index, "decl-fn", at.line, at.column, name.text, "-", function_text(function));
+                int parameter_index = 0;
+                while (parameter_index < parameter_count) {
+                    print_type_ref(model, module_index, parameters[parameter_index].type);
+                    parameter_index++;
+                }
+                match (return_type) {
+                    Present(reference) {
+                        print_type_ref(model, module_index, reference);
+                    }
+                    Absent {
+                    }
+                }
+                print_statement(model, module_index, body);
+            }
+            Struct(at, visibility, name, fields, field_count) {
+                OptionalResolvedType named = declaration_type(module, name.text);
+                print(module_index, "decl-struct", at.line, at.column, name.text, optional_type_text(named), "-");
+                int field_index = 0;
+                while (field_index < field_count) {
+                    print_type_ref(model, module_index, fields[field_index].type);
+                    field_index++;
+                }
+            }
+            Enum(at, visibility, name, cases, case_count) {
+                OptionalResolvedType named = declaration_type(module, name.text);
+                print(module_index, "decl-enum", at.line, at.column, name.text, optional_type_text(named), "-");
+            }
+            Union(at, visibility, name, variants, variant_count) {
+                OptionalResolvedType named = declaration_type(module, name.text);
+                print(module_index, "decl-union", at.line, at.column, name.text, optional_type_text(named), "-");
+                int variant_index = 0;
+                while (variant_index < variant_count) {
+                    VariantDecl variant = variants[variant_index];
+                    int field_index = 0;
+                    while (field_index < variant.field_count) {
+                        print_type_ref(model, module_index, variant.fields[field_index].type);
+                        field_index++;
+                    }
+                    variant_index++;
+                }
+            }
+        }
+        index++;
+    }
+}
+
+// print_type_ref prints the type a declared type reference resolved to.
+fn print_type_ref(SemanticModel model, int module_index, TypeRef reference) {
+    ModuleModel module = module_model(model, module_index);
+    Position at = type_position(reference);
+    print(module_index, "typeref", at.line, at.column, optional_type_text(type_ref_type(module, type_ref_node_id(reference))), "-", "-");
+}
+
+// print_expression prints an expression node and then its children.
+fn print_expression(SemanticModel model, int module_index, Expr expression) {
+    ModuleModel module = module_model(model, module_index);
+    ExprInfo info = expression_info(module, expr_node_id(expression));
+    Position at = expr_position(expression);
+    print(module_index, expression_kind(expression), at.line, at.column,
+        optional_type_text(info.type), symbol_text(info.symbol), variant_text(info.variant));
+
+    match (expression) {
+        Identifier(node_id, token) { }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        String(node_id, token) { }
+        Boolean(node_id, token, value) { }
+        Unary(node_id, operator, operand, postfix) {
+            print_expression(model, module_index, operand);
+        }
+        Binary(node_id, operator, left, right) {
+            print_expression(model, module_index, left);
+            print_expression(model, module_index, right);
+        }
+        Assign(node_id, operator, target, value) {
+            print_expression(model, module_index, target);
+            print_expression(model, module_index, value);
+        }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            print_expression(model, module_index, callee);
+            int index = 0;
+            while (index < argument_count) {
+                print_expression(model, module_index, arguments[index]);
+                index++;
+            }
+        }
+        Member(node_id, dot, receiver, member) {
+            print_expression(model, module_index, receiver);
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            print_type_ref(model, module_index, type_ref);
+            int index = 0;
+            while (index < field_count) {
+                print_expression(model, module_index, fields[index].value);
+                index++;
+            }
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            print_type_ref(model, module_index, type_ref);
+            int index = 0;
+            while (index < field_count) {
+                print_expression(model, module_index, fields[index].value);
+                index++;
+            }
+        }
+        NewArray(node_id, at_token, element, length) {
+            print_type_ref(model, module_index, element);
+            print_expression(model, module_index, length);
+        }
+        NewMap(node_id, at_token, map_type) {
+            print_type_ref(model, module_index, map_type);
+        }
+        Index(node_id, bracket, target, index) {
+            print_expression(model, module_index, target);
+            print_expression(model, module_index, index);
+        }
+    }
+}
+
+// print_statement prints the annotations inside a statement.
+fn print_statement(SemanticModel model, int module_index, Stmt statement) {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            int index = 0;
+            while (index < statement_count) {
+                print_statement(model, module_index, statements[index]);
+                index++;
+            }
+        }
+        VarDecl(type_ref, name, initializer) {
+            print_type_ref(model, module_index, type_ref);
+            match (initializer) {
+                Present(expression) {
+                    print_expression(model, module_index, expression);
+                }
+                Absent {
+                }
+            }
+        }
+        Expression(expression) {
+            print_expression(model, module_index, expression);
+        }
+        If(at, condition, then_branch, else_branch) {
+            print_expression(model, module_index, condition);
+            print_statement(model, module_index, then_branch);
+            match (else_branch) {
+                Present(statement) {
+                    print_statement(model, module_index, statement);
+                }
+                Absent {
+                }
+            }
+        }
+        While(at, condition, body) {
+            print_expression(model, module_index, condition);
+            print_statement(model, module_index, body);
+        }
+        For(at, initializer, condition, increment, body) {
+            match (initializer) {
+                Present(statement) {
+                    print_statement(model, module_index, statement);
+                }
+                Absent {
+                }
+            }
+            match (condition) {
+                Present(expression) {
+                    print_expression(model, module_index, expression);
+                }
+                Absent {
+                }
+            }
+            match (increment) {
+                Present(expression) {
+                    print_expression(model, module_index, expression);
+                }
+                Absent {
+                }
+            }
+            print_statement(model, module_index, body);
+        }
+        Return(at, value) {
+            match (value) {
+                Present(expression) {
+                    print_expression(model, module_index, expression);
+                }
+                Absent {
+                }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            print_expression(model, module_index, scrutinee);
+            int index = 0;
+            while (index < arm_count) {
+                print_statement(model, module_index, arms[index].body);
+                index++;
+            }
+        }
+    }
+}
+
+// expression_kind names an expression node for the rendering.
+fn expression_kind(Expr expression) -> string {
+    match (expression) {
+        Identifier(node_id, token) { return "ident"; }
+        Integer(node_id, token) { return "int"; }
+        Float(node_id, token) { return "float"; }
+        String(node_id, token) { return "string"; }
+        Boolean(node_id, token, value) { return "bool"; }
+        Unary(node_id, operator, operand, postfix) { return "unary"; }
+        Binary(node_id, operator, left, right) { return "binary"; }
+        Assign(node_id, operator, target, value) { return "assign"; }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return "call"; }
+        Member(node_id, dot, receiver, member) { return "member"; }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return "struct-literal"; }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return "variant-literal"; }
+        NewArray(node_id, at, element, length) { return "new-array"; }
+        NewMap(node_id, at, map_type) { return "new-map"; }
+        Index(node_id, bracket, target, index) { return "index"; }
+    }
+}
+
+// print_visible_types prints the named types visible to the root module, in the
+// order the declarations were collected, which is what the reference's
+// Result.Types holds.
+fn print_visible_types(SemanticModel model, int module_index) {
+    ModuleModel module = module_model(model, module_index);
+    int index = 0;
+    while (index < module.program.declaration_count) {
+        Decl declaration = module.program.declarations[index];
+        match (declaration) {
+            Struct(at, visibility, name, fields, field_count) {
+                print_visible_type(model, module_index, name.text, visibility);
+            }
+            Enum(at, visibility, name, cases, case_count) {
+                print_visible_type(model, module_index, name.text, visibility);
+            }
+            Union(at, visibility, name, variants, variant_count) {
+                print_visible_type(model, module_index, name.text, visibility);
+            }
+            Import(keyword, path) { }
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+        }
+        index++;
+    }
+}
+
+// print_visible_type prints one named type when it is visible to the root module.
+fn print_visible_type(SemanticModel model, int module_index, string name, Visibility visibility) {
+    if (module_index == 0 || visibility == Visibility.Public) {
+        if (has(model.visible_types, name)) {
+            print(module_index, "visible-type", name, type_text(model.visible_types[name]));
+        }
+    }
+}
+
+// print_visible_functions prints the functions visible to the root module, which
+// is what the reference's Result.Functions holds.
+fn print_visible_functions(SemanticModel model, int module_index) {
+    ModuleModel module = module_model(model, module_index);
+    int index = 0;
+    while (index < module.program.declaration_count) {
+        Decl declaration = module.program.declarations[index];
+        match (declaration) {
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                if (module_index == 0 || visibility == Visibility.Public) {
+                    if (has(model.visible_functions, name.text)) {
+                        print(module_index, "visible-function", name.text, signature_text(model.visible_functions[name.text]));
+                    }
+                }
+            }
+            Import(keyword, path) { }
+            Struct(at, visibility, name, fields, field_count) { }
+            Enum(at, visibility, name, cases, case_count) { }
+            Union(at, visibility, name, variants, variant_count) { }
+        }
+        index++;
+    }
+}

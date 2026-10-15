@@ -1,0 +1,100 @@
+// semantics.ktn - print the semantic model of a successfully checked program.
+//
+// It reads the same two modules as check.ktn, lexes, parses and checks them, and
+// then prints one line per declaration and per annotated node, in a fixed walk
+// order: declarations in source order, and within a declaration its type
+// references and expressions as the parser's printer visits them.
+//
+// The lines are the checker's semantic result, not a re-derivation of it: every
+// fact comes from SemanticModel, which the checker filled while checking. The
+// differential harness in the Go bootstrap repository renders the reference
+// checker's Result in exactly this format and compares the two byte for byte, so
+// this driver is also how the annotations themselves are verified.
+//
+// A type is rendered structurally, with a named type's module, so that two
+// same-named types in different modules compare as different types.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/semantics.ktn";
+import "checker/state.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// prepare_module reads, lexes, and parses one module, printing the first lexical
+// or syntax error it finds.
+fn prepare_module(string path, int id) -> PreparedModule {
+    string source = read_file(path);
+
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_module("input.txt", 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_module("input2.txt", 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Success(summary, model) {
+                print("ok modules", summary.module_count, "types", summary.type_count, "functions", summary.function_count, "bodies", summary.body_count);
+                print_semantic_model(model);
+            }
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+        }
+    }
+}

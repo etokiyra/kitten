@@ -43,9 +43,18 @@ public enum Visibility {
 // TypeRef names a type: a named type, an array of an element type, or a map
 // from a key type to a value type.
 public union TypeRef {
-    Named { Token name; }
-    Array { TypeRef element; }
-    Map { Token keyword; TypeRef key; TypeRef value; }
+    Named {
+        int node_id;
+        Token name;
+    }
+    Array {
+        int node_id;
+        TypeRef element;
+    }
+    Map {
+        int node_id;
+        Token keyword; TypeRef key; TypeRef value;
+    }
 }
 
 // type_position reports where a type begins, matching TypeRef.Pos in the Go AST:
@@ -53,9 +62,9 @@ public union TypeRef {
 // the "map" keyword.
 public fn type_position(TypeRef reference) -> Position {
     match (reference) {
-        Named(name) { return position_of_token(name); }
-        Array(element) { return type_position(element); }
-        Map(keyword, key, value) { return position_of_token(keyword); }
+        Named(node_id, name) { return position_of_token(name); }
+        Array(node_id, element) { return type_position(element); }
+        Map(node_id, keyword, key, value) { return position_of_token(keyword); }
     }
 }
 
@@ -171,21 +180,66 @@ public fn stmt_position(Stmt statement) -> Position {
 
 // Expr is an expression.
 public union Expr {
-    Identifier { Token token; }
-    Integer { Token token; }
-    Float { Token token; }
-    String { Token token; }
-    Boolean { Token token; bool value; }
-    Unary { Token operator; Expr operand; bool postfix; }
-    Binary { Token operator; Expr left; Expr right; }
-    Assign { Token operator; Expr target; Expr value; }
-    Call { Token open_paren; Expr callee; Expr[] arguments; int argument_count; }
-    Member { Token dot; Expr receiver; Token member; }
-    StructLiteral { TypeRef type; Token open_brace; FieldInit[] fields; int field_count; }
-    VariantLiteral { TypeRef type; Token variant; Token open_brace; FieldInit[] fields; int field_count; }
-    NewArray { Token at; TypeRef element; Expr length; }
-    NewMap { Token at; TypeRef map_type; }
-    Index { Token bracket; Expr target; Expr index; }
+    Identifier {
+        int node_id;
+        Token token;
+    }
+    Integer {
+        int node_id;
+        Token token;
+    }
+    Float {
+        int node_id;
+        Token token;
+    }
+    String {
+        int node_id;
+        Token token;
+    }
+    Boolean {
+        int node_id;
+        Token token; bool value;
+    }
+    Unary {
+        int node_id;
+        Token operator; Expr operand; bool postfix;
+    }
+    Binary {
+        int node_id;
+        Token operator; Expr left; Expr right;
+    }
+    Assign {
+        int node_id;
+        Token operator; Expr target; Expr value;
+    }
+    Call {
+        int node_id;
+        Token open_paren; Expr callee; Expr[] arguments; int argument_count;
+    }
+    Member {
+        int node_id;
+        Token dot; Expr receiver; Token member;
+    }
+    StructLiteral {
+        int node_id;
+        TypeRef type; Token open_brace; FieldInit[] fields; int field_count;
+    }
+    VariantLiteral {
+        int node_id;
+        TypeRef type; Token variant; Token open_brace; FieldInit[] fields; int field_count;
+    }
+    NewArray {
+        int node_id;
+        Token at; TypeRef element; Expr length;
+    }
+    NewMap {
+        int node_id;
+        Token at; TypeRef map_type;
+    }
+    Index {
+        int node_id;
+        Token bracket; Expr target; Expr index;
+    }
 }
 
 // expr_position reports where an expression begins, matching the Pos method of
@@ -194,26 +248,26 @@ public union Expr {
 // or member access at its receiver, and an index at its target.
 public fn expr_position(Expr expression) -> Position {
     match (expression) {
-        Identifier(token) { return position_of_token(token); }
-        Integer(token) { return position_of_token(token); }
-        Float(token) { return position_of_token(token); }
-        String(token) { return position_of_token(token); }
-        Boolean(token, value) { return position_of_token(token); }
-        Unary(operator, operand, postfix) {
+        Identifier(node_id, token) { return position_of_token(token); }
+        Integer(node_id, token) { return position_of_token(token); }
+        Float(node_id, token) { return position_of_token(token); }
+        String(node_id, token) { return position_of_token(token); }
+        Boolean(node_id, token, value) { return position_of_token(token); }
+        Unary(node_id, operator, operand, postfix) {
             if (postfix) {
                 return expr_position(operand);
             }
             return position_of_token(operator);
         }
-        Binary(operator, left, right) { return expr_position(left); }
-        Assign(operator, target, value) { return expr_position(target); }
-        Call(open_paren, callee, arguments, argument_count) { return expr_position(callee); }
-        Member(dot, receiver, member) { return expr_position(receiver); }
-        StructLiteral(type_ref, open_brace, fields, field_count) { return type_position(type_ref); }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return type_position(type_ref); }
-        NewArray(at, element, length) { return position_of_token(at); }
-        NewMap(at, map_type) { return position_of_token(at); }
-        Index(bracket, target, index) { return expr_position(target); }
+        Binary(node_id, operator, left, right) { return expr_position(left); }
+        Assign(node_id, operator, target, value) { return expr_position(target); }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return expr_position(callee); }
+        Member(node_id, dot, receiver, member) { return expr_position(receiver); }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return type_position(type_ref); }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return type_position(type_ref); }
+        NewArray(node_id, at, element, length) { return position_of_token(at); }
+        NewMap(node_id, at, map_type) { return position_of_token(at); }
+        Index(node_id, bracket, target, index) { return expr_position(target); }
     }
 }
 
@@ -235,6 +289,6 @@ public struct ParseError {
 // A failed parse carries no program, mirroring the reference parser, which stops
 // at the first error. The parser never panics on malformed input.
 public union ParseResult {
-    Success { Program program; }
+    Success { Program program; int expression_count; int type_ref_count; }
     Failure { ParseError error; }
 }

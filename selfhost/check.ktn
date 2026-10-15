@@ -60,8 +60,16 @@ fn prepare_module(string path, int id) -> PreparedModule {
                     print("error", "Parse", "-", path, error.line, error.column, error.message);
                     return PreparedModule.Failed;
                 }
-                Success(program) {
-                    return PreparedModule.Ok { module = Module { path = path, id = id, program = program } };
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
                 }
             }
         }
@@ -95,7 +103,7 @@ fn main() {
 
     if (module_count == 2) {
         match (check_modules(modules, 2)) {
-            Success(summary) {
+            Success(summary, model) {
                 print("ok modules", summary.module_count, "types", summary.type_count, "functions", summary.function_count, "bodies", summary.body_count);
             }
             Failure(error) {

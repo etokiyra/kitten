@@ -80,6 +80,12 @@ Two representation choices are worth knowing:
   twice: a node's position is computed, by `decl_position`, `stmt_position`,
   `expr_position`, and `type_position`, using exactly the rules the reference
   AST's `Pos` methods use.
+- **Nodes carry a stable id.** Every expression and type reference is built with
+  an integer id from a per-parse counter, and `ParseResult.Success` reports how
+  many were assigned. A later phase attaches resolved types, symbols, and variants
+  to nodes by that id, which is what makes the semantic model's keys stable under
+  nesting, repetition, and multiple modules; source coordinates are not identity,
+  because several nodes share a position.
 - **Absence is a value, not a null.** Kitten has no null: a local variable
   declared without an initializer is undefined rather than empty, and there is no
   literal that denotes "no object". Optional sub-nodes - an else branch, a

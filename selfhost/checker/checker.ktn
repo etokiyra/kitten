@@ -51,9 +51,11 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
         next_type_id = 1,
         type_count = 0,
         function_count = 0,
-        body_count = 0
+        body_count = 0,
+        model = empty_semantic_model()
     };
 
+    ModuleModel[] models = new ModuleModel[module_count];
     int index = 0;
     while (index < module_count) {
         checker.infos[index] = ModuleInfo {
@@ -61,8 +63,40 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
             functions = new map[string]Function,
             declared = new map[string]Position
         };
+        int expression_count = modules[index].expression_count;
+        int type_ref_count = modules[index].type_ref_count;
+        ExprInfo[] expressions = new ExprInfo[expression_count + 1];
+        OptionalResolvedType[] type_refs = new OptionalResolvedType[type_ref_count + 1];
+        int fill = 0;
+        while (fill <= expression_count) {
+            expressions[fill] = empty_expr_info();
+            fill++;
+        }
+        fill = 0;
+        while (fill <= type_ref_count) {
+            type_refs[fill] = OptionalResolvedType.Absent;
+            fill++;
+        }
+        models[index] = ModuleModel {
+            path = modules[index].path,
+            id = modules[index].id,
+            program = modules[index].program,
+            expressions = expressions,
+            expression_count = expression_count,
+            type_refs = type_refs,
+            type_ref_count = type_ref_count,
+            types = checker.infos[index].types,
+            functions = checker.infos[index].functions
+        };
         index++;
     }
+    checker.model = SemanticModel {
+        modules = models,
+        module_count = module_count,
+        visible_types = new map[string]Type,
+        visible_functions = new map[string]Function,
+        builtins = builtin_functions()
+    };
 
     StepResult collected = collect_declarations(checker);
     if (!step_ok(collected)) {
@@ -92,16 +126,19 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
             type_count = checker.type_count,
             function_count = checker.function_count,
             body_count = checker.body_count
-        }
+        },
+        model = checker.model
     };
 }
 
-// check_program performs semantic analysis on a single parsed program. It is the
+// check_program performs semantic analysis on a single module. It is the
 // single-module entry point; check_modules checks a program split across several
-// modules.
-public fn check_program(Program program) -> CheckResult {
+// modules. A module carries the sizes of the annotation tables, which come from
+// the parser, so the single-module entry takes the module rather than its
+// program.
+public fn check_program(Module module) -> CheckResult {
     Module[] modules = new Module[1];
-    modules[0] = Module { path = "", id = 0, program = program };
+    modules[0] = module;
     return check_modules(modules, 1);
 }
 
@@ -232,6 +269,9 @@ fn collect_declaration(Checker checker, int module_index, Module module, Decl de
             };
             checker.infos[module_index].functions[name.text] = function;
             checker.function_count = checker.function_count + 1;
+            if (module_index == 0 || visibility == Visibility.Public) {
+                checker.model.visible_functions[name.text] = function;
+            }
 
             if (visibility == Visibility.Public) {
                 if (has(checker.public_functions, name.text)) {
@@ -259,6 +299,9 @@ fn register_type(Checker checker, int module_index, Position at, string name, Vi
     checker.infos[module_index].declared[name] = at;
     checker.infos[module_index].types[name] = named;
     checker.type_count = checker.type_count + 1;
+    if (module_index == 0 || visibility == Visibility.Public) {
+        checker.model.visible_types[name] = named;
+    }
 
     if (visibility == Visibility.Public) {
         if (has(checker.public_types, name)) {
@@ -516,6 +559,7 @@ fn check_body_declaration(Checker checker, int module_index, Decl declaration) -
                     name = function.parameter_names[parameter_index],
                     kind = SymbolKind.Variable,
                     type = function.parameter_types[parameter_index],
+                    function = OptionalFunction.Absent,
                     at = type_position(parameters[parameter_index].type)
                 });
                 parameter_index++;

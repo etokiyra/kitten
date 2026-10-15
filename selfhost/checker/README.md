@@ -63,7 +63,7 @@ future compiler driver; nothing here is reached by parsing printed output.
 
 ```kitten
 public fn check_modules(Module[] modules, int module_count) -> CheckResult
-public fn check_program(Program program) -> CheckResult
+public fn check_program(Module module) -> CheckResult
 ```
 
 `check_program` is the single-module entry point, mirroring the reference's
@@ -71,18 +71,89 @@ public fn check_program(Program program) -> CheckResult
 with one module passes an array of one to `check_modules`, which is exactly what
 `check_program` does.
 
-`Module` is `{ string path; int id; Program program; }`, mirroring
-`parser.Module`. `CheckResult` is a union: `Success` carries a `CheckSummary` of
-what was covered (module, named-type, function, and checked-body counts), and
-`Failure` carries a `CheckError` of `{ ErrorKind kind; string file; int line;
-int column; string message; }`. Checking is fail-fast: the first error is
-returned and nothing else is reported, exactly as in the reference.
+`Module` is `{ string path; int id; Program program; int expression_count; int
+type_ref_count; }`: `parser.Module` plus the sizes of the annotation tables the
+parser's result reports. `CheckResult` is a union: `Success` carries a
+`CheckSummary` of what was covered (module, named-type, function, and checked-body
+counts) together with the `SemanticModel`, and `Failure` carries a `CheckError` of
+`{ ErrorKind kind; string file; int line; int column; string message; }`.
+Checking is fail-fast: the first error is returned and nothing else is reported,
+exactly as in the reference.
 
 Data flow: a caller loads and parses one or more modules, passes them to
-`check_modules`, and receives either a summary or the first error. The checker
-owns its state for the duration of one call and keeps none between calls, so
-checking one program never affects another — as in the reference, which holds no
-package-level mutable state.
+`check_modules`, and receives either a summary with the model or the first error.
+The checker owns its state for the duration of one call and keeps none between
+calls, so checking one program never affects another — as in the reference, which
+holds no package-level mutable state.
+
+## The semantic result
+
+A successful check produces a `SemanticModel` (`model.ktn`), which is the facts a
+generator needs so that it never repeats name resolution or type inference:
+
+| Reference `Result` entry | Kitten |
+| --- | --- |
+| `ExpressionTypes` | `ExprInfo.type` for the node's id |
+| `VariantRefs` | `ExprInfo.variant` |
+| `Symbols` | `ExprInfo.symbol`, carrying the declaration position, kind, type, and for a callee its signature and which built-in it is |
+| `TypeRefs` | `ModuleModel.type_refs` for the node's id |
+| `TypeDecls` | `ModuleModel.types`, keyed by name |
+| `FunctionDecls` | `ModuleModel.functions`, keyed by name |
+| `Types`, `Functions` | `visible_types`, `visible_functions` |
+| `Builtins` | `builtins` |
+| `Modules` | `ModuleModel.program` and its path and id |
+
+Reading it:
+
+```kitten
+// A generator walks a module's program and, at each expression node, reads the
+// node's parser-assigned id from the node itself.
+ModuleModel module = module_model(model, module_index);
+match (expression) {
+    Call(node_id, open_paren, callee, arguments, argument_count) {
+        ExprInfo info = expression_info(module, node_id);
+        // info.type        the call's resolved type
+        // info.symbol      present when the callee resolved; info.symbol.function
+        //                  carries the signature and built-in, and
+        //                  info.symbol.at is the declaration's position
+    }
+    Identifier(node_id, token) {
+        ExprInfo info = expression_info(module, node_id);
+        // info.type, info.symbol: which variable or parameter the name denotes
+    }
+    _ { }
+}
+```
+
+Absence is explicit: `ExprInfo.type` is `Absent` for a node the checker never
+annotated, which is exactly when the reference has no map entry — the type name in
+a qualified variant reference, or the callee of a call, which the reference
+resolves through `Symbols` alone. A declaration is keyed by name rather than by
+node because duplicate names in one module are rejected, so a name identifies a
+declaration exactly as its node does.
+
+## Node identity
+
+Facts are associated with nodes by an integer id the **parser** assigns while it
+builds each expression and type reference, stored in the node, and reported as a
+count in `ParseResult.Success`. The checker indexes its tables by that id, and a
+consumer reads the id from the node it is already walking.
+
+Alternatives and why they were not taken:
+
+- **Source coordinates** (with or without a node kind) are not semantic identity:
+  a member access and its receiver start at the same column, as do a call and its
+  callee, and a shadowed name's two uses can sit at the same column on different
+  lines.
+- **Parallel arrays in traversal order** would couple every consumer to the
+  checker's internal visit order, so a change to that order would silently
+  misassociate facts.
+- **Pointer identity** is not expressible: Kitten compares no reference types
+  with `==`, and its maps are keyed by strings.
+
+Ids are per module: the parser assigns them, so a node's id is meaningful with the
+module it came from, which a per-module generator has. Tables are sized by the
+counts the parser reports, so every id in `1..count` names a node.
 
 ## Types, symbols, and scopes
 
@@ -204,9 +275,48 @@ bytes rather than code points, and a message that quotes such a byte names the
 byte. The harness requires exact equality for ASCII input and compares the phase,
 category, and position otherwise.
 
+### The semantic model
+
+`TestKittenSemanticsMatchesReference` builds `selfhost/semantics.ktn` and compares
+its rendering of the model with the reference's rendering of the same Result, over
+the same corpus. The rendering is one line per declaration and per annotated node
+in a fixed walk order — the node's kind and position, its resolved type, its
+resolved symbol with the declaration position it denotes, and its variant — with
+types rendered structurally and named types carrying their module. It covers the
+annotations themselves rather than success counts: **1849 inputs, all identical,
+4537 annotated lines of which 4331 carry a fact** (the remainder are the callee
+nodes and type names that the reference leaves unannotated).
+
+`TestKittenSemanticsOutputFormat` pins the rendering, and
+`TestAnnotationIdentitiesDistinguishSameNames` checks the identity decisions
+directly: a shadowed local's two uses resolve to declarations at different
+positions, two enums with a same-named case are distinguished by the owning type,
+and two same-named private structs in different modules stay distinct.
+`TestEmptyModelOnFailure` confirms a failed check reports only an error, so no
+partial model can be mistaken for a successful one, and
+`TestModelIsIsolatedBetweenInvocations` confirms one check cannot contaminate the
+next.
+
+## Contract for a future generator
+
+A Kitten-written C generator may rely on exactly this much:
+
+1. It receives modules that were parsed by the Kitten parser (so every
+   expression and type reference has a node id and the module carries the counts)
+   and a `CheckResult.Success` from `check_modules`.
+2. It never resolves a name, infers a type, or re-reads source text: it reads
+   `ExprInfo.type`, `ExprInfo.symbol`, `ExprInfo.variant`,
+   `ModuleModel.type_refs`, `ModuleModel.types`, and `ModuleModel.functions`.
+3. It may assume every node it reaches has an id in `1..count` for its module,
+   that a declaration it finds in `ModuleModel.types` or `ModuleModel.functions`
+   is the one its name denotes, and that a named type carries the module that
+   declared it, which is how it distinguishes two same-named types.
+4. It must handle `Absent` exactly where the reference has no entry.
+
 ## What is deliberately not here
 
-- Code generation, and the annotated result a code generator would consume.
+- Code generation. The semantic result exists and is tested; nothing consumes it
+  to emit C yet.
 - A module loader: the driver checks the two modules it is given, and a caller
   supplies the module set as the reference's loader does.
 - Command-line arguments, standard error, and a chosen exit status.

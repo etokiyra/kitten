@@ -109,7 +109,7 @@ public struct CheckSummary {
 
 // CheckResult distinguishes a successful check from a semantic error.
 public union CheckResult {
-    Success { CheckSummary summary; }
+    Success { CheckSummary summary; SemanticModel model; }
     Failure { CheckError error; }
 }
 
@@ -248,6 +248,11 @@ public struct Symbol {
     string name;
     SymbolKind kind;
     Type type;
+
+    // function is present when the symbol denotes a function or built-in, which
+    // is how a generator finds the signature a call invokes.
+    OptionalFunction function;
+
     Position at;
 }
 
@@ -340,6 +345,12 @@ public struct Module {
     string path;
     int id;
     Program program;
+
+    // expression_count and type_ref_count are the number of expression and type
+    // reference nodes the module's parse assigned ids to, so that the checker can
+    // size its annotation tables exactly. They come from the parser's result.
+    int expression_count;
+    int type_ref_count;
 }
 
 // ModuleInfo holds the declarations of one module during checking.
@@ -381,6 +392,69 @@ public struct Checker {
     int type_count;
     int function_count;
     int body_count;
+
+    // model is the semantic result being built. Each annotation is written once,
+    // at the node id the parser assigned, so a later phase can read a fact
+    // without repeating the analysis.
+    SemanticModel model;
+}
+
+// --- Recording annotations ---------------------------------------------------
+//
+// Each helper writes one fact at one node id. An id outside the module's table is
+// ignored rather than fatal: a tree the parser produced never has one, because
+// the parser assigns the ids and reports how many it assigned, and a tree that
+// did would be caught by the differential harness rather than crashing a
+// compiler.
+
+// record_expression_type records an expression's resolved type.
+public fn record_expression_type(Checker checker, int node_id, Type type) {
+    if (checker.current < 0) {
+        return;
+    }
+    ModuleModel module = checker.model.modules[checker.current];
+    if (node_id < 1 || node_id > module.expression_count) {
+        return;
+    }
+    module.expressions[node_id].type = OptionalResolvedType.Present { type = type };
+}
+
+// record_expression_variant records the enum case or union variant an expression
+// denotes.
+public fn record_expression_variant(Checker checker, int node_id, Variant variant) {
+    if (checker.current < 0) {
+        return;
+    }
+    ModuleModel module = checker.model.modules[checker.current];
+    if (node_id < 1 || node_id > module.expression_count) {
+        return;
+    }
+    module.expressions[node_id].variant = OptionalVariant.Present { variant = variant };
+}
+
+// record_expression_symbol records the symbol an identifier reference resolved
+// to.
+public fn record_expression_symbol(Checker checker, int node_id, Symbol symbol) {
+    if (checker.current < 0) {
+        return;
+    }
+    ModuleModel module = checker.model.modules[checker.current];
+    if (node_id < 1 || node_id > module.expression_count) {
+        return;
+    }
+    module.expressions[node_id].symbol = OptionalSymbol.Present { symbol = symbol };
+}
+
+// record_type_ref records the type a declared type reference resolved to.
+public fn record_type_ref(Checker checker, int node_id, Type type) {
+    if (checker.current < 0) {
+        return;
+    }
+    ModuleModel module = checker.model.modules[checker.current];
+    if (node_id < 1 || node_id > module.type_ref_count) {
+        return;
+    }
+    module.type_refs[node_id] = OptionalResolvedType.Present { type = type };
 }
 
 // --- Diagnostics -------------------------------------------------------------
@@ -579,7 +653,7 @@ public fn module_path(Checker checker, int id) -> string {
 // void; callers decide whether void is acceptable in their context.
 public fn resolve_type(Checker checker, TypeRef reference) -> TypeResult {
     match (reference) {
-        Map(keyword, key_ref, value_ref) {
+        Map(node_id, keyword, key_ref, value_ref) {
             TypeResult key_result = resolve_type(checker, key_ref);
             if (!type_ok(key_result)) {
                 return key_result;
@@ -602,9 +676,11 @@ public fn resolve_type(Checker checker, TypeRef reference) -> TypeResult {
                     error = error_at(checker, ErrorKind.InvalidType, type_position(value_ref), "map value type cannot be void")
                 };
             }
-            return TypeResult.Ok { type = map_type(key_type, value_type) };
+            Type resolved_map = map_type(key_type, value_type);
+            record_type_ref(checker, node_id, resolved_map);
+            return TypeResult.Ok { type = resolved_map };
         }
-        Array(element_ref) {
+        Array(node_id, element_ref) {
             TypeResult element_result = resolve_type(checker, element_ref);
             if (!type_ok(element_result)) {
                 return element_result;
@@ -615,15 +691,20 @@ public fn resolve_type(Checker checker, TypeRef reference) -> TypeResult {
                     error = error_at(checker, ErrorKind.InvalidType, type_position(reference), "array element type cannot be void")
                 };
             }
-            return TypeResult.Ok { type = array_type(element) };
+            Type resolved_array = array_type(element);
+            record_type_ref(checker, node_id, resolved_array);
+            return TypeResult.Ok { type = resolved_array };
         }
-        Named(name_token) {
+        Named(node_id, name_token) {
             if (is_primitive_name(name_token.text)) {
-                return TypeResult.Ok { type = primitive_by_name(name_token.text) };
+                Type primitive = primitive_by_name(name_token.text);
+                record_type_ref(checker, node_id, primitive);
+                return TypeResult.Ok { type = primitive };
             }
             OptionalResolvedType named = lookup_type(checker, name_token.text);
             match (named) {
                 Present(named_type) {
+                    record_type_ref(checker, node_id, named_type);
                     return TypeResult.Ok { type = named_type };
                 }
                 Absent {

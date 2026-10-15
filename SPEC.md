@@ -2226,13 +2226,62 @@ exposes no way to discover files. A module loader remains Go's responsibility
 
 ```kitten
 public fn check_modules(Module[] modules, int module_count) -> CheckResult
-public fn check_program(Program program) -> CheckResult
+public fn check_program(Module module) -> CheckResult
 ```
 
-`Module` mirrors `parser.Module`. `CheckResult` is `Success`, carrying a summary
-of the modules, named types, functions, and checked bodies, or `Failure`, carrying
-`ErrorKind`, file, position, and message. Checking is fail-fast: the first error
-is returned, as in the reference. The checker keeps no state between calls.
+`Module` is the parser's `parser.Module` plus the sizes of the annotation tables,
+which come from the parser's result. `CheckResult` is `Success`, carrying a
+summary of the modules, named types, functions, and checked bodies together with
+a `SemanticModel`, or `Failure`, carrying `ErrorKind`, file, position, and
+message. Checking is fail-fast: the first error is returned, as in the reference.
+The checker keeps no state between calls.
+
+### 27.2.1 The semantic result
+
+A successful check produces a `SemanticModel`: the facts a later phase needs so
+that it can generate code without repeating name resolution or type checking. It
+mirrors the reference checker's `Result`, which associates each fact with an AST
+node:
+
+| Fact | Reference | Kitten |
+| --- | --- | --- |
+| An expression's type | `ExpressionTypes` (by node) | `ExprInfo.type` at the node's id |
+| A variant reference | `VariantRefs` (by node) | `ExprInfo.variant` |
+| A resolved name | `Symbols` (by identifier node) | `ExprInfo.symbol`, which also carries the callee's signature and built-in |
+| A declared type reference's type | `TypeRefs` (by node) | `ModuleModel.type_refs` at the node's id |
+| A named declaration's type | `TypeDecls` (by node) | `ModuleModel.types`, keyed by name |
+| A function declaration's signature | `FunctionDecls` (by node) | `ModuleModel.functions`, keyed by name |
+| Types and functions visible to the root module | `Types`, `Functions` | `visible_types`, `visible_functions` |
+| The built-ins | `Builtins` | `builtins` |
+
+A declaration is keyed by name rather than by node because duplicate names in one
+module are rejected, so a name identifies a declaration exactly as its node does;
+this is the same lookup the checker itself uses (Section 27.3). An absent entry
+means the same thing as an absent map entry in the reference: the node was not
+annotated, which is why an expression that is never checked, such as the type
+name in a qualified variant reference, has no type.
+
+### 27.2.2 Node identity
+
+Associating a fact with a node requires a key that survives nesting, repetition,
+and multiple modules. The reference uses the node's address, which Kitten cannot
+compare or hash. Three alternatives were considered:
+
+- **Annotate the AST nodes with a stable integer id**, assigned by the parser at
+  construction: chosen. A consumer reads the id from the node it is already
+  walking and indexes the model, with no ordering assumption and no dependence on
+  source coordinates.
+- **Key by source position**, possibly with a kind: rejected, because several
+  nodes share a position — a member access and its receiver start at the same
+  column, as do a call and its callee — and positions are not semantic identity.
+- **Parallel arrays in traversal order**: rejected, because it would couple a
+  consumer to the checker's internal visit order, so any change to that order
+  would silently misassociate facts.
+
+Ids are assigned per module and are unique within one parse: the parser reports
+how many it assigned, and the checker sizes its tables exactly. A node's id is
+therefore meaningful together with its module, which a per-module generator
+naturally has.
 
 ### 27.3 Types, symbols, and scopes
 
@@ -2284,13 +2333,10 @@ cross-module cases, every fixture, and the self-hosted sources.
 
 ### 27.6 Deferred
 
-- **Code generation, and the annotated result it needs.** The reference builds a
-  result holding the resolved type of every expression and type reference, the
-  variant of every variant reference, and the resolved symbol of every identifier.
-  Nothing that decides whether a program is valid reads any of it, so the checker
-  computes those types and discards them. Exposing them again — by annotating
-  nodes or by returning an equivalent result — is a prerequisite for a
-  Kitten-written code generator.
+- **Code generation.** The semantic result of Section 27.2.1 carries every fact
+  the reference generator reads, but nothing generates C yet. A Kitten-written
+  generator is the next component; the contract it may rely on is documented in
+  `selfhost/checker/README.md`.
 - A module loader written in Kitten: the driver checks the modules a caller
   supplies.
 - Command-line arguments, standard error, and a program-selected exit status

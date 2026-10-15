@@ -77,6 +77,13 @@ struct Parser {
 
     // eof is the token returned when a read goes past the end of the stream.
     Token eof;
+
+    // next_expression_id and next_type_ref_id number the nodes the parser
+    // builds, so that a later phase can attach a resolved type, symbol, or
+    // variant to one node rather than to a source position. Ids start at 1 and
+    // are unique within one parsed module; id 0 means "not built by the parser".
+    int next_expression_id;
+    int next_type_ref_id;
 }
 
 // --- Value extraction from result unions -------------------------------------
@@ -117,7 +124,7 @@ fn expression_ok(ExprResult result) -> bool {
 fn expression_value(Parser parser, ExprResult result) -> Expr {
     match (result) {
         Ok(expression) { return expression; }
-        Failed(error) { return Expr.Identifier { token = parser.eof }; }
+        Failed(error) { return Expr.Identifier { node_id = new_expression_id(parser), token = parser.eof }; }
     }
 }
 
@@ -173,7 +180,7 @@ fn type_ok(TypeResult result) -> bool {
 fn type_value(Parser parser, TypeResult result) -> TypeRef {
     match (result) {
         Ok(type_ref) { return type_ref; }
-        Failed(error) { return TypeRef.Named { name = parser.eof }; }
+        Failed(error) { return TypeRef.Named { node_id = new_type_ref_id(parser), name = parser.eof }; }
     }
 }
 
@@ -411,6 +418,20 @@ fn is_type_keyword(TokenKind kind) -> bool {
     return false;
 }
 
+// new_expression_id returns the next expression node id.
+fn new_expression_id(Parser parser) -> int {
+    int id = parser.next_expression_id;
+    parser.next_expression_id = id + 1;
+    return id;
+}
+
+// new_type_ref_id returns the next type reference node id.
+fn new_type_ref_id(Parser parser) -> int {
+    int id = parser.next_type_ref_id;
+    parser.next_type_ref_id = id + 1;
+    return id;
+}
+
 // --- Entry point -------------------------------------------------------------
 
 // eof_token returns the end-of-input token to use when the parser reads past the
@@ -432,7 +453,14 @@ fn eof_token(Token[] tokens, int count) -> Token {
 // reports the first syntax error and returns no program, and it never reads past
 // the tokens it was given.
 public fn parse(Token[] tokens, int count) -> ParseResult {
-    Parser parser = Parser { tokens = tokens, count = count, position = 0, eof = eof_token(tokens, count) };
+    Parser parser = Parser {
+        tokens = tokens,
+        count = count,
+        position = 0,
+        eof = eof_token(tokens, count),
+        next_expression_id = 1,
+        next_type_ref_id = 1
+    };
     return parse_program(parser);
 }
 
@@ -451,7 +479,9 @@ fn parse_program(Parser parser) -> ParseResult {
     }
 
     return ParseResult.Success {
-        program = Program { declarations = declarations, declaration_count = declaration_count }
+        program = Program { declarations = declarations, declaration_count = declaration_count },
+        expression_count = parser.next_expression_id - 1,
+        type_ref_count = parser.next_type_ref_id - 1
     };
 }
 
@@ -854,7 +884,7 @@ fn parse_type(Parser parser) -> TypeResult {
     while (peek_kind(parser) == TokenKind.LBracket && peek_at_kind(parser, 1) == TokenKind.RBracket) {
         advance(parser); // '['
         advance(parser); // ']'
-        base = TypeRef.Array { element = base };
+        base = TypeRef.Array { node_id = new_type_ref_id(parser), element = base };
     }
     return TypeResult.Ok { type_ref = base };
 }
@@ -873,7 +903,7 @@ fn parse_base_type(Parser parser) -> TypeResult {
         token.kind == TokenKind.TypeVoid ||
         token.kind == TokenKind.Ident) {
         advance(parser);
-        return TypeResult.Ok { type_ref = TypeRef.Named { name = token } };
+        return TypeResult.Ok { type_ref = TypeRef.Named { node_id = new_type_ref_id(parser), name = token } };
     }
     return TypeResult.Failed { error = error_at(token, "expected a type, found " + describe(token)) };
 }
@@ -903,7 +933,7 @@ fn parse_map_type(Parser parser) -> TypeResult {
     }
 
     return TypeResult.Ok {
-        type_ref = TypeRef.Map {
+        type_ref = TypeRef.Map { node_id = new_type_ref_id(parser),
             keyword = keyword,
             key = type_value(parser, key_result),
             value = type_value(parser, value_result)
@@ -1414,9 +1444,9 @@ fn parse_binary(Parser parser, int min_precedence) -> ExprResult {
             Expr right = expression_value(parser, right_result);
 
             if (is_assignment_operator(operator.kind)) {
-                left = Expr.Assign { operator = operator, target = left, value = right };
+                left = Expr.Assign { node_id = new_expression_id(parser), operator = operator, target = left, value = right };
             } else {
-                left = Expr.Binary { operator = operator, left = left, right = right };
+                left = Expr.Binary { node_id = new_expression_id(parser), operator = operator, left = left, right = right };
             }
         }
     }
@@ -1436,7 +1466,7 @@ fn parse_unary(Parser parser) -> ExprResult {
             return operand_result;
         }
         return ExprResult.Ok {
-            expression = Expr.Unary {
+            expression = Expr.Unary { node_id = new_expression_id(parser),
                 operator = token,
                 operand = expression_value(parser, operand_result),
                 postfix = false
@@ -1467,7 +1497,7 @@ fn parse_postfix(Parser parser) -> ExprResult {
                     if (!token_ok(close)) {
                         return ExprResult.Failed { error = token_error(close) };
                     }
-                    expression = Expr.Call {
+                    expression = Expr.Call { node_id = new_expression_id(parser),
                         open_paren = token,
                         callee = expression,
                         arguments = arguments,
@@ -1484,7 +1514,7 @@ fn parse_postfix(Parser parser) -> ExprResult {
             if (!token_ok(member_result)) {
                 return ExprResult.Failed { error = token_error(member_result) };
             }
-            expression = Expr.Member {
+            expression = Expr.Member { node_id = new_expression_id(parser),
                 dot = token,
                 receiver = expression,
                 member = token_value(parser, member_result)
@@ -1499,14 +1529,14 @@ fn parse_postfix(Parser parser) -> ExprResult {
             if (!token_ok(close)) {
                 return ExprResult.Failed { error = token_error(close) };
             }
-            expression = Expr.Index {
+            expression = Expr.Index { node_id = new_expression_id(parser),
                 bracket = token,
                 target = expression,
                 index = expression_value(parser, index_result)
             };
         } else if (token.kind == TokenKind.Inc || token.kind == TokenKind.Dec) {
             advance(parser);
-            expression = Expr.Unary { operator = token, operand = expression, postfix = true };
+            expression = Expr.Unary { node_id = new_expression_id(parser), operator = token, operand = expression, postfix = true };
         } else {
             parsing = false;
         }
@@ -1556,23 +1586,23 @@ fn parse_primary(Parser parser) -> ExprResult {
 
     if (token.kind == TokenKind.Int) {
         advance(parser);
-        return ExprResult.Ok { expression = Expr.Integer { token = token } };
+        return ExprResult.Ok { expression = Expr.Integer { node_id = new_expression_id(parser), token = token } };
     }
     if (token.kind == TokenKind.Float) {
         advance(parser);
-        return ExprResult.Ok { expression = Expr.Float { token = token } };
+        return ExprResult.Ok { expression = Expr.Float { node_id = new_expression_id(parser), token = token } };
     }
     if (token.kind == TokenKind.String) {
         advance(parser);
-        return ExprResult.Ok { expression = Expr.String { token = token } };
+        return ExprResult.Ok { expression = Expr.String { node_id = new_expression_id(parser), token = token } };
     }
     if (token.kind == TokenKind.True) {
         advance(parser);
-        return ExprResult.Ok { expression = Expr.Boolean { token = token, value = true } };
+        return ExprResult.Ok { expression = Expr.Boolean { node_id = new_expression_id(parser), token = token, value = true } };
     }
     if (token.kind == TokenKind.False) {
         advance(parser);
-        return ExprResult.Ok { expression = Expr.Boolean { token = token, value = false } };
+        return ExprResult.Ok { expression = Expr.Boolean { node_id = new_expression_id(parser), token = token, value = false } };
     }
     if (token.kind == TokenKind.New) {
         return parse_new(parser);
@@ -1587,7 +1617,7 @@ fn parse_primary(Parser parser) -> ExprResult {
             return parse_variant_literal(parser);
         }
         advance(parser);
-        return ExprResult.Ok { expression = Expr.Identifier { token = token } };
+        return ExprResult.Ok { expression = Expr.Identifier { node_id = new_expression_id(parser), token = token } };
     }
     if (token.kind == TokenKind.LParen) {
         advance(parser);
@@ -1614,7 +1644,7 @@ fn parse_new(Parser parser) -> ExprResult {
         if (!type_ok(map_result)) {
             return ExprResult.Failed { error = type_error(map_result) };
         }
-        return ExprResult.Ok { expression = Expr.NewMap { at = keyword, map_type = type_value(parser, map_result) } };
+        return ExprResult.Ok { expression = Expr.NewMap { node_id = new_expression_id(parser), at = keyword, map_type = type_value(parser, map_result) } };
     }
 
     TypeResult element_result = parse_type(parser);
@@ -1639,7 +1669,7 @@ fn parse_new(Parser parser) -> ExprResult {
     }
 
     return ExprResult.Ok {
-        expression = Expr.NewArray {
+        expression = Expr.NewArray { node_id = new_expression_id(parser),
             at = keyword,
             element = element,
             length = expression_value(parser, length_result)
@@ -1655,8 +1685,8 @@ fn parse_struct_literal(Parser parser) -> ExprResult {
     match (fields_result) {
         Ok(fields, field_count, open) {
             return ExprResult.Ok {
-                expression = Expr.StructLiteral {
-                    type = TypeRef.Named { name = name },
+                expression = Expr.StructLiteral { node_id = new_expression_id(parser),
+                    type = TypeRef.Named { node_id = new_type_ref_id(parser), name = name },
                     open_brace = open,
                     fields = fields,
                     field_count = field_count
@@ -1679,8 +1709,8 @@ fn parse_variant_literal(Parser parser) -> ExprResult {
     match (fields_result) {
         Ok(fields, field_count, open) {
             return ExprResult.Ok {
-                expression = Expr.VariantLiteral {
-                    type = TypeRef.Named { name = name },
+                expression = Expr.VariantLiteral { node_id = new_expression_id(parser),
+                    type = TypeRef.Named { node_id = new_type_ref_id(parser), name = name },
                     variant = variant,
                     open_brace = open,
                     fields = fields,

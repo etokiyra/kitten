@@ -118,6 +118,7 @@ fn check_var_decl(Checker checker, TypeRef type_ref, Token name, OptionalExpr in
         name = name.text,
         kind = SymbolKind.Variable,
         type = declared_type,
+        function = OptionalFunction.Absent,
         at = type_position(type_ref)
     };
     match (declare_scope(scope, symbol)) {
@@ -354,6 +355,7 @@ fn check_match(Checker checker, Token at, Expr scrutinee, MatchArm[] arms, int a
                 name = binding.text,
                 kind = SymbolKind.Variable,
                 type = variant.fields[binding_index].type,
+                function = OptionalFunction.Absent,
                 at = binding_at
             });
             binding_index++;

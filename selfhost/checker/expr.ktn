@@ -14,52 +14,61 @@ import "../parser/ast.ktn";
 import "model.ktn";
 import "state.ktn";
 
-// check_expr checks an expression and returns its type.
+// check_expr checks an expression, returns its type, and records it.
 public fn check_expr(Checker checker, Expr expression, Scope scope) -> TypeResult {
+    TypeResult result = check_expression(checker, expression, scope);
+    if (type_ok(result)) {
+        record_expression_type(checker, expr_node_id(expression), type_value(result));
+    }
+    return result;
+}
+
+// check_expression dispatches on the concrete expression node.
+fn check_expression(Checker checker, Expr expression, Scope scope) -> TypeResult {
     match (expression) {
-        Identifier(token) {
-            return check_identifier(checker, token, scope);
+        Identifier(node_id, token) {
+            return check_identifier(checker, node_id, token, scope);
         }
-        Integer(token) {
+        Integer(node_id, token) {
             return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
         }
-        Float(token) {
+        Float(node_id, token) {
             return TypeResult.Ok { type = primitive_type(TypeKind.Float, "float") };
         }
-        String(token) {
+        String(node_id, token) {
             return TypeResult.Ok { type = primitive_type(TypeKind.String, "string") };
         }
-        Boolean(token, value) {
+        Boolean(node_id, token, value) {
             return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
         }
-        Unary(operator, operand, postfix) {
+        Unary(node_id, operator, operand, postfix) {
             return check_unary(checker, operator, operand, scope);
         }
-        Binary(operator, left, right) {
+        Binary(node_id, operator, left, right) {
             return check_binary(checker, operator, left, right, scope);
         }
-        Assign(operator, target, value) {
+        Assign(node_id, operator, target, value) {
             return check_assignment(checker, operator, target, value, scope);
         }
-        Call(open_paren, callee, arguments, argument_count) {
+        Call(node_id, open_paren, callee, arguments, argument_count) {
             return check_call(checker, open_paren, callee, arguments, argument_count, scope);
         }
-        Member(dot, receiver, member) {
-            return check_member(checker, dot, receiver, member, scope);
+        Member(node_id, dot, receiver, member) {
+            return check_member(checker, node_id, dot, receiver, member, scope);
         }
-        StructLiteral(type_ref, open_brace, fields, field_count) {
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
             return check_struct_literal(checker, type_ref, open_brace, fields, field_count, scope);
         }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
-            return check_variant_literal(checker, type_ref, variant, open_brace, fields, field_count, scope);
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            return check_variant_literal(checker, node_id, type_ref, variant, open_brace, fields, field_count, scope);
         }
-        NewArray(at, element, length) {
+        NewArray(node_id, at, element, length) {
             return check_new_array(checker, element, length, scope);
         }
-        NewMap(at, map_type) {
+        NewMap(node_id, at, map_type) {
             return check_new_map(checker, map_type);
         }
-        Index(bracket, target, index) {
+        Index(node_id, bracket, target, index) {
             return check_index(checker, bracket, target, index, scope);
         }
     }
@@ -67,9 +76,10 @@ public fn check_expr(Checker checker, Expr expression, Scope scope) -> TypeResul
 
 // check_identifier resolves an identifier used as a value. Only variables and
 // parameters are values; functions and types are not.
-fn check_identifier(Checker checker, Token token, Scope scope) -> TypeResult {
+fn check_identifier(Checker checker, int node_id, Token token, Scope scope) -> TypeResult {
     match (lookup_scope(scope, token.text)) {
         Present(symbol) {
+            record_expression_symbol(checker, node_id, symbol);
             return TypeResult.Ok { type = symbol.type };
         }
         Absent {
@@ -341,8 +351,18 @@ fn check_assignment(Checker checker, Token operator, Expr target, Expr value, Sc
 // type. Only local variables, parameters, and struct fields reached through an
 // l-value are assignable.
 public fn check_assignable(Checker checker, Expr expression, Scope scope) -> TypeResult {
+    TypeResult result = assignable_type(checker, expression, scope);
+    if (type_ok(result)) {
+        record_expression_type(checker, expr_node_id(expression), type_value(result));
+    }
+    return result;
+}
+
+// assignable_type checks an assignable target without recording its type, so
+// that the recording happens exactly once, in check_assignable.
+fn assignable_type(Checker checker, Expr expression, Scope scope) -> TypeResult {
     match (expression) {
-        Identifier(token) {
+        Identifier(node_id, token) {
             match (lookup_scope(scope, token.text)) {
                 Absent {
                     return TypeResult.Failed {
@@ -350,6 +370,7 @@ public fn check_assignable(Checker checker, Expr expression, Scope scope) -> Typ
                     };
                 }
                 Present(symbol) {
+                    record_expression_symbol(checker, node_id, symbol);
                     if (symbol.kind != SymbolKind.Variable) {
                         return TypeResult.Failed {
                             error = error_at(checker, ErrorKind.InvalidAssignment, position_of_token(token), quoted(token.text) + " is not assignable")
@@ -359,14 +380,14 @@ public fn check_assignable(Checker checker, Expr expression, Scope scope) -> Typ
                 }
             }
         }
-        Member(dot, receiver, member) {
+        Member(node_id, dot, receiver, member) {
             TypeResult receiver_result = check_assignable(checker, receiver, scope);
             if (!type_ok(receiver_result)) {
                 return receiver_result;
             }
             return resolve_member(checker, dot, member, type_value(receiver_result));
         }
-        Index(bracket, target, index) {
+        Index(node_id, bracket, target, index) {
             TypeResult target_result = check_assignable(checker, target, scope);
             if (!type_ok(target_result)) {
                 return target_result;
@@ -379,18 +400,18 @@ public fn check_assignable(Checker checker, Expr expression, Scope scope) -> Typ
             }
             return check_index_operands(checker, bracket, target_type, index, scope);
         }
-        Integer(token) { return cannot_assign(checker, expression); }
-        Float(token) { return cannot_assign(checker, expression); }
-        String(token) { return cannot_assign(checker, expression); }
-        Boolean(token, value) { return cannot_assign(checker, expression); }
-        Unary(operator, operand, postfix) { return cannot_assign(checker, expression); }
-        Binary(operator, left, right) { return cannot_assign(checker, expression); }
-        Assign(operator, target, value) { return cannot_assign(checker, expression); }
-        Call(open_paren, callee, arguments, argument_count) { return cannot_assign(checker, expression); }
-        StructLiteral(type_ref, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
-        NewArray(at, element, length) { return cannot_assign(checker, expression); }
-        NewMap(at, map_type) { return cannot_assign(checker, expression); }
+        Integer(node_id, token) { return cannot_assign(checker, expression); }
+        Float(node_id, token) { return cannot_assign(checker, expression); }
+        String(node_id, token) { return cannot_assign(checker, expression); }
+        Boolean(node_id, token, value) { return cannot_assign(checker, expression); }
+        Unary(node_id, operator, operand, postfix) { return cannot_assign(checker, expression); }
+        Binary(node_id, operator, left, right) { return cannot_assign(checker, expression); }
+        Assign(node_id, operator, target, value) { return cannot_assign(checker, expression); }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return cannot_assign(checker, expression); }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
+        NewArray(node_id, at, element, length) { return cannot_assign(checker, expression); }
+        NewMap(node_id, at, map_type) { return cannot_assign(checker, expression); }
     }
 }
 
@@ -406,15 +427,17 @@ fn cannot_assign(Checker checker, Expr expression) -> TypeResult {
 // When the receiver is a type name rather than a value - "Enum.Case" or
 // "Union.Variant" - the member is interpreted as a variant reference instead of
 // a field access.
-fn check_member(Checker checker, Token dot, Expr receiver, Token member, Scope scope) -> TypeResult {
+fn check_member(Checker checker, int member_node_id, Token dot, Expr receiver, Token member, Scope scope) -> TypeResult {
+    // A variant reference is recorded against the member expression itself, so
+    // the node whose id carries the variant is the one the reference records.
     match (receiver) {
-        Identifier(receiver_token) {
+        Identifier(receiver_node_id, receiver_token) {
             match (lookup_scope(scope, receiver_token.text)) {
                 Absent {
                     match (lookup_type(checker, receiver_token.text)) {
                         Present(named_type) {
                             if (is_variant(named_type)) {
-                                return resolve_variant_reference(checker, dot, member, named_type);
+                                return resolve_variant_reference(checker, member_node_id, dot, member, named_type);
                             }
                         }
                         Absent {
@@ -425,20 +448,20 @@ fn check_member(Checker checker, Token dot, Expr receiver, Token member, Scope s
                 }
             }
         }
-        Integer(token) { }
-        Float(token) { }
-        String(token) { }
-        Boolean(token, value) { }
-        Unary(operator, operand, postfix) { }
-        Binary(operator, left, right) { }
-        Assign(operator, target, value) { }
-        Call(open_paren, callee, arguments, argument_count) { }
-        Member(receiver_dot, receiver_value, receiver_member) { }
-        StructLiteral(type_ref, open_brace, fields, field_count) { }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { }
-        NewArray(at, element, length) { }
-        NewMap(at, map_type) { }
-        Index(bracket, target, index) { }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        String(node_id, token) { }
+        Boolean(node_id, token, value) { }
+        Unary(node_id, operator, operand, postfix) { }
+        Binary(node_id, operator, left, right) { }
+        Assign(node_id, operator, target, value) { }
+        Call(node_id, open_paren, callee, arguments, argument_count) { }
+        Member(node_id, receiver_dot, receiver_value, receiver_member) { }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { }
+        NewArray(node_id, at, element, length) { }
+        NewMap(node_id, at, map_type) { }
+        Index(node_id, bracket, target, index) { }
     }
 
     TypeResult receiver_result = check_expr(checker, receiver, scope);
@@ -450,7 +473,7 @@ fn check_member(Checker checker, Token dot, Expr receiver, Token member, Scope s
 
 // resolve_variant_reference resolves a qualified variant reference, "Type.Variant",
 // which denotes the variant itself. Only a variant with no fields is a value.
-fn resolve_variant_reference(Checker checker, Token dot, Token member, Type named_type) -> TypeResult {
+fn resolve_variant_reference(Checker checker, int node_id, Token dot, Token member, Type named_type) -> TypeResult {
     Position at = position_of_token(dot);
     if (!has(named_type.variant_index, member.text)) {
         return TypeResult.Failed {
@@ -463,6 +486,7 @@ fn resolve_variant_reference(Checker checker, Token dot, Token member, Type name
             error = error_at(checker, ErrorKind.InvalidType, at, "variant " + named_type.name + "." + variant.name + " carries fields and must be constructed as " + named_type.name + "." + variant.name + " { ... }")
         };
     }
+    record_expression_variant(checker, node_id, variant);
     return TypeResult.Ok { type = named_type };
 }
 
@@ -476,7 +500,7 @@ public fn variant_kind_word(Type named_type) -> string {
 
 // check_variant_literal checks a tagged-union variant construction,
 // "Union.Variant { field = value, ... }".
-fn check_variant_literal(Checker checker, TypeRef type_ref, Token variant_token, Token open_brace, FieldInit[] fields, int field_count, Scope scope) -> TypeResult {
+fn check_variant_literal(Checker checker, int node_id, TypeRef type_ref, Token variant_token, Token open_brace, FieldInit[] fields, int field_count, Scope scope) -> TypeResult {
     TypeResult union_result = resolve_type(checker, type_ref);
     if (!type_ok(union_result)) {
         return union_result;
@@ -546,6 +570,7 @@ fn check_variant_literal(Checker checker, TypeRef type_ref, Token variant_token,
         field_index++;
     }
 
+    record_expression_variant(checker, node_id, variant);
     return TypeResult.Ok { type = union_type };
 }
 
@@ -633,7 +658,7 @@ fn check_call(Checker checker, Token open_paren, Expr callee, Expr[] arguments, 
 // callee must be a plain identifier naming a user function or a built-in.
 fn resolve_callee(Checker checker, Expr callee, Scope scope) -> FunctionResult {
     match (callee) {
-        Identifier(identifier) {
+        Identifier(node_id, identifier) {
             match (lookup_scope(scope, identifier.text)) {
                 Present(symbol) {
                     return FunctionResult.Failed {
@@ -645,13 +670,16 @@ fn resolve_callee(Checker checker, Expr callee, Scope scope) -> FunctionResult {
             }
             match (lookup_function(checker, identifier.text)) {
                 Present(function) {
+                    record_expression_symbol(checker, node_id, function_symbol(function, position_of_token(identifier)));
                     return FunctionResult.Ok { function = function };
                 }
                 Absent {
                 }
             }
             if (has(checker.builtins, identifier.text)) {
-                return FunctionResult.Ok { function = checker.builtins[identifier.text] };
+                Function builtin = checker.builtins[identifier.text];
+                record_expression_symbol(checker, node_id, function_symbol(builtin, position_of_token(identifier)));
+                return FunctionResult.Ok { function = builtin };
             }
             match (lookup_type(checker, identifier.text)) {
                 Present(named) {
@@ -684,21 +712,33 @@ fn resolve_callee(Checker checker, Expr callee, Scope scope) -> FunctionResult {
                 error = error_at(checker, ErrorKind.UndefinedName, position_of_token(identifier), "undefined function " + quoted(identifier.text))
             };
         }
-        Integer(token) { return cannot_call(checker, callee); }
-        Float(token) { return cannot_call(checker, callee); }
-        String(token) { return cannot_call(checker, callee); }
-        Boolean(token, value) { return cannot_call(checker, callee); }
-        Unary(operator, operand, postfix) { return cannot_call(checker, callee); }
-        Binary(operator, left, right) { return cannot_call(checker, callee); }
-        Assign(operator, target, value) { return cannot_call(checker, callee); }
-        Call(open_paren, inner_callee, arguments, argument_count) { return cannot_call(checker, callee); }
-        Member(dot, receiver, member) { return cannot_call(checker, callee); }
-        StructLiteral(type_ref, open_brace, fields, field_count) { return cannot_call(checker, callee); }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return cannot_call(checker, callee); }
-        NewArray(at, element, length) { return cannot_call(checker, callee); }
-        NewMap(at, map_type) { return cannot_call(checker, callee); }
-        Index(bracket, target, index) { return cannot_call(checker, callee); }
+        Integer(node_id, token) { return cannot_call(checker, callee); }
+        Float(node_id, token) { return cannot_call(checker, callee); }
+        String(node_id, token) { return cannot_call(checker, callee); }
+        Boolean(node_id, token, value) { return cannot_call(checker, callee); }
+        Unary(node_id, operator, operand, postfix) { return cannot_call(checker, callee); }
+        Binary(node_id, operator, left, right) { return cannot_call(checker, callee); }
+        Assign(node_id, operator, target, value) { return cannot_call(checker, callee); }
+        Call(node_id, open_paren, inner_callee, arguments, argument_count) { return cannot_call(checker, callee); }
+        Member(node_id, dot, receiver, member) { return cannot_call(checker, callee); }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return cannot_call(checker, callee); }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return cannot_call(checker, callee); }
+        NewArray(node_id, at, element, length) { return cannot_call(checker, callee); }
+        NewMap(node_id, at, map_type) { return cannot_call(checker, callee); }
+        Index(node_id, bracket, target, index) { return cannot_call(checker, callee); }
     }
+}
+
+// function_symbol builds the symbol recorded for a resolved call callee,
+// mirroring the reference's functionSymbol.
+fn function_symbol(Function function, Position at) -> Symbol {
+    return Symbol {
+        name = function.name,
+        kind = SymbolKind.Function,
+        type = function.return_type,
+        function = OptionalFunction.Present { function = function },
+        at = at
+    };
 }
 
 // cannot_call reports an expression that is not callable.
@@ -988,49 +1028,49 @@ fn check_struct_literal(Checker checker, TypeRef type_ref, Token open_brace, Fie
 // describe_expression renders an expression for use in an error message.
 public fn describe_expression(Expr expression) -> string {
     match (expression) {
-        Identifier(token) {
+        Identifier(node_id, token) {
             return "variable " + quoted(token.text);
         }
-        Integer(token) {
+        Integer(node_id, token) {
             return "an integer literal";
         }
-        Float(token) {
+        Float(node_id, token) {
             return "a float literal";
         }
-        String(token) {
+        String(node_id, token) {
             return "a string literal";
         }
-        Boolean(token, value) {
+        Boolean(node_id, token, value) {
             return "a bool literal";
         }
-        Call(open_paren, callee, arguments, argument_count) {
+        Call(node_id, open_paren, callee, arguments, argument_count) {
             return "a function call";
         }
-        Member(dot, receiver, member) {
+        Member(node_id, dot, receiver, member) {
             return "member " + quoted(member.text);
         }
-        Binary(operator, left, right) {
+        Binary(node_id, operator, left, right) {
             return "a " + quoted(operator.text) + " expression";
         }
-        Unary(operator, operand, postfix) {
+        Unary(node_id, operator, operand, postfix) {
             return "a " + quoted(operator.text) + " expression";
         }
-        Assign(operator, target, value) {
+        Assign(node_id, operator, target, value) {
             return "an assignment";
         }
-        StructLiteral(type_ref, open_brace, fields, field_count) {
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
             return "a struct literal";
         }
-        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
             return "a variant literal";
         }
-        NewArray(at, element, length) {
+        NewArray(node_id, at, element, length) {
             return "an array creation";
         }
-        NewMap(at, map_type) {
+        NewMap(node_id, at, map_type) {
             return "a map creation";
         }
-        Index(bracket, target, index) {
+        Index(node_id, bracket, target, index) {
             return "an indexed element";
         }
     }

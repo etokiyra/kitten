@@ -355,3 +355,189 @@ public fn contains_type(Type[] types, int count, Type target) -> bool {
     }
     return false;
 }
+
+// --- The semantic result ------------------------------------------------------
+//
+// A successful check produces a SemanticModel: the facts a later phase needs so
+// that it can generate code without repeating name resolution or type checking.
+// It mirrors the reference checker's Result, which keys its annotations by AST
+// node pointer: here a node is identified by the integer id the parser assigned
+// to it, and the model's tables are indexed by that id.
+//
+// Ids are assigned per module, because a parse assigns them, so a node reached
+// through module m is looked up in module m's tables. Id 0 means "not a node the
+// parser built"; an id in 1..expression_count is an expression node, and an id in
+// 1..type_ref_count is a type reference node. The counts come from the parser's
+// result and size the tables exactly.
+
+// ExprInfo holds what checking learned about one expression node.
+//
+// The reference records the same facts in three maps: the expression's type for
+// every expression, the variant for an expression that denotes an enum case or
+// union variant, and the symbol for an identifier that resolved to a variable,
+// parameter, or function. Absent means the expression was not annotated, which
+// is exactly when the reference has no map entry for it: an expression that is
+// never checked, such as the type name in a qualified variant reference, has no
+// type.
+public struct ExprInfo {
+    OptionalResolvedType type;
+    OptionalVariant variant;
+    OptionalSymbol symbol;
+}
+
+// empty_expr_info returns an entry for a node that has not been annotated.
+public fn empty_expr_info() -> ExprInfo {
+    return ExprInfo {
+        type = OptionalResolvedType.Absent,
+        variant = OptionalVariant.Absent,
+        symbol = OptionalSymbol.Absent
+    };
+}
+
+// OptionalVariant is a resolved enum case or union variant that may be absent.
+public union OptionalVariant {
+    Absent
+    Present { Variant variant; }
+}
+
+// ModuleModel is the semantic model of one module.
+public struct ModuleModel {
+    // path and id identify the module, and program is its parse, so that a
+    // consumer can walk the tree these annotations describe.
+    string path;
+    int id;
+    Program program;
+
+    // expressions and type_refs are indexed by node id. Index 0 is unused, so a
+    // table holds expression_count + 1 and type_ref_count + 1 entries.
+    ExprInfo[] expressions;
+    int expression_count;
+    OptionalResolvedType[] type_refs;
+    int type_ref_count;
+
+    // types and functions hold the module's own named types and functions, which
+    // is how a declaration is resolved: duplicate names in one module are
+    // rejected, so a name identifies a declaration exactly as its node does.
+    map[string]Type types;
+    map[string]Function functions;
+}
+
+// SemanticModel is the complete result of a successful check.
+public struct SemanticModel {
+    ModuleModel[] modules;
+    int module_count;
+
+    // visible_types and visible_functions hold every named type and function
+    // visible to the root module: its own declarations plus every public
+    // declaration of every module. They mirror Result.Types and Result.Functions.
+    map[string]Type visible_types;
+    map[string]Function visible_functions;
+
+    // builtins holds the language's built-in functions by name.
+    map[string]Function builtins;
+}
+
+// empty_semantic_model returns a model with no modules, used to initialize a
+// checker before the real model is built.
+public fn empty_semantic_model() -> SemanticModel {
+    return SemanticModel {
+        modules = new ModuleModel[1],
+        module_count = 0,
+        visible_types = new map[string]Type,
+        visible_functions = new map[string]Function,
+        builtins = new map[string]Function
+    };
+}
+
+// module_model returns the model of one module, or an empty model when the index
+// is out of range, so that a caller outside the checker cannot index past the
+// end.
+public fn module_model(SemanticModel model, int module_index) -> ModuleModel {
+    if (module_index < 0 || module_index >= model.module_count) {
+        return empty_module_model();
+    }
+    return model.modules[module_index];
+}
+
+// empty_module_model returns a module model with no annotations.
+public fn empty_module_model() -> ModuleModel {
+    return ModuleModel {
+        path = "",
+        id = 0,
+        program = Program { declarations = new Decl[1], declaration_count = 0 },
+        expressions = new ExprInfo[1],
+        expression_count = 0,
+        type_refs = new OptionalResolvedType[1],
+        type_ref_count = 0,
+        types = new map[string]Type,
+        functions = new map[string]Function
+    };
+}
+
+// expression_info returns what checking learned about an expression node, or an
+// empty entry when the id is outside the module's table.
+public fn expression_info(ModuleModel module, int node_id) -> ExprInfo {
+    if (node_id < 1 || node_id > module.expression_count) {
+        return empty_expr_info();
+    }
+    return module.expressions[node_id];
+}
+
+// type_ref_type returns the type a declared type reference resolved to, or the
+// absent type when the id is outside the module's table.
+public fn type_ref_type(ModuleModel module, int node_id) -> OptionalResolvedType {
+    if (node_id < 1 || node_id > module.type_ref_count) {
+        return OptionalResolvedType.Absent;
+    }
+    return module.type_refs[node_id];
+}
+
+// declaration_type returns a module's named type with the given name.
+public fn declaration_type(ModuleModel module, string name) -> OptionalResolvedType {
+    if (!has(module.types, name)) {
+        return OptionalResolvedType.Absent;
+    }
+    return OptionalResolvedType.Present { type = module.types[name] };
+}
+
+// declaration_function returns a module's function with the given name.
+public fn declaration_function(ModuleModel module, string name) -> OptionalFunction {
+    if (!has(module.functions, name)) {
+        return OptionalFunction.Absent;
+    }
+    return OptionalFunction.Present { function = module.functions[name] };
+}
+
+// expr_node_id returns the parser-assigned id of an expression node.
+//
+// The checker records an annotation for an expression at its id, and a consumer
+// reads a node's id from the node itself; this helper exists so that a central
+// step can record an annotation without matching on every variant separately.
+public fn expr_node_id(Expr expression) -> int {
+    match (expression) {
+        Identifier(node_id, token) { return node_id; }
+        Integer(node_id, token) { return node_id; }
+        Float(node_id, token) { return node_id; }
+        String(node_id, token) { return node_id; }
+        Boolean(node_id, token, value) { return node_id; }
+        Unary(node_id, operator, operand, postfix) { return node_id; }
+        Binary(node_id, operator, left, right) { return node_id; }
+        Assign(node_id, operator, target, value) { return node_id; }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return node_id; }
+        Member(node_id, dot, receiver, member) { return node_id; }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return node_id; }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return node_id; }
+        NewArray(node_id, at, element, length) { return node_id; }
+        NewMap(node_id, at, map_type) { return node_id; }
+        Index(node_id, bracket, target, index) { return node_id; }
+    }
+}
+
+// type_ref_node_id returns the parser-assigned id of a type reference node.
+public fn type_ref_node_id(TypeRef reference) -> int {
+    match (reference) {
+        Named(node_id, name) { return node_id; }
+        Array(node_id, element) { return node_id; }
+        Map(node_id, keyword, key, value) { return node_id; }
+    }
+}
