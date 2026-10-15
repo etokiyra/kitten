@@ -1,0 +1,229 @@
+// declarations.ktn - print the top-level C declarations of a checked program.
+//
+// It reads two modules, lexes, parses, and checks them with the same Kitten
+// front end the checker's driver uses, and then prints the declaration section
+// the Kitten-written generator produces for them: the generated-file comment and
+// runtime include, forward typedefs, enum declarations, union tag constants,
+// function prototypes, struct definitions, union definitions, struct
+// constructors, and union constructors. Function bodies are not emitted yet, so
+// this driver stops where they would begin.
+//
+// The inputs are the fixed relative paths the other self-hosted drivers use:
+//
+//	input.txt   the root module, which must declare the entry point
+//	input2.txt  the imported module; an empty file is a module with no
+//	            declarations, which is inert
+//
+// A first line of the form "#capacity <n>" in input.txt asks for the section to
+// be emitted into an output of exactly n lines rather than the derived capacity.
+// The line is replaced by an empty line, so no other source position moves. A
+// Kitten program cannot begin with '#', so the prefix is unambiguous. The
+// derived capacity is exact, so this exists so that a caller can supply one that
+// is deliberately too small: a smaller capacity must be reported as a failure,
+// never as a short or partial section.
+//
+// The section is printed one line at a time, so this driver's standard output is
+// the section itself, byte for byte. A failed preparation, check, or emission
+// prints a single diagnostic line beginning with "error" instead.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/declarations.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// RootInput is the root module's source and the requested output capacity, or
+// zero when the derived capacity should be used.
+struct RootInput {
+    string source;
+    int capacity;
+}
+
+// prepare_source lexes and parses one module, printing the first lexical or
+// syntax error it finds.
+fn prepare_source(string source, string path, int id) -> PreparedModule {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// capacity_prefix is the directive that selects an explicit output capacity.
+fn capacity_prefix() -> string {
+    return "#capacity ";
+}
+
+// split_capacity_directive separates an optional "#capacity <n>" first line from
+// the root module's source.
+//
+// The directive line is replaced by an empty line rather than removed, so every
+// position after it keeps the line number the source gives it.
+fn split_capacity_directive(string source) -> RootInput {
+    if (!starts_with(source, capacity_prefix())) {
+        return RootInput { source = source, capacity = 0 };
+    }
+    int cut = first_newline(source);
+    string directive = substring(source, 0, cut);
+    string number = substring(directive, length(capacity_prefix()), length(directive));
+    return RootInput {
+        source = substring(source, cut, length(source)),
+        capacity = parse_decimal(number)
+    };
+}
+
+// starts_with reports whether text begins with prefix.
+fn starts_with(string text, string prefix) -> bool {
+    if (length(text) < length(prefix)) {
+        return false;
+    }
+    int index = 0;
+    while (index < length(prefix)) {
+        if (text[index] != prefix[index]) {
+            return false;
+        }
+        index++;
+    }
+    return true;
+}
+
+// first_newline returns the index of the first newline byte, or the length of
+// the text when it has none.
+fn first_newline(string text) -> int {
+    int index = 0;
+    while (index < length(text)) {
+        if (text[index] == 10) {
+            return index;
+        }
+        index++;
+    }
+    return length(text);
+}
+
+// parse_decimal reads a non-negative decimal integer. It stops at the first
+// character that is not a digit, and returns zero for an empty field, so the
+// capacity directive is the only thing that can supply a malformed value.
+fn parse_decimal(string text) -> int {
+    int value = 0;
+    int index = 0;
+    bool reading = true;
+    while (index < length(text) && reading) {
+        int digit = text[index] - 48;
+        if (digit < 0 || digit > 9) {
+            reading = false;
+        } else {
+            value = value * 10 + digit;
+            index++;
+        }
+    }
+    return value;
+}
+
+// print_lines writes a section one line at a time, so that standard output is
+// the section byte for byte: print terminates every argument with a newline, and
+// a section already ends with one.
+//
+// The trailing fragment cannot occur for a section this generator produces, but
+// printing it keeps the function total rather than dropping text it was given.
+fn print_lines(string text) {
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            print(substring(text, start, index));
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size) {
+        print(substring(text, start, size));
+    }
+}
+
+// declarations_for emits the section with the requested capacity, or with the
+// derived one when none was requested.
+fn declarations_for(SemanticModel model, int capacity) -> DeclarationsResult {
+    if (capacity == 0) {
+        return emit_declarations(model);
+    }
+    return emit_declarations_with_capacity(model, capacity);
+}
+
+fn main() {
+    string root_path = "input.txt";
+    string imported_path = "input2.txt";
+
+    RootInput root = split_capacity_directive(read_file(root_path));
+
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_source(root.source, root_path, 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_source(read_file(imported_path), imported_path, 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+            Success(summary, model) {
+                match (declarations_for(model, root.capacity)) {
+                    Failure(error) {
+                        print("error", "Generate", error.line, error.column, error.message);
+                    }
+                    Success(text, lines, capacity) {
+                        print_lines(text);
+                    }
+                }
+            }
+        }
+    }
+}

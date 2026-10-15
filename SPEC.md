@@ -2350,11 +2350,11 @@ cross-module cases, every fixture, and the self-hosted sources.
 ## 28. Kitten-written C generator (experimental)
 
 Section 19 describes the compilation model, and Section 27 describes the
-Kitten-written checker that resolves a program. This section describes the first
-part of the Kitten-written code generator: the layer that turns resolved names
-and types into C text, and the bounded accumulation it writes into. The emitter
-that walks a checked program and produces a translation unit is not part of it
-and is deferred.
+Kitten-written checker that resolves a program. This section describes the
+Kitten-written code generator: the layer that turns resolved names and types into
+C text and the bounded accumulation it writes into, and the emitter of the
+declaration sections. Function bodies, expressions, statements, the pooled string
+literals, and the C entry point are deferred.
 
 ### 28.1 Location and role
 
@@ -2363,16 +2363,19 @@ The sources are:
 - `selfhost/codegen/names.ktn` — name mangling, the C type mapping, and
   string-literal escaping, mirroring `codegen/names.go` and `codegen/cstring.go`.
 - `selfhost/codegen/output.ktn` — bounded output accumulation and finalization.
-- `selfhost/codegen.ktn` — the driver.
+- `selfhost/codegen/declarations.ktn` — the declaration emitter.
+- `selfhost/codegen.ktn` — the helper probe driver.
+- `selfhost/declarations.ktn` — the declaration driver.
 
-`selfhost/codegen/README.md` describes how to build and run it, the directive
-interface the driver exposes, and the measured accumulation cost.
+`selfhost/codegen/README.md` describes how to build and run each driver, the
+directive interface the helper probe exposes, and the measured accumulation cost.
 
-The driver in this phase is a **probe**, not the compiler stage: it reads
-directive lines from the fixed relative path `input.txt` and prints one result
-line per directive, so that every helper is reachable without a program to walk.
-The driver described for the finished component reads a Kitten program, lexes,
-parses, and checks it, and prints generated C; it has no counterpart yet.
+Two drivers exist because the layers are reached differently. The helper probe
+reads directive lines from the fixed relative path `input.txt` and prints one
+result line per directive, so that every helper is reachable without a program to
+walk. The declaration driver reads the two module paths the checker's driver
+reads, runs the same front end, and prints the declaration section. Neither is the
+finished compiler stage, which will emit a whole translation unit for a program.
 
 ### 28.2 API
 
@@ -2390,11 +2393,16 @@ derived name forms, `c_type`, and `c_string_literal`:
   helper decodes with the parser's `decode_string`, which is exported for it, so
   that the two decodings cannot drift.
 
+- `header_file_name()` and `alloc_function()` are the two runtime interface names
+  the declaration sections mention: the header they include and the allocation the
+  generated constructors call.
+
 `output.ktn` exposes `new_output`, `output_write`, `output_indent`, `output_line`,
 each returning `OutputResult`, and `output_text`.
 
-Nothing here inspects a program, resolves a name, or infers a type: every helper
-maps a name, a module, a resolved type, or a literal token to C text.
+Nothing in this layer inspects a program, resolves a name, or infers a type: every
+helper maps a name, a module, a resolved type, or a literal token to C text. The
+declaration emitter's own API is in Section 28.6.
 
 ### 28.3 C type mapping and name mangling
 
@@ -2428,32 +2436,76 @@ means the write did not happen and the caller must abandon generation.
 `selfhost/codegen/README.md` records the measurements: balanced joining grows
 linearly, where joining left to right grows quadratically.
 
-### 28.6 Differential testing
+### 28.6 The declaration emitter
 
-A differential test in `cmd/kitten` compiles the probe once and compares it with
-the reference generator. The comparison is against values the reference produced,
-not against a copy of its logic: for every literal of the corpus the harness reads
-the pooled declaration out of the reference's own output and compares both the
-escaped text and the byte length; every predicted name and every complex C type
-spelling is required to appear in reference C for a program that uses it.
+`selfhost/codegen/declarations.ktn` emits the sections the reference generator
+writes before any function body, in its order and with its spacing: the
+generated-file comment and runtime include, forward typedefs, enum declarations,
+union tag constants, function prototypes, struct definitions, union definitions,
+struct constructors, and union constructors. `selfhost/declarations.ktn` is its
+driver: it reads two modules, runs the Kitten front end, and prints the section.
 
-`selfhost/codegen/README.md` records the corpus and the results.
+The API is `emit_declarations(model)`, which sizes the output exactly, and
+`emit_declarations_with_capacity(model, capacity)`, which emits into a chosen
+size so that a capacity known to be too small can be supplied and its failure
+observed. A result is either the section with its line and capacity counts, or a
+failure carrying a position and a message. A declaration the checker did not
+record is a failure, never a declaration: the emitter never turns a missing
+annotation into plausible output, and an emission that cannot be completed
+produces no section at all.
 
-### 28.7 Deferred
+Every name comes from Section 28.3 and every type from the semantic model of
+Section 27.2.1. The emitter resolves no name, infers no type, and reads no source
+text.
 
-- **The emitter.** No declaration, statement, or expression emission exists yet.
-  The helpers, the accumulation API, the semantic model of Section 27.2.1, and
-  the AST are the inputs it will consume.
-- **The pipeline driver.** The probe's directive interface is replaced by a
-  driver that reads a program.
+**Capacity.** The output accumulator of Section 28.5 is bounded, so the number of
+lines the section will need must be known before it is written. The emitter runs
+the same traversal twice: a dry run counts the lines through the same calls that
+write them, and the real run is given exactly that many chunks. The count is exact
+because one emitted line is one chunk — a line ends with a newline, and a newline
+completes exactly one chunk — and because every section rule, including whether a
+section is followed by a blank line, is decided by the same line counter the dry
+run advances.
+
+### 28.7 Differential testing
+
+Two differential tests in `cmd/kitten` compare the Kitten-written generator with
+the reference. The helper test compares values the reference produced rather than
+a copy of its logic: for every literal of the corpus the harness reads the pooled
+declaration out of the reference's own output and compares both the escaped text
+and the byte length, and every predicted name and complex C type spelling is
+required to appear in reference C for a program that uses it.
+
+The declaration test compares the section itself, byte for byte. The reference
+emits a whole translation unit, so the harness separates the section
+structurally: it ends at whichever comes first of a pooled literal declaration and
+a function definition, neither of which can be confused with a constructor or
+depends on a literal being present. Programs the reference rejects for its
+entry-point rule, which this phase does not implement, are verified by deriving
+the section instead: prepending an empty `main` adds exactly one prototype line
+and nothing else.
+
+`selfhost/codegen/README.md` records the corpora and the results.
+
+### 28.8 Deferred
+
+- **Function bodies.** Expression and statement emission, the pooled string
+  literals, and the C entry point do not exist yet, so no complete translation
+  unit is produced by Kitten. The helpers, the declaration emitter, the semantic
+  model of Section 27.2.1, and the AST are the inputs the rest of the emitter will
+  consume.
+- **Entry-point validation.** The reference validates the entry point before it
+  emits anything; that rule belongs with emitting it, and until it exists the
+  declaration driver emits a section for a program the reference refuses.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
-- Compiling and running the generated C, and comparing its output with the
-  reference generator's, belong to the emitter's differential test.
+- Compiling and running a generated program, and comparing its output with the
+  reference generator's, belong to the phase that emits the whole unit. A
+  declaration section is compiled on its own, not linked.
 - File writing: generated C is captured from standard output.
 - Command-line arguments, standard error, and a program-selected exit status
   (Section 16).
 
-Kitten is not self-hosting: the lexer, the parser, the checker, and this
-generator foundation are written in Kitten, while the loader, the emitter, and the
-production pipeline are Go.
+Kitten is not self-hosting: the lexer, the parser, the checker, and the generator's
+helper and declaration layers are written in Kitten, while the loader, the rest of
+the emitter, and the production pipeline are Go.

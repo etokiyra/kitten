@@ -38,6 +38,14 @@ public fn literal_prefix() -> string { return "ktn_literal_"; }
 public fn object_name() -> string { return "ktn_object"; }
 public fn tag_field_name() -> string { return "ktn_tag"; }
 
+// header_file_name is the runtime header the generated translation unit
+// includes, and alloc_function is the runtime allocation the generated
+// constructors call for a garbage-collected object. Both are the names the
+// runtime package exports, so the generator and the runtime cannot disagree
+// about the interface between them.
+public fn header_file_name() -> string { return "kitten_runtime.h"; }
+public fn alloc_function() -> string { return "ktn_rt_alloc"; }
+
 // module_prefix returns the C name prefix for a module. The root module (id 0)
 // has no prefix, so single-module programs generate the same names as before.
 // Imported modules use "<id>_"; because a Kitten identifier cannot begin with a

@@ -90,15 +90,20 @@ semantic model — the types, symbols, variants, and declarations a generator re
 — for a future code generator. Phase 4D.1 began the C code generator written in
 Kitten: its C naming, C type mapping, string-literal escaping, and bounded output
 accumulation under `selfhost/codegen`, exposed by `selfhost/codegen.ktn` and
-checked against the Go generator in `cmd/kitten`.
+checked against the Go generator in `cmd/kitten`. Phase 4D.2 added the declaration
+emitter under `selfhost/codegen/declarations.ktn`, driven by
+`selfhost/declarations.ktn`: it reproduces the nine sections the reference
+generator emits before any function body, byte for byte, and is checked against
+the reference over a targeted corpus, the checker corpus, and representative
+native compilations.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
 which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, and no emitter yet)
-are documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
-`selfhost/parser/README.md`, `selfhost/checker/README.md`, and
-`selfhost/codegen/README.md`.
+positions, no command-line arguments or chosen exit status, and no function
+bodies, entry point, or module loader yet) are documented in SPEC.md Sections 25
+to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
+`selfhost/checker/README.md`, and `selfhost/codegen/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -118,8 +123,9 @@ authorization.
    Kitten-written semantic checker checked against the Go checker, without
    replacing it; Phase 4C exposed the checker's resolved semantic model for a
    future code generator; Phase 4D.1 began the Kitten-written C generator with
-   its naming, C type mapping, string escaping, and bounded output accumulation,
-   without an emitter yet).
+   its naming, C type mapping, string escaping, and bounded output accumulation;
+   Phase 4D.2 added its declaration emitter, checked against the reference
+   generator byte for byte, without function bodies yet).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

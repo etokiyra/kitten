@@ -1,0 +1,810 @@
+// declarations.ktn - emit the top-level C declarations of a checked program.
+//
+// It reproduces the declaration sections of the reference generator in
+// codegen/codegen.go, in its order and with its spacing: the generated-file
+// comment and the runtime include, forward typedefs, enum declarations, union
+// tag constants, function prototypes, struct definitions, union definitions,
+// struct constructors, and union constructors. Function bodies, expression and
+// statement emission, the pooled string literals, and the C entry point are not
+// part of it and belong to a later phase.
+//
+// The section is a pure function of the program: every name comes from
+// names.ktn, every type from the checker's semantic model, and every position
+// from the parsed tree. Nothing here resolves a name, infers a type, or re-reads
+// source text, and nothing converts a missing annotation into a plausible
+// declaration - a declaration the checker did not record is a failure.
+//
+// Capacity. The output accumulator is bounded, so the number of lines the
+// section needs must be known before it is written. A formula over declaration
+// counts would drift from the emission the moment a section changed. Instead the
+// same traversal runs twice: a dry run counts the lines through the same
+// emit_line calls that write them, and the real run is given exactly that many
+// chunks. Because every emitted line ends with a newline and a newline completes
+// one chunk, one line is one chunk, so the dry run's count is exact rather than a
+// bound.
+
+import "../checker/model.ktn";
+import "../parser/ast.ktn";
+import "names.ktn";
+import "output.ktn";
+
+// GenerateError is a code generation failure with a source position.
+//
+// The reference carries a file name as well; the position here is the one the
+// reference uses for the same failure, which is always inside a module, and the
+// driver knows which module it was reading.
+public struct GenerateError {
+    int line;
+    int column;
+    string message;
+}
+
+// DeclarationsResult is the emitted declaration section, or the reason none was
+// produced.
+//
+// Success reports the section, the number of lines it holds, and the capacity it
+// was written with. A failure means no section was produced: there is no partial
+// result, because the count pass either completes or reports the same failure
+// before anything is written.
+public union DeclarationsResult {
+    Success { string text; int lines; int capacity; }
+    Failure { GenerateError error; }
+}
+
+// EmitStep is the outcome of emitting one piece of the section.
+union EmitStep {
+    Ok
+    Failed { GenerateError error; }
+}
+
+// SignatureResult is a rendered signature or parameter list, or a failure.
+union SignatureResult {
+    Ok { string text; }
+    Failed { GenerateError error; }
+}
+
+// DeclarationPhase selects which section a declaration kind is being emitted
+// for. A kind handles the phases that apply to it and ignores the rest, so one
+// walking function per kind serves every section.
+enum DeclarationPhase {
+    ForwardType,
+    EnumConstants,
+    UnionTags,
+    Prototype,
+    StructDefinition,
+    StructConstructor,
+    UnionDefinition,
+    UnionConstructor
+}
+
+// DeclarationEmitter accumulates one declaration section.
+struct DeclarationEmitter {
+    SemanticModel model;
+
+    // output receives the text. In counting mode it is never written to.
+    Output output;
+
+    // counting selects the dry run that counts lines instead of writing them.
+    bool counting;
+
+    // indent is the current nesting level, four spaces per level.
+    int indent;
+
+    // lines is the number of lines emitted, or counted, so far. Comparing it
+    // across a section is how a section decides whether it has anything to
+    // separate with a blank line.
+    int lines;
+}
+
+// emit_ok reports whether a step succeeded.
+fn emit_ok(EmitStep step) -> bool {
+    match (step) {
+        Ok { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// emit_error returns the failure a step carries, or an empty error when it
+// succeeded; no caller can observe the empty error, because the step is tested
+// first.
+fn emit_error(EmitStep step) -> GenerateError {
+    match (step) {
+        Ok { return generate_error(0, 0, ""); }
+        Failed(error) { return error; }
+    }
+}
+
+// generate_error builds a failure at a position.
+fn generate_error(int line, int column, string message) -> GenerateError {
+    return GenerateError { line = line, column = column, message = message };
+}
+
+// failure_at builds a failing step at a position, which is how every emission
+// failure is reported.
+fn failure_at(Position at, string message) -> EmitStep {
+    return EmitStep.Failed { error = generate_error(at.line, at.column, message) };
+}
+
+// new_emitter returns an emitter for one section.
+fn new_emitter(SemanticModel model, bool counting, int capacity) -> DeclarationEmitter {
+    return DeclarationEmitter {
+        model = model,
+        output = new_output(capacity),
+        counting = counting,
+        indent = 0,
+        lines = 0
+    };
+}
+
+// emit_line emits one indented, newline-terminated line, or counts it in the dry
+// run.
+//
+// A rejected line means the capacity was too small, which cannot happen for a
+// section emitted with the counted capacity; it is reported rather than ignored
+// so that a wrong capacity can never be mistaken for complete output.
+fn emit_line(DeclarationEmitter emitter, string text) -> EmitStep {
+    emitter.lines = emitter.lines + 1;
+    if (emitter.counting) {
+        return EmitStep.Ok;
+    }
+    match (output_line(emitter.output, emitter.indent, text)) {
+        Ok {
+            return EmitStep.Ok;
+        }
+        Overflow(capacity) {
+            return EmitStep.Failed {
+                error = generate_error(0, 0, "the declaration section does not fit in a capacity of " + decimal(capacity) + " lines")
+            };
+        }
+    }
+}
+
+// --- Whole section -----------------------------------------------------------
+
+// emit_declarations emits the declaration section, sizing the output exactly.
+public fn emit_declarations(SemanticModel model) -> DeclarationsResult {
+    DeclarationEmitter counter = new_emitter(model, true, 1);
+    EmitStep counted = emit_sections(counter);
+    if (!emit_ok(counted)) {
+        return DeclarationsResult.Failure { error = emit_error(counted) };
+    }
+    return emit_declarations_with_capacity(model, counter.lines);
+}
+
+// emit_declarations_with_capacity emits the declaration section into an output
+// of the given capacity.
+//
+// The derived capacity is exact, so this entry point exists to emit under a
+// chosen capacity: a caller can pass the exact one, and a test can pass one
+// known to be too small and observe that the failure is reported.
+public fn emit_declarations_with_capacity(SemanticModel model, int capacity) -> DeclarationsResult {
+    DeclarationEmitter emitter = new_emitter(model, false, capacity);
+    EmitStep emitted = emit_sections(emitter);
+    if (!emit_ok(emitted)) {
+        return DeclarationsResult.Failure { error = emit_error(emitted) };
+    }
+    return DeclarationsResult.Success {
+        text = output_text(emitter.output),
+        lines = emitter.lines,
+        capacity = capacity
+    };
+}
+
+// emit_sections emits every section, in the reference generator's order.
+fn emit_sections(DeclarationEmitter emitter) -> EmitStep {
+    EmitStep comment = emit_line(emitter, "/* Generated by the Kitten compiler. Do not edit. */");
+    if (!emit_ok(comment)) {
+        return comment;
+    }
+    EmitStep include = emit_line(emitter, "#include \"" + header_file_name() + "\"");
+    if (!emit_ok(include)) {
+        return include;
+    }
+    EmitStep prologue = emit_line(emitter, "");
+    if (!emit_ok(prologue)) {
+        return prologue;
+    }
+
+    EmitStep forward = emit_forward_section(emitter);
+    if (!emit_ok(forward)) {
+        return forward;
+    }
+    EmitStep enums = emit_enum_section(emitter);
+    if (!emit_ok(enums)) {
+        return enums;
+    }
+    EmitStep tags = emit_union_tag_section(emitter);
+    if (!emit_ok(tags)) {
+        return tags;
+    }
+    EmitStep prototypes = emit_function_prototype_section(emitter);
+    if (!emit_ok(prototypes)) {
+        return prototypes;
+    }
+    EmitStep structs = emit_struct_definition_section(emitter);
+    if (!emit_ok(structs)) {
+        return structs;
+    }
+    EmitStep unions = emit_union_definition_section(emitter);
+    if (!emit_ok(unions)) {
+        return unions;
+    }
+    EmitStep struct_constructors = emit_struct_constructor_section(emitter);
+    if (!emit_ok(struct_constructors)) {
+        return struct_constructors;
+    }
+    return emit_union_constructor_section(emitter);
+}
+
+// --- Sections ----------------------------------------------------------------
+
+// emit_forward_section emits a forward typedef for every struct and then for
+// every union, so that a struct or union body may refer to a type declared
+// later, in this module or another.
+fn emit_forward_section(DeclarationEmitter emitter) -> EmitStep {
+    int before = emitter.lines;
+    EmitStep structs = for_each_struct(emitter, DeclarationPhase.ForwardType);
+    if (!emit_ok(structs)) {
+        return structs;
+    }
+    EmitStep unions = for_each_union(emitter, DeclarationPhase.ForwardType);
+    if (!emit_ok(unions)) {
+        return unions;
+    }
+    if (emitter.lines > before) {
+        return emit_line(emitter, "");
+    }
+    return EmitStep.Ok;
+}
+
+// emit_enum_section emits a typedef and one constant per case for every enum.
+fn emit_enum_section(DeclarationEmitter emitter) -> EmitStep {
+    return for_each_enum(emitter);
+}
+
+// emit_union_tag_section emits one tag constant per variant for every union.
+fn emit_union_tag_section(DeclarationEmitter emitter) -> EmitStep {
+    return for_each_union(emitter, DeclarationPhase.UnionTags);
+}
+
+// emit_function_prototype_section emits a prototype per function, so that
+// functions may call functions declared later, including recursive and mutually
+// recursive ones.
+fn emit_function_prototype_section(DeclarationEmitter emitter) -> EmitStep {
+    int before = emitter.lines;
+    EmitStep prototypes = for_each_function(emitter);
+    if (!emit_ok(prototypes)) {
+        return prototypes;
+    }
+    if (emitter.lines > before) {
+        return emit_line(emitter, "");
+    }
+    return EmitStep.Ok;
+}
+
+// emit_struct_definition_section emits the C struct bodies.
+fn emit_struct_definition_section(DeclarationEmitter emitter) -> EmitStep {
+    int before = emitter.lines;
+    EmitStep structs = for_each_struct(emitter, DeclarationPhase.StructDefinition);
+    if (!emit_ok(structs)) {
+        return structs;
+    }
+    if (emitter.lines > before) {
+        return emit_line(emitter, "");
+    }
+    return EmitStep.Ok;
+}
+
+// emit_union_definition_section emits one flat C struct per union.
+fn emit_union_definition_section(DeclarationEmitter emitter) -> EmitStep {
+    return for_each_union(emitter, DeclarationPhase.UnionDefinition);
+}
+
+// emit_struct_constructor_section emits one allocation-and-initialization
+// function per struct.
+fn emit_struct_constructor_section(DeclarationEmitter emitter) -> EmitStep {
+    return for_each_struct(emitter, DeclarationPhase.StructConstructor);
+}
+
+// emit_union_constructor_section emits one allocation-and-initialization
+// function per union variant.
+fn emit_union_constructor_section(DeclarationEmitter emitter) -> EmitStep {
+    return for_each_union(emitter, DeclarationPhase.UnionConstructor);
+}
+
+// --- Walks -------------------------------------------------------------------
+//
+// Each walk visits every declaration of one kind, in module and source order,
+// which is the order the reference generator emits. Kitten has no way to pass a
+// function to a walk, so the loop is written once per kind and calls the kind's
+// handler. The kinds a walk does not handle are named explicitly, because the
+// language has no wildcard arm.
+
+// for_each_struct visits every struct declaration.
+fn for_each_struct(DeclarationEmitter emitter, DeclarationPhase phase) -> EmitStep {
+    int module_index = 0;
+    while (module_index < emitter.model.module_count) {
+        ModuleModel module = module_model(emitter.model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Struct(at, visibility, name, fields, field_count) {
+                    EmitStep step = emit_struct_declaration(emitter, module, phase, at, name);
+                    if (!emit_ok(step)) {
+                        return step;
+                    }
+                }
+                Import(keyword, path) { }
+                Enum(at, visibility, name, cases, case_count) { }
+                Union(at, visibility, name, variants, variant_count) { }
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return EmitStep.Ok;
+}
+
+// for_each_union visits every union declaration.
+fn for_each_union(DeclarationEmitter emitter, DeclarationPhase phase) -> EmitStep {
+    int module_index = 0;
+    while (module_index < emitter.model.module_count) {
+        ModuleModel module = module_model(emitter.model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Union(at, visibility, name, variants, variant_count) {
+                    EmitStep step = emit_union_declaration(emitter, module, phase, at, name);
+                    if (!emit_ok(step)) {
+                        return step;
+                    }
+                }
+                Import(keyword, path) { }
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+                Struct(at, visibility, name, fields, field_count) { }
+                Enum(at, visibility, name, cases, case_count) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return EmitStep.Ok;
+}
+
+// for_each_enum visits every enum declaration.
+fn for_each_enum(DeclarationEmitter emitter) -> EmitStep {
+    int module_index = 0;
+    while (module_index < emitter.model.module_count) {
+        ModuleModel module = module_model(emitter.model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Enum(at, visibility, name, cases, case_count) {
+                    EmitStep step = emit_enum_declaration(emitter, module, at, name);
+                    if (!emit_ok(step)) {
+                        return step;
+                    }
+                }
+                Import(keyword, path) { }
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+                Struct(at, visibility, name, fields, field_count) { }
+                Union(at, visibility, name, variants, variant_count) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return EmitStep.Ok;
+}
+
+// for_each_function visits every function declaration.
+fn for_each_function(DeclarationEmitter emitter) -> EmitStep {
+    int module_index = 0;
+    while (module_index < emitter.model.module_count) {
+        ModuleModel module = module_model(emitter.model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                    EmitStep step = emit_function_declaration(emitter, module, at, name);
+                    if (!emit_ok(step)) {
+                        return step;
+                    }
+                }
+                Import(keyword, path) { }
+                Struct(at, visibility, name, fields, field_count) { }
+                Enum(at, visibility, name, cases, case_count) { }
+                Union(at, visibility, name, variants, variant_count) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return EmitStep.Ok;
+}
+
+// --- Struct declarations -----------------------------------------------------
+
+// emit_struct_declaration emits whatever a struct contributes to one section.
+// The phases that do not apply to a struct are not reached: every call site
+// names a phase the kind handles.
+fn emit_struct_declaration(DeclarationEmitter emitter, ModuleModel module, DeclarationPhase phase, Token at, Token name) -> EmitStep {
+    if (phase == DeclarationPhase.ForwardType) {
+        string c_name = struct_name(name.text, module.id);
+        return emit_line(emitter, "typedef struct " + c_name + " " + c_name + ";");
+    }
+    if (phase == DeclarationPhase.StructDefinition) {
+        return emit_struct_definition(emitter, module, at, name);
+    }
+    if (phase == DeclarationPhase.StructConstructor) {
+        return emit_struct_constructor(emitter, module, at, name);
+    }
+    return EmitStep.Ok;
+}
+
+// emit_struct_definition emits the C struct body.
+fn emit_struct_definition(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "struct " + quoted(name.text) + " was not checked");
+        }
+        Present(struct_type) {
+            if (!is_struct(struct_type)) {
+                return failure_at(position_of_token(at), "struct " + quoted(name.text) + " was not checked");
+            }
+            EmitStep open = emit_line(emitter, "struct " + struct_name(name.text, module.id) + " {");
+            if (!emit_ok(open)) {
+                return open;
+            }
+            emitter.indent = emitter.indent + 1;
+            StructInfo info = struct_info_of(struct_type);
+            int index = 0;
+            while (index < info.field_count) {
+                StructField field = info.fields[index];
+                CTypeResult field_type = c_type(field.type);
+                if (!c_type_ok(field_type)) {
+                    return failure_at(field.at, c_type_message(field_type));
+                }
+                EmitStep line = emit_line(emitter, c_type_text(field_type) + " " + field_name(field.name) + ";");
+                if (!emit_ok(line)) {
+                    return line;
+                }
+                index++;
+            }
+            emitter.indent = emitter.indent - 1;
+            return emit_line(emitter, "};");
+        }
+    }
+}
+
+// emit_struct_constructor emits the allocation-and-initialization function for
+// one struct. A struct literal becomes a call to it.
+fn emit_struct_constructor(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "struct " + quoted(name.text) + " was not checked");
+        }
+        Present(struct_type) {
+            if (!is_struct(struct_type)) {
+                return failure_at(position_of_token(at), "struct " + quoted(name.text) + " was not checked");
+            }
+            string c_struct = struct_name(name.text, module.id);
+            StructInfo info = struct_info_of(struct_type);
+            match (field_parameter_list(info.fields, info.field_count)) {
+                Failed(error) { return EmitStep.Failed { error = error }; }
+                Ok(parameters) {
+                    EmitStep open = emit_line(emitter, c_struct + " *" + constructor_name(name.text, module.id) + "(" + parameters + ") {");
+                    if (!emit_ok(open)) {
+                        return open;
+                    }
+                    emitter.indent = emitter.indent + 1;
+                    EmitStep allocate = emit_line(emitter, allocate_line(c_struct));
+                    if (!emit_ok(allocate)) {
+                        return allocate;
+                    }
+                    int index = 0;
+                    while (index < info.field_count) {
+                        StructField field = info.fields[index];
+                        EmitStep line = emit_line(emitter, object_name() + "->" + field_name(field.name) + " = " + argument_name(field.name) + ";");
+                        if (!emit_ok(line)) {
+                            return line;
+                        }
+                        index++;
+                    }
+                    EmitStep return_line = emit_line(emitter, "return " + object_name() + ";");
+                    if (!emit_ok(return_line)) {
+                        return return_line;
+                    }
+                    emitter.indent = emitter.indent - 1;
+                    EmitStep close = emit_line(emitter, "}");
+                    if (!emit_ok(close)) {
+                        return close;
+                    }
+                    return emit_line(emitter, "");
+                }
+            }
+        }
+    }
+}
+
+// --- Enum and union declarations ---------------------------------------------
+
+// emit_enum_declaration emits, for one enum, a C typedef and one constant per
+// case. Enum values are stored as int64_t tags, and the constants are the tag
+// values in declaration order.
+fn emit_enum_declaration(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "enum " + quoted(name.text) + " was not checked");
+        }
+        Present(enum_type) {
+            EmitStep typedef_line = emit_line(emitter, "typedef int64_t " + enum_name(enum_type.name, module.id) + ";");
+            if (!emit_ok(typedef_line)) {
+                return typedef_line;
+            }
+            EmitStep open = emit_line(emitter, "enum {");
+            if (!emit_ok(open)) {
+                return open;
+            }
+            emitter.indent = emitter.indent + 1;
+            int index = 0;
+            while (index < enum_type.variant_count) {
+                Variant variant = enum_type.variants[index];
+                EmitStep line = emit_line(emitter, enum_case_name(enum_type, variant.name) + " = " + decimal(variant.index) + ",");
+                if (!emit_ok(line)) {
+                    return line;
+                }
+                index++;
+            }
+            emitter.indent = emitter.indent - 1;
+            EmitStep close = emit_line(emitter, "};");
+            if (!emit_ok(close)) {
+                return close;
+            }
+            return emit_line(emitter, "");
+        }
+    }
+}
+
+// emit_union_declaration emits whatever a union contributes to one section.
+fn emit_union_declaration(DeclarationEmitter emitter, ModuleModel module, DeclarationPhase phase, Token at, Token name) -> EmitStep {
+    if (phase == DeclarationPhase.ForwardType) {
+        string c_name = struct_name(name.text, module.id);
+        return emit_line(emitter, "typedef struct " + c_name + " " + c_name + ";");
+    }
+    if (phase == DeclarationPhase.UnionTags) {
+        return emit_union_tag_constants(emitter, module, at, name);
+    }
+    if (phase == DeclarationPhase.UnionDefinition) {
+        return emit_union_definition(emitter, module, at, name);
+    }
+    if (phase == DeclarationPhase.UnionConstructor) {
+        return emit_union_constructors(emitter, module, at, name);
+    }
+    return EmitStep.Ok;
+}
+
+// emit_union_tag_constants emits one constant per variant. A union value stores
+// its active variant's constant in its tag member.
+fn emit_union_tag_constants(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "union " + quoted(name.text) + " was not checked");
+        }
+        Present(union_type) {
+            EmitStep open = emit_line(emitter, "enum {");
+            if (!emit_ok(open)) {
+                return open;
+            }
+            emitter.indent = emitter.indent + 1;
+            int index = 0;
+            while (index < union_type.variant_count) {
+                Variant variant = union_type.variants[index];
+                EmitStep line = emit_line(emitter, union_tag_name(union_type, variant.name) + " = " + decimal(variant.index) + ",");
+                if (!emit_ok(line)) {
+                    return line;
+                }
+                index++;
+            }
+            emitter.indent = emitter.indent - 1;
+            EmitStep close = emit_line(emitter, "};");
+            if (!emit_ok(close)) {
+                return close;
+            }
+            return emit_line(emitter, "");
+        }
+    }
+}
+
+// emit_union_definition emits one flat C struct per union.
+//
+// The struct holds the active variant's tag and every variant's fields as
+// separate members with variant-prefixed names. A flat layout is used instead of
+// a C union so that reading a field is never undefined behavior: only the active
+// variant's members are read, always after the tag has been checked.
+fn emit_union_definition(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "union " + quoted(name.text) + " was not checked");
+        }
+        Present(union_type) {
+            if (!is_union(union_type)) {
+                return failure_at(position_of_token(at), "union " + quoted(name.text) + " was not checked");
+            }
+            EmitStep open = emit_line(emitter, "struct " + struct_name(name.text, module.id) + " {");
+            if (!emit_ok(open)) {
+                return open;
+            }
+            emitter.indent = emitter.indent + 1;
+            EmitStep tag = emit_line(emitter, "int64_t " + tag_field_name() + ";");
+            if (!emit_ok(tag)) {
+                return tag;
+            }
+            int variant_index = 0;
+            while (variant_index < union_type.variant_count) {
+                Variant variant = union_type.variants[variant_index];
+                int field_index = 0;
+                while (field_index < variant.field_count) {
+                    StructField field = variant.fields[field_index];
+                    CTypeResult field_type = c_type(field.type);
+                    if (!c_type_ok(field_type)) {
+                        return failure_at(field.at, c_type_message(field_type));
+                    }
+                    EmitStep line = emit_line(emitter, c_type_text(field_type) + " " + variant_field_name(variant.name, field.name) + ";");
+                    if (!emit_ok(line)) {
+                        return line;
+                    }
+                    field_index++;
+                }
+                variant_index++;
+            }
+            emitter.indent = emitter.indent - 1;
+            EmitStep close = emit_line(emitter, "};");
+            if (!emit_ok(close)) {
+                return close;
+            }
+            return emit_line(emitter, "");
+        }
+    }
+}
+
+// emit_union_constructors emits one allocation-and-initialization function per
+// union variant. A variant reference or literal becomes a call to the matching
+// constructor, which sets the tag before any payload field.
+fn emit_union_constructors(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_type(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "union " + quoted(name.text) + " was not checked");
+        }
+        Present(union_type) {
+            if (!is_union(union_type)) {
+                return failure_at(position_of_token(at), "union " + quoted(name.text) + " was not checked");
+            }
+            string c_struct = struct_name(name.text, module.id);
+            int variant_index = 0;
+            while (variant_index < union_type.variant_count) {
+                Variant variant = union_type.variants[variant_index];
+                match (field_parameter_list(variant.fields, variant.field_count)) {
+                    Failed(error) { return EmitStep.Failed { error = error }; }
+                    Ok(parameters) {
+                        EmitStep open = emit_line(emitter, c_struct + " *" + variant_constructor_name(union_type, variant.name) + "(" + parameters + ") {");
+                        if (!emit_ok(open)) {
+                            return open;
+                        }
+                        emitter.indent = emitter.indent + 1;
+                        EmitStep allocate = emit_line(emitter, allocate_line(c_struct));
+                        if (!emit_ok(allocate)) {
+                            return allocate;
+                        }
+                        EmitStep tag = emit_line(emitter, object_name() + "->" + tag_field_name() + " = " + union_tag_name(union_type, variant.name) + ";");
+                        if (!emit_ok(tag)) {
+                            return tag;
+                        }
+                        int field_index = 0;
+                        while (field_index < variant.field_count) {
+                            StructField field = variant.fields[field_index];
+                            EmitStep line = emit_line(emitter, object_name() + "->" + variant_field_name(variant.name, field.name) + " = " + argument_name(field.name) + ";");
+                            if (!emit_ok(line)) {
+                                return line;
+                            }
+                            field_index++;
+                        }
+                        EmitStep return_line = emit_line(emitter, "return " + object_name() + ";");
+                        if (!emit_ok(return_line)) {
+                            return return_line;
+                        }
+                        emitter.indent = emitter.indent - 1;
+                        EmitStep close = emit_line(emitter, "}");
+                        if (!emit_ok(close)) {
+                            return close;
+                        }
+                        EmitStep blank = emit_line(emitter, "");
+                        if (!emit_ok(blank)) {
+                            return blank;
+                        }
+                    }
+                }
+                variant_index++;
+            }
+            return EmitStep.Ok;
+        }
+    }
+}
+
+// --- Function prototypes -----------------------------------------------------
+
+// emit_function_declaration emits a function's prototype.
+fn emit_function_declaration(DeclarationEmitter emitter, ModuleModel module, Token at, Token name) -> EmitStep {
+    match (declaration_function(module, name.text)) {
+        Absent {
+            return failure_at(position_of_token(at), "function " + quoted(name.text) + " was not checked");
+        }
+        Present(function) {
+            match (function_signature(module.id, position_of_token(at), name.text, function)) {
+                Failed(error) { return EmitStep.Failed { error = error }; }
+                Ok(signature) { return emit_line(emitter, signature + ";"); }
+            }
+        }
+    }
+}
+
+// function_signature renders "returnType name(parameterTypes)" for a function.
+fn function_signature(int module, Position at, string name, Function function) -> SignatureResult {
+    CTypeResult return_type = c_type(function.return_type);
+    if (!c_type_ok(return_type)) {
+        return SignatureResult.Failed { error = generate_error(at.line, at.column, c_type_message(return_type)) };
+    }
+    string parameters = "";
+    int index = 0;
+    while (index < function.parameter_count) {
+        CTypeResult parameter_type = c_type(function.parameter_types[index]);
+        if (!c_type_ok(parameter_type)) {
+            return SignatureResult.Failed { error = generate_error(at.line, at.column, c_type_message(parameter_type)) };
+        }
+        if (index > 0) {
+            parameters += ", ";
+        }
+        parameters += c_type_text(parameter_type) + " " + variable_name(function.parameter_names[index]);
+        index++;
+    }
+    if (function.parameter_count == 0) {
+        parameters = "void";
+    }
+    return SignatureResult.Ok {
+        text = c_type_text(return_type) + " " + function_name(name, module) + "(" + parameters + ")"
+    };
+}
+
+// --- Shared fragments --------------------------------------------------------
+
+// field_parameter_list renders a constructor's parameters: "type name" per
+// field, joined with ", ", or "void" when there are none.
+//
+// A struct's fields and a variant's fields are both a field list, so struct and
+// union constructors share this rendering.
+fn field_parameter_list(StructField[] fields, int field_count) -> SignatureResult {
+    string parameters = "";
+    int index = 0;
+    while (index < field_count) {
+        CTypeResult field_type = c_type(fields[index].type);
+        if (!c_type_ok(field_type)) {
+            return SignatureResult.Failed { error = generate_error(fields[index].at.line, fields[index].at.column, c_type_message(field_type)) };
+        }
+        if (index > 0) {
+            parameters += ", ";
+        }
+        parameters += c_type_text(field_type) + " " + argument_name(fields[index].name);
+        index++;
+    }
+    if (field_count == 0) {
+        parameters = "void";
+    }
+    return SignatureResult.Ok { text = parameters };
+}
+
+// allocate_line renders the allocation at the head of a generated constructor:
+// "<type> *<object> = (<type> *)<alloc>(sizeof(<type>));".
+fn allocate_line(string c_struct) -> string {
+    return c_struct + " *" + object_name() + " = (" + c_struct + " *)" + alloc_function() + "(sizeof(" + c_struct + "));";
+}

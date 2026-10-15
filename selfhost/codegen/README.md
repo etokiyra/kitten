@@ -1,11 +1,14 @@
 # A C code generator for Kitten, written in Kitten
 
-This directory holds the foundation of a C code generator written in Kitten: the
-C names, the C type mapping, C string-literal escaping, and bounded output
-accumulation. The emitter that walks a checked program and writes a translation
-unit does not exist yet; this is the layer it will be built on, together with a
-driver that exposes the layer so it can be compared with the reference generator
-before anything depends on it.
+This directory holds two layers of a C code generator written in Kitten:
+
+- the helper layer - C names, the C type mapping, C string-literal escaping, and
+  bounded output accumulation; and
+- the declaration emitter - the nine sections the reference generator emits
+  before any function body, reproduced in its order and with its spacing.
+
+Function bodies, expression and statement emission, the pooled string literals,
+and the C entry point do not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -18,20 +21,25 @@ here.
   `codegen/cstring.go`.
 - `selfhost/codegen/output.ktn` — bounded, chunked output accumulation and
   finalization.
-- `selfhost/codegen.ktn` — the probe driver: it reads directives from `input.txt`
-  and prints one result line per directive.
-- `cmd/kitten/codegen_differential_test.go` — the differential harness.
+- `selfhost/codegen/declarations.ktn` — the declaration emitter.
+- `selfhost/codegen.ktn` — the helper probe driver: it reads directives from
+  `input.txt` and prints one result line per directive.
+- `selfhost/declarations.ktn` — the declaration driver: it reads two modules,
+  runs the Kitten front end, and prints their declaration section.
+- `cmd/kitten/codegen_differential_test.go` and
+  `cmd/kitten/declarations_differential_test.go` — the differential harnesses.
 
 ## Building and running
 
 ```sh
-# From the repository root. The driver reads the fixed relative path
-# "input.txt", so the working directory selects the input.
+# From the repository root. The drivers read fixed relative paths, so the
+# working directory selects the input.
 kitten build selfhost/codegen.ktn -o /tmp/codegen-probe
+kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
 cd /tmp/example && printf 'function 0 main\nescape "a\\tb"\n' > input.txt && /tmp/codegen-probe
 ```
 
-The driver prints one line per directive and writes nothing to standard error.
+Both drivers write nothing to standard error.
 
 ## The directive interface
 
@@ -93,13 +101,16 @@ An unrecognized directive prints `unknown <directive>`.
   reports an error for an unsupported escape, but the lexer rejects every
   unsupported escape before the parser or the generator sees the token, so
   decoding cannot fail here.
+- `header_file_name()` and `alloc_function()`, the two runtime interface names the
+  declaration section mentions: the header it includes and the allocation the
+  generated constructors call. The remaining runtime names arrive with the
+  emission that calls them.
 
 `output.ktn`:
 
 - `new_output(capacity)`, `output_write(output, text)`, `output_indent(output,
   level)`, `output_line(output, level, text)`, each returning `OutputResult`, and
-  `output_text(output)`, which finalizes. `output_ok` and `output_capacity` read
-  an `OutputResult`.
+  `output_text(output)`, which finalizes. `output_ok` reads an `OutputResult`.
 
 ## C type mapping
 
@@ -155,6 +166,77 @@ ASCII is emitted verbatim; every other byte becomes a three-digit octal escape,
 which cannot merge with a following digit. The reported length is the number of
 decoded bytes, excluding the terminator C appends, and is what the generated
 string object stores.
+
+## Declaration emitter
+
+`selfhost/codegen/declarations.ktn` emits the sections the reference generator
+writes before any function body, in its order and with its spacing:
+
+1. the generated-file comment, the runtime include, and a blank line;
+2. a forward typedef per struct and then per union;
+3. a typedef and one constant per case for each enum;
+4. one tag constant per variant for each union;
+5. a prototype per function;
+6. the C struct body of each struct;
+7. one flat struct per union, holding the tag and every variant's fields;
+8. one allocation-and-initialization function per struct;
+9. one allocation-and-initialization function per union variant.
+
+### API
+
+- `emit_declarations(model) -> DeclarationsResult` emits the section, sizing the
+  output exactly.
+- `emit_declarations_with_capacity(model, capacity) -> DeclarationsResult` emits
+  into an output of a chosen size. The derived size is exact, so this entry point
+  exists so that a caller can supply a different one, including one deliberately
+  too small.
+- `DeclarationsResult` is `Success { text; lines; capacity }` or
+  `Failure { error }`, and `GenerateError` is `{ line; column; message }`.
+
+Emission never turns a missing annotation into a declaration: a declaration the
+checker did not record is reported, with the position and wording the reference
+uses for the same failure. Every name comes from `names.ktn` and every type from
+the semantic model; nothing here resolves a name, infers a type, or re-reads
+source text.
+
+### Deriving the capacity
+
+The output accumulator is bounded, so the number of lines the section will need
+must be known before it is written. A formula over declaration counts would drift
+from the emission as soon as a section changed, and a conservative bound would
+need the same review for the same reason. Instead the emitter runs the same
+traversal twice: a dry run counts the lines through the same `emit_line` calls
+that write them, and the real run is given exactly that many chunks.
+
+The count is exact rather than a bound because one emitted line is one chunk: a
+line ends with a newline, and a newline completes exactly one chunk. Whether a
+section is followed by a blank line is decided by comparing the line counter
+before and after the section, so the dry run and the real run cannot take
+different paths. A capacity that is too small is reported as a failure, never as
+a short section.
+
+### Running the declaration driver
+
+```sh
+# From the repository root.
+kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
+mkdir -p /tmp/example && cd /tmp/example
+printf 'struct S {\n    int a;\n}\nfn main() {\n}\n' > input.txt
+printf '' > input2.txt
+/tmp/declarations-probe
+```
+
+`input.txt` is the root module and `input2.txt` the imported one; an empty second
+file is a module with no declarations, which is inert. A first line of the form
+`#capacity <n>` in `input.txt` asks for an output of exactly `n` lines instead of
+the derived capacity. The line is replaced by an empty line, so no other source
+position moves, and a Kitten program cannot begin with `#`, so the prefix is
+unambiguous. That is how the capacity tests ask for a capacity they know to be
+too small.
+
+The section is printed one line at a time, so the driver's standard output is the
+section itself, byte for byte. A failed preparation, check, or emission prints a
+single diagnostic line beginning with `error` instead.
 
 ## Output accumulation
 
@@ -229,33 +311,63 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 507 string literals whose escaping and byte length match the reference
+- 604 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
 - Linear accumulation, with the growth of each step logged.
 
+`cmd/kitten/declarations_differential_test.go` compares the declaration section
+itself. The reference emits the whole translation unit, so the harness separates
+the section structurally rather than by offset: the section ends at whichever
+comes first of a pooled literal declaration, which is the only line beginning
+`static const ktn_string ktn_literal_`, and a function definition, which is a
+prototype with ` {` in place of `;`. Neither boundary depends on a string literal
+being present, and neither can be confused with a constructor, which is named
+`ktn_new_`.
+
+Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
+
+- 16 targeted programs whose sections match byte for byte, covering primitives,
+  strings, arrays, maps, structs, structs referring to later structs, enums,
+  unions with payloads, collection-typed payloads, public and private
+  declarations, two modules, identically named private declarations in different
+  modules, declaration order, bodies with and without literals, a shared literal
+  pool, many declarations of every kind, and wide field and parameter lists.
+- 35 corpus programs whose sections match byte for byte, over 544 lines, and
+  1750 whose check error the probe reports exactly as the reference checker does.
+- 56 corpus programs without an entry point, verified by deriving the reference
+  section: prepending `fn main() {}` adds exactly one prototype line and nothing
+  else, and removing it - together with the prototype block's blank line when the
+  original declared no function - yields the original section.
+- The derived capacity is exact: emitting with it reproduces the section, one line
+  fewer is reported as a failure that prints no part of a section, a larger
+  capacity changes nothing, and bisecting for the smallest capacity that works
+  finds exactly the section's line count.
+- Representative sections compile with `-std=c11 -Wall -Wextra` and produce no
+  diagnostics.
+
 ## What is deliberately not here
 
-- **The emitter.** Nothing walks a checked program yet. The name, type, and
-  escaping helpers are the ones the emitter will call, and the accumulation API is
-  the one it will write through, but the declaration, statement, and expression
-  emission in `codegen/codegen.go` and `codegen/emit.go` has no counterpart.
-- **The pipeline driver.** `selfhost/codegen.ktn` is a probe, not the compiler
-  stage: it reads directives rather than a Kitten program, and it does not lex,
-  parse, or check anything. The driver described for the finished component reads
-  a program, checks it, and prints generated C, and it will replace this probe's
-  directive interface.
-- **A module loader.** The probe takes a module id as an argument, so it can
-  exercise module-qualified names, but nothing loads modules in Kitten. A
-  multi-module program reaches the emitter only through a caller that supplies the
-  module set, as the checker's driver does.
-- **File writing.** The driver can only print to standard output, so generated C
-  is captured from standard output rather than written to a file.
+- **Function bodies, expressions, statements, the literal pool, and the C entry
+  point.** The declaration emitter stops where the reference switches to
+  generating bodies. `codegen/emit.go` has no counterpart yet.
+- **Entry-point validation.** The reference checks that the root module declares a
+  zero-parameter, void-returning `main` before it emits anything, so it rejects
+  some programs whose declarations are otherwise complete. That rule belongs with
+  emitting the entry point, and until it is implemented the declaration driver
+  emits a section for such a program while the reference refuses to generate; the
+  corpus harness handles them with the derivation above.
+- **A module loader.** The declaration driver reads two fixed paths, as the
+  checker's driver does. Nothing discovers imports in Kitten, so a multi-module
+  program reaches the emitter only through a caller that supplies the module set.
+- **Compiling and running generated programs.** A declaration section is not a
+  translation unit: it has no bodies and no entry point, so it is compiled alone,
+  not linked, and no claim is made that a complete generated program builds.
+- **File writing.** A driver can only print to standard output, so generated C is
+  captured from standard output rather than written to a file.
 - **Command-line arguments, standard error, and a chosen exit status.**
-- **Compiling and running generated C.** That belongs to the emitter's
-  differential test, which does not exist yet.
 
-Kitten is not self-hosting. The lexer, the parser, the checker, and this
-generator foundation are written in Kitten; the loader, the emitter, and the
-production pipeline are Go.
+Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
+helper and declaration layers are written in Kitten; the loader, the rest of the
+emitter, and the production pipeline are Go.
