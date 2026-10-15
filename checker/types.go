@@ -24,6 +24,9 @@ const (
 
 	// KindStruct is a user-defined struct type.
 	KindStruct
+
+	// KindArray is a dynamically sized array type. Its element type is Type.Element.
+	KindArray
 )
 
 // Type is a resolved Kitten type.
@@ -42,6 +45,9 @@ type Type struct {
 
 	// Struct is non-nil when Kind is KindStruct.
 	Struct *StructInfo
+
+	// Element is non-nil when Kind is KindArray and holds the element type.
+	Element *Type
 }
 
 // String returns the type's source name.
@@ -65,6 +71,11 @@ func (t *Type) IsVoid() bool {
 // IsStruct reports whether t is a struct type.
 func (t *Type) IsStruct() bool {
 	return t != nil && t.Kind == KindStruct
+}
+
+// IsArray reports whether t is an array type.
+func (t *Type) IsArray() bool {
+	return t != nil && t.Kind == KindArray
 }
 
 // The primitive type singletons.

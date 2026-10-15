@@ -107,7 +107,7 @@ Recognized token kinds (implementation names):
 | Names | `Ident` |
 | Literals | `Int`, `Float`, `String` |
 | Boolean literals | `True`, `False` |
-| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `Public`, `Private` |
+| Keywords | `Struct`, `If`, `Else`, `While`, `For`, `Return`, `Fn`, `New`, `Public`, `Private` |
 | Type names | `TypeInt`, `TypeFloat`, `TypeBool`, `TypeString`, `TypeVoid` |
 | Operators | `Plus`, `Minus`, `Star`, `Slash`, `Percent`, `Assign`, `Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `And`, `Or`, `Not`, `Inc`, `Dec`, `PlusAssign`, `MinusAssign`, `Arrow` |
 | Punctuation | `LParen`, `RParen`, `LBrace`, `RBrace`, `LBracket`, `RBracket`, `Comma`, `Dot`, `Semicolon`, `Colon` |
@@ -140,7 +140,7 @@ identifiers:
 
 ```text
 struct if else while for return
-fn public private
+fn new public private
 int float bool string void
 true false
 ```
@@ -244,9 +244,10 @@ Notes:
 
 - `->` is used to introduce a function return type (Section 9).
 - `::` is **not** an operator in Kitten.
-- Square brackets `[` and `]` are reserved for a possible future generic
-  parameter syntax such as `[T]`. Generics are not implemented in this
-  revision.
+- Square brackets `[` and `]` are used for array types and for indexing, and by
+  the array creation operator `new` (Section 21). They are also reserved for a
+  possible future generic parameter syntax such as `[T]`. Generics are **not**
+  implemented in this revision.
 - `++` and `--` are recognized in both prefix and postfix positions, and the
   parser accepts both. What they mean, and whether their operand is a valid
   target, is **deferred** to the checker.
@@ -537,7 +538,8 @@ outcome here.
 - Function overloading and method semantics.
 - Default and variadic parameters.
 - Generics and other advanced type-system features. Square brackets `[` `]` are
-  reserved for a possible future `[T]` syntax.
+  used for arrays (Section 21) and remain reserved for a possible future `[T]`
+  generic syntax.
 - Whether `::` or any namespacing operator is ever introduced (currently it is
   not an operator).
 
@@ -619,7 +621,8 @@ parameter        = type IDENT ;
 struct           = "struct" IDENT "{" { field } "}" ;
 field            = type IDENT ";" ;
 
-type             = "int" | "float" | "bool" | "string" | "void" | IDENT ;
+type             = base_type { "[]" } ;
+base_type        = "int" | "float" | "bool" | "string" | "void" | IDENT ;
 
 block            = "{" { statement } "}" ;
 
@@ -649,14 +652,17 @@ relational       = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
 additive         = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative   = unary { ( "*" | "/" | "%" ) unary } ;
 unary            = ( "-" | "!" | "++" | "--" ) unary | postfix ;
-postfix          = primary { call | member | "++" | "--" } ;
+postfix          = primary { call | member | index | "++" | "--" } ;
 call             = "(" [ arguments ] ")" ;
 arguments        = expression { "," expression } ;
 member           = "." IDENT ;
+index            = "[" expression "]" ;
 primary          = INT | FLOAT | STRING | "true" | "false"
                  | IDENT
                  | struct_literal
+                 | array_creation
                  | "(" expression ")" ;
+array_creation   = "new" type "[" expression "]" ;
 struct_literal   = IDENT "{" [ field_inits ] "}" ;
 field_inits      = field_init { "," field_init } ;
 field_init       = IDENT "=" expression ;
@@ -665,10 +671,15 @@ field_init       = IDENT "=" expression ;
 Notes on the grammar:
 
 - A `variable_declaration` begins with a type name. At statement level the
-  parser treats an identifier followed by another identifier
-  (`Rectangle room ...`) as the start of a declaration, and anything else as an
-  expression statement. This distinguishes declarations from assignments and
-  calls.
+  parser treats an identifier optionally followed by `[]` array suffixes and
+  then another identifier (`Rectangle room ...`, `Rectangle[] rooms ...`) as the
+  start of a declaration. An identifier followed by `[expression]` is an
+  indexing expression statement, so `rooms[0] = ...;` is an assignment rather
+  than a declaration.
+- Array creation uses the `new` keyword so that `new T[n]` is never confused
+  with indexing an identifier (`x[n]`). The element type may itself be an array
+  type written with `[]`, so `new int[][3]` creates an array of three `int[]`
+  elements. Only the outermost bracket pair carries a length.
 - A `struct_literal` is recognized when an identifier is immediately followed
   by `{` in an expression position. There is no other prefix `{` construct in
   expression position, so this is unambiguous for valid programs, but it means
@@ -677,8 +688,9 @@ Notes on the grammar:
 - Parentheses group expressions but produce no distinct syntax-tree node.
 - The assignment operators are the only right-associative operators. All other
   binary operators are left-associative.
-- `[` and `]` (reserved for possible future generics) and `:` have **no
-  syntactic role** in this grammar. Encountering them is a syntax error.
+- `:` has **no syntactic role** in this grammar. Encountering it is a syntax
+  error. `[` and `]` are used by array types, indexing, and array creation
+  (Section 21).
 
 ### 17.3 Precedence and associativity
 
@@ -694,7 +706,7 @@ From lowest binding to highest:
 | 6 | `+` `-` | left |
 | 7 | `*` `/` `%` | left |
 | 8 | prefix `-` `!` `++` `--` | right (unary) |
-| 9 (highest) | postfix `()` `.` `++` `--` | left |
+| 9 (highest) | postfix `()` `[]` `.` `++` `--` | left |
 
 ### 17.4 Provisional decisions recorded
 
@@ -769,15 +781,15 @@ Notes:
 
 - Both operands of a binary operation must have the same type. Mixing `int` and
   `float`, or a `string` with a non-`string`, is an error, not a conversion.
-- `+` on two `string` values concatenates them (Section 20). `+` on two `bool`
-  values or two struct values is an error.
+- `+` on two `string` values concatenates them (Section 20). `+` on two `bool`,
+  two struct, or two array values is an error.
 - `-`, `*`, `/` are not defined for `string`.
 - `%` is not defined for `float`.
 - Relational operators are numeric-only; comparing `bool` or `string` values
   with `<` is an error.
 - Equality is defined for the primitive types only. Comparing two struct values
-  with `==` is an error. Comparing two `string` values compares their contents,
-  never their addresses.
+  or two array values with `==` is an error. Comparing two `string` values
+  compares their contents, never their addresses.
 - There is no unary `+` operator: the grammar in Section 17 does not include it.
 - The checker does not diagnose constant division by zero and does not guarantee
   overflow behavior; those are **deferred**.
@@ -789,8 +801,8 @@ Notes:
 - If an initializer is present, its type must exactly match the declared type.
 - Assignment (`=`) requires the value type to match the target type exactly.
 - The assignment target must be a mutable l-value: a local variable, a
-  parameter, or a struct field reached through an l-value. Assigning to a
-  literal, a call, or any other expression is an error.
+  parameter, a struct field, or an array element, each reached through an
+  l-value. Assigning to a literal, a call, or any other expression is an error.
 - Compound assignment (`+=`) requires both operands to be the same numeric type,
   or two `string` values, in which case it appends. `-=` requires two operands
   of the same numeric type. The result has the target's type.
@@ -865,17 +877,28 @@ Notes:
 - Methods, inheritance, and implicit constructors are **not** implemented.
   Whether a struct may contain itself, directly or indirectly, is **deferred**.
 
-### 18.8 Built-in `print`
+### 18.8 Built-in functions
 
-- `print` is a built-in function, represented in the semantic environment rather
-  than special-cased in expression checking.
+Two functions are provided by the language: `print` and `length`. Both are
+represented in the semantic environment rather than special-cased in expression
+checking. A user-defined top-level declaration with the same name shadows the
+built-in.
+
+**`print`**
+
 - It accepts **one or more** arguments, and every argument must be `int`,
   `float`, `bool`, or `string`. Calling it with no arguments, or with a struct
-  value, is an error.
+  or array value, is an error.
 - Its return type is `void`, so a call to `print` cannot be used as a value.
-- A user-defined top-level `print` shadows the built-in.
-- The output format and whether a trailing newline is emitted are **deferred**
-  to the runtime and code-generation phases.
+- The output format is defined in Section 13 and the runtime in Section 19.4.
+
+**`length`**
+
+- `length(array)` takes exactly one argument, which must be an array, and returns
+  its number of elements as an `int` (Section 21).
+- Calling it with no arguments, more than one argument, or a non-array argument
+  is an error.
+- Its return type is `int`, and it is not variadic.
 
 ### 18.9 Diagnostics
 
@@ -927,6 +950,7 @@ are expected to evolve.
 | `string` | `const char *` (immutable, NUL-terminated byte string) |
 | `void` | `void` (function return position only) |
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
+| array type `T[]` | `ktn_array *` (a GC-managed dynamic array) |
 
 Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
 header, so no C integer-width assumption is made and no undefined behavior is
@@ -965,12 +989,15 @@ is **deferred**.
   collector. Struct allocation and string concatenation buffers go through it.
   The collector reclaims objects automatically; Kitten code never frees memory
   by hand.
-- The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`, and
-  the built-in print helpers.
+- The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
+  `ktn_rt_string_append`, `ktn_rt_array_new`, `ktn_rt_array_at`,
+  `ktn_rt_array_length`, and the built-in print helpers.
 - Strings are pointers to bytes, so structs may still contain pointers (to
   strings and to nested structs) and must be scanned; the runtime therefore
-  uses the scanning allocator (`GC_MALLOC`), not the atomic one.
-- Arrays, maps, exceptions, and finalizers are **not** implemented.
+  uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
+  buffers use the same scanning allocator, so arrays of strings, structs, and
+  nested arrays are handled correctly.
+- Maps, exceptions, and finalizers are **not** implemented.
 
 ### 19.4 Built-in `print` behavior
 
@@ -1055,10 +1082,11 @@ targets the host platform; cross-compilation and Windows are **not** supported.
 1. Struct values are GC-managed references with pointer-copy assignment.
 2. `int` is `int64_t` and `float` is `double`.
 3. Strings are immutable NUL-terminated byte sequences. `+` and `+=`
-   concatenate, and `==`/`!=` compare content. Indexing, slicing, and length are
-   not implemented; embedded NUL bytes are unsupported (Section 20).
+   concatenate, and `==`/`!=` compare content. String indexing, slicing, and
+   length are not implemented; `length` applies to arrays (Section 21), and
+   embedded NUL bytes are unsupported (Section 20).
 4. The runtime provides GC initialization, struct allocation, string
-   concatenation and equality, and print helpers.
+   concatenation/append/equality, dynamic arrays, and print helpers.
 5. The entry point must be a zero-parameter, void-returning `main`.
 6. Default `build` output is the source base name in the current directory.
 7. Only the host platform is supported; there is no cross-compilation.
@@ -1068,6 +1096,8 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     optimization level of its own.
 11. Self-hosting and the standard library are not implemented. The long-term
     roadmap is recorded in AGENTS.md.
+12. Arrays are GC-managed references with pointer-copy assignment; elements are
+    zero-initialized; access is bounds-checked at runtime (Section 21).
 
 ---
 
@@ -1155,3 +1185,138 @@ The following are **not** implemented in this revision and must not be assumed:
 4. Equality is content-based, as it already was.
 5. Embedded NUL bytes are unsupported and cannot be created.
 6. No implicit conversion from other types to `string` was added.
+
+---
+
+## 21. Arrays (provisional)
+
+This section records the implemented dynamic-array semantics. It is
+**provisional**: the representation is the first working model and may evolve.
+
+### 21.1 Representation
+
+- An array value is a reference to a GC-managed object holding the length, the
+  element size, and a pointer to the element storage. Its C representation is
+  `ktn_array *` (Section 19.1).
+- The element storage is allocated with the scanning collector (`GC_MALLOC`)
+  and zero-initialized, so arrays of `string`, structs, and nested arrays are
+  handled correctly by the collector.
+- All array types share this one representation. The element type is enforced by
+  the checker, not by the C type; generated code casts the element pointer to
+  the element's C type.
+
+### 21.2 Array types
+
+- An array type is written by appending `[]` to an element type: `int[]`,
+  `float[]`, `bool[]`, `string[]`, `Rectangle[]`, and nested `int[][]`.
+- An element type must not be `void`; `void[]` and `new void[3]` are errors.
+- Array types match exactly. `int[]` and `float[]` are different types, and there
+  are no implicit conversions between array types.
+
+### 21.3 Creation
+
+- `new Element[length]` creates an array of `length` elements of type `Element`.
+  The `length` expression must be `int`.
+- The `length` expression is evaluated once when the array creation expression is
+  evaluated.
+- The element type may itself be an array type written with `[]`, so
+  `new int[][3]` creates an array of three `int[]` elements; each element starts
+  as a null reference and must be assigned before use.
+- A negative length at runtime is a fatal runtime error (Section 21.6).
+- Every element is zero-initialized (Section 21.8).
+
+### 21.4 Indexing and assignment
+
+- `array[index]` reads the element at `index`. The index expression must be
+  `int`, and the result has the array's element type.
+- An indexed element is an l-value. `array[index] = value`,
+  `array[index] += value`, `array[index] -= value`, `array[index]++`, and
+  `array[index]--` are all allowed when the element type supports the operation.
+- The array expression and the index expression are each evaluated exactly once,
+  including for compound assignment and increment, because element access is
+  compiled to a single C l-value.
+- Assignment requires the element type and the assigned value to match exactly.
+- An element reached only through a non-l-value (for example `f()[0]`, where `f`
+  returns an array) may be read but not assigned as an l-value; bind the array
+  to a variable first.
+
+### 21.5 Length
+
+- `length(array)` returns the number of elements as an `int` (Section 18.8).
+- An empty array has length 0. `new int[0]` is valid.
+
+### 21.6 Bounds checking and runtime errors
+
+- Every element access is bounds-checked against the array length before the
+  element is addressed.
+- A negative index, or an index greater than or equal to the length, terminates
+  the program with a message on standard error and a nonzero exit status. This
+  is deterministic; there is no out-of-bounds memory access or undefined
+  behavior.
+- Accessing a null array reference, such as an unassigned nested-array element,
+  is also a fatal runtime error rather than undefined behavior.
+- The checker statically rejects indexing a value that is not an array and
+  indexing with a non-`int`. The runtime check covers indices, which cannot be
+  validated statically.
+
+### 21.7 Aliasing and mutation
+
+- Arrays are references. Assigning one array variable to another copies the
+  reference, so both names refer to the same storage and a mutation through
+  either name is visible through the other.
+- Passing an array as a function argument and returning an array from a function
+  pass and return the reference. A function that mutates an element mutates the
+  caller's array.
+- Arrays cannot be compared with `==` or `!=`; compare elements or lengths
+  instead.
+
+### 21.8 Element types and zero values
+
+- Every element is zero-initialized when the array is created: `int` is `0`,
+  `float` is `0.0`, `bool` is `false`, `string` is the empty string, and a struct
+  or nested-array reference is null.
+- Because the zero value of `string` is the empty string, a string element is
+  safe to read and print before it is assigned (Section 20.1).
+- The zero value of a struct or nested-array element is a null reference. It
+  must be assigned before it is used. Array access on a null array is caught
+  (Section 21.6), but member access on a null struct reference is not checked in
+  this revision and is a defect in the program.
+- Any supported element type may be used: the primitive types, `string`, structs,
+  and other arrays.
+
+### 21.9 Print behavior
+
+`print` does not accept arrays: passing an array to `print` is a semantic error
+(Section 18.8). Print elements individually, for example in a loop over
+`length(array)`.
+
+### 21.10 Deferred array operations
+
+The following are **not** implemented in this revision and must not be assumed:
+
+- Array literals and initializer lists.
+- Resizing, appending, inserting, and removing elements.
+- Slicing and subarrays.
+- Multi-dimensional creation syntax such as `new int[3][4]` (nest manually).
+- Iteration helpers such as a `for value in array` form.
+- Array equality by content.
+- Sorting, searching, copying, and other library operations.
+- A null/optional concept, and null-reference checking for structs.
+
+### 21.11 Provisional decisions recorded
+
+1. All array types share the C representation `ktn_array *`; element types are
+   enforced by the checker.
+2. Array creation uses the `new` keyword: `new Element[length]`. This avoids the
+   ambiguity between creating an array of a named type and indexing a variable
+   of the same name.
+3. `length` is a built-in function, not a method or an operator.
+4. Elements are zero-initialized by the collector.
+5. Element access is bounds-checked at runtime; an out-of-range index is a fatal
+   error rather than undefined behavior.
+6. Arrays are references with pointer-copy assignment.
+7. Array equality is not supported.
+8. Null struct and nested-array references are not dereference-checked in this
+   revision.
+9. Element access compiles to a single C l-value, so compound assignment and
+   increment evaluate the array and index exactly once.

@@ -79,16 +79,32 @@ type Program struct {
 	Declarations []Decl
 }
 
-// TypeRef names a type. The name is either a built-in type keyword ("int",
-// "float", "bool", "string", "void") or a user-defined type such as a struct
-// name. The parser does not verify that the named type exists.
+// TypeRef names a type.
+//
+// A named type has Name set and Element nil. An array type has Element set to
+// its element type and Name empty, so `int[]` is an array whose element is
+// `int`, and `int[][]` nests. The parser does not verify that a named type
+// exists.
 type TypeRef struct {
-	At   Position
-	Name string
+	At      Position
+	Name    string
+	Element *TypeRef
 }
 
 // Pos reports where the type name begins.
 func (t *TypeRef) Pos() Position { return t.At }
+
+// String renders the type as written: a name, or an element type followed by
+// "[]".
+func (t *TypeRef) String() string {
+	if t == nil {
+		return "<invalid>"
+	}
+	if t.Element != nil {
+		return t.Element.String() + "[]"
+	}
+	return t.Name
+}
 
 // FunctionDecl is a top-level function declaration:
 //
@@ -384,6 +400,33 @@ type FieldInit struct {
 // Pos reports where the field name begins.
 func (f *FieldInit) Pos() Position { return f.At }
 
+// NewArrayExpr creates an array, written "new Element[Length]".
+//
+// Element is the element type and Length is an int expression giving the number
+// of elements. The resulting array has length Length and every element is
+// zero-initialized. At reports the position of the "new" keyword.
+type NewArrayExpr struct {
+	At      Position
+	Element *TypeRef
+	Length  Expr
+}
+
+// Pos reports where the "new" keyword begins.
+func (e *NewArrayExpr) Pos() Position { return e.At }
+
+// IndexExpr reads or writes one element of an array, written "Target[Index]".
+//
+// At reports the position of the "[" and Pos reports where the target begins,
+// so the node is positioned like other postfix expressions.
+type IndexExpr struct {
+	At     Position
+	Target Expr
+	Index  Expr
+}
+
+// Pos reports where the indexed target begins.
+func (e *IndexExpr) Pos() Position { return e.Target.Pos() }
+
 func (*Identifier) exprNode()    {}
 func (*IntLiteral) exprNode()    {}
 func (*FloatLiteral) exprNode()  {}
@@ -395,3 +438,5 @@ func (*AssignExpr) exprNode()    {}
 func (*CallExpr) exprNode()      {}
 func (*MemberExpr) exprNode()    {}
 func (*StructLiteral) exprNode() {}
+func (*NewArrayExpr) exprNode()  {}
+func (*IndexExpr) exprNode()     {}

@@ -138,13 +138,13 @@ func TestStringConcatenationUsesRuntimeHelper(t *testing.T) {
 	assertContains(t, generated, `ktn_rt_string_concat(ktn_var_first, "!")`)
 }
 
-func TestStringCompoundAssignmentLowersToConcatenation(t *testing.T) {
+func TestStringCompoundAssignmentLowersToAppend(t *testing.T) {
 	generated := generateSource(t, `fn main() {
     string text = "a";
     text += "b";
 }
 `)
-	assertContains(t, generated, `(ktn_var_text = ktn_rt_string_concat(ktn_var_text, "b"))`)
+	assertContains(t, generated, `ktn_rt_string_append(&(ktn_var_text), "b")`)
 }
 
 func TestStringTypeMappingIsConstPointer(t *testing.T) {
@@ -153,6 +153,57 @@ func TestStringTypeMappingIsConstPointer(t *testing.T) {
 }
 `)
 	assertContains(t, generated, "const char * ktn_var_text")
+}
+
+func TestArrayCreationAndIndexing(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    int[] values = new int[3];
+    values[0] = 1;
+    values[1] += 2;
+    int first = values[0];
+    print(length(values), first);
+}
+`)
+	assertContains(t, generated, "ktn_rt_array_new(3, sizeof(int64_t))")
+	assertContains(t, generated, "(*((int64_t *)ktn_rt_array_at(ktn_var_values, 0))) = 1")
+	assertContains(t, generated, "(*((int64_t *)ktn_rt_array_at(ktn_var_values, 1))) += 2")
+	assertContains(t, generated, "ktn_rt_array_length(ktn_var_values)")
+}
+
+func TestArrayTypeMapping(t *testing.T) {
+	generated := generateSource(t, `fn identity(int[] values) -> int[] {
+    return values;
+}
+fn main() {
+    int[] items = new int[2];
+    print(length(identity(items)));
+}
+`)
+	assertContains(t, generated, "ktn_array * ktn_fn_identity(ktn_array * ktn_var_values)")
+	assertContains(t, generated, "ktn_array * ktn_var_items = ktn_rt_array_new(2, sizeof(int64_t))")
+}
+
+func TestNestedArrayTypeMapping(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    int[][] grid = new int[][2];
+    grid[0] = new int[3];
+    grid[0][0] = 7;
+}
+`)
+	assertContains(t, generated, "ktn_rt_array_new(2, sizeof(ktn_array *))")
+	assertContains(t, generated, "ktn_rt_array_new(3, sizeof(int64_t))")
+	assertContains(t, generated, "(*((int64_t *)ktn_rt_array_at((*((ktn_array * *)ktn_rt_array_at(ktn_var_grid, 0))), 0))) = 7")
+}
+
+func TestStringArrayAppendTakesSlotAddress(t *testing.T) {
+	generated := generateSource(t, `fn main() {
+    string[] words = new string[1];
+    words[0] += "x";
+}
+`)
+	// The append receives the address of the element slot, so the index is
+	// evaluated once.
+	assertContains(t, generated, `ktn_rt_string_append(&((*((const char * *)ktn_rt_array_at(ktn_var_words, 0)))), "x")`)
 }
 
 func TestForwardReferencesAreEmittedBeforeUse(t *testing.T) {

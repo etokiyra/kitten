@@ -51,6 +51,7 @@ func argumentName(name string) string { return argumentPrefix + name }
 //	string -> const char *   (immutable NUL-terminated byte string)
 //	void   -> void           (function return position only)
 //	struct -> struct pointer (GC-managed reference)
+//	array  -> ktn_array *    (GC-managed dynamic array)
 func cType(kittenType *checker.Type) (string, error) {
 	switch {
 	case kittenType == nil:
@@ -65,6 +66,8 @@ func cType(kittenType *checker.Type) (string, error) {
 		return "const char *", nil
 	case kittenType == checker.VoidType:
 		return "void", nil
+	case kittenType.Kind == checker.KindArray:
+		return "ktn_array *", nil
 	case kittenType.Kind == checker.KindStruct:
 		return structName(kittenType.Name) + " *", nil
 	default:

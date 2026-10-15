@@ -31,6 +31,21 @@ type Symbol struct {
 	At parser.Position
 }
 
+// BuiltinKind identifies a language built-in function. NotBuiltin is the zero
+// value, used for every user-defined function.
+type BuiltinKind int
+
+const (
+	// NotBuiltin marks a user-defined function.
+	NotBuiltin BuiltinKind = iota
+
+	// BuiltinPrint is the variadic print function.
+	BuiltinPrint
+
+	// BuiltinLength returns the length of an array.
+	BuiltinLength
+)
+
 // Function is a resolved function signature, either user-defined or built-in.
 type Function struct {
 	// Name is the function name.
@@ -45,8 +60,8 @@ type Function struct {
 	// ReturnType is the declared return type, or void when none was written.
 	ReturnType *Type
 
-	// Builtin is true for functions provided by the language.
-	Builtin bool
+	// Builtin identifies a language provided function, or NotBuiltin.
+	Builtin BuiltinKind
 
 	// Variadic is true for a built-in that accepts one or more arguments, each
 	// of which must be one of AllowedTypes. print uses this form.

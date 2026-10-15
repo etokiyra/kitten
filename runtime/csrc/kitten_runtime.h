@@ -41,20 +41,61 @@ void *ktn_rt_alloc(size_t size);
 
 /*
  * Value equality for Kitten strings, which are immutable NUL-terminated byte
- * strings. Comparison is by content, never by pointer identity.
+ * strings. Comparison is by content, never by pointer identity. A null pointer
+ * is treated as the empty string, so the zero value of a string behaves as "".
  */
 bool ktn_rt_string_equal(const char *left, const char *right);
 
 /*
  * Returns a new string that is left followed by right. The result is a fresh,
  * exactly-sized, GC-managed buffer, so it stays valid as long as Kitten code
- * can reach it and never needs a manual free. Concatenating two empty strings
- * yields an empty string.
+ * can reach it and never needs a manual free. A null operand is treated as the
+ * empty string, so concatenating empty strings yields an empty string.
  *
  * The representation is NUL-terminated, so embedded NUL bytes are not
  * supported; the language cannot create them.
  */
 const char *ktn_rt_string_concat(const char *left, const char *right);
+
+/*
+ * Appends value to the string stored in *slot, by assigning *slot the
+ * concatenation of its current value and value. It takes the address of the
+ * slot so that the target is evaluated exactly once at the call site.
+ */
+void ktn_rt_string_append(const char **slot, const char *value);
+
+/*
+ * A dynamically sized array.
+ *
+ * length is the number of elements and element_size is the size in bytes of one
+ * element. data points to a GC-managed, zero-initialized buffer of
+ * length * element_size bytes. Arrays are references: assigning one array to
+ * another copies the reference, and both names then share the same storage.
+ */
+typedef struct ktn_array {
+    int64_t length;
+    int64_t element_size;
+    void *data;
+} ktn_array;
+
+/*
+ * Allocates an array of length elements, each element_size bytes. Every element
+ * is zero-initialized by the collector. A negative length or an allocation that
+ * would overflow is a fatal runtime error.
+ */
+ktn_array *ktn_rt_array_new(int64_t length, int64_t element_size);
+
+/*
+ * Returns a pointer to the element at index. The index is checked against the
+ * array length; a negative or out-of-range index, or a null array reference, is
+ * a fatal runtime error rather than undefined behavior.
+ */
+void *ktn_rt_array_at(const ktn_array *array, int64_t index);
+
+/*
+ * Returns the number of elements in the array.
+ */
+int64_t ktn_rt_array_length(const ktn_array *array);
 
 /*
  * Built-in print helpers. Each writes a single value. Callers separate

@@ -26,6 +26,7 @@ var keywords = map[string]Kind{
 	"for":     For,
 	"return":  Return,
 	"fn":      Fn,
+	"new":     New,
 	"public":  Public,
 	"private": Private,
 

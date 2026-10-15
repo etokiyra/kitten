@@ -1,0 +1,73 @@
+struct Point {
+    int x;
+    int y;
+}
+
+fn total(int[] values) -> int {
+    int sum = 0;
+    for (int index = 0; index < length(values); index++) {
+        sum += values[index];
+    }
+    return sum;
+}
+
+fn fill(int size, int value) -> int[] {
+    int[] result = new int[size];
+    for (int index = 0; index < size; index++) {
+        result[index] = value;
+    }
+    return result;
+}
+
+fn main() {
+    int[] numbers = new int[4];
+    numbers[0] = 5;
+    numbers[1] = 6;
+    numbers[2] = 7;
+    numbers[3] = 8;
+    print(numbers[0], numbers[1], numbers[2], numbers[3]);
+    print(length(numbers));
+    print(total(numbers));
+
+    int[] empty = new int[0];
+    print(length(empty));
+
+    int[] single = new int[1];
+    single[0] = 99;
+    print(single[0], length(single));
+
+    numbers[1] += 10;
+    numbers[2]--;
+    numbers[3]++;
+    print(numbers[1], numbers[2], numbers[3]);
+
+    int[] other = fill(3, 2);
+    print(other[0], other[1], other[2], length(other));
+
+    int[] alias = other;
+    alias[0] = 42;
+    print(other[0]);
+
+    string[] words = new string[2];
+    print("[" + words[0] + "]");
+    words[0] = "hello";
+    words[1] = "world";
+    words[0] += "!";
+    print(words[0], words[1], length(words));
+
+    Point[] points = new Point[2];
+    points[0] = Point { x = 1, y = 2 };
+    points[1] = Point { x = 3, y = 4 };
+    points[0].x = 100;
+    print(points[0].x, points[0].y, points[1].x, points[1].y);
+    print(length(points));
+
+    int[][] grid = new int[][2];
+    grid[0] = new int[3];
+    grid[1] = new int[1];
+    grid[0][0] = 11;
+    grid[0][2] = 33;
+    grid[1][0] = 22;
+    print(length(grid), length(grid[0]), length(grid[1]));
+    print(grid[0][0], grid[0][2], grid[1][0]);
+}

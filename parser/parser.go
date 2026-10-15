@@ -319,9 +319,23 @@ func (p *parser) parseField() (*Field, error) {
 	return &Field{At: typeName.At, Name: name.Text, Type: typeName}, nil
 }
 
-// parseType parses a type name: a built-in type keyword or a user-defined
-// identifier such as a struct name.
+// parseType parses a type: a built-in type keyword or a user-defined identifier
+// such as a struct name, followed by any number of "[]" array suffixes.
 func (p *parser) parseType() (*TypeRef, error) {
+	base, err := p.parseBaseType()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek().Kind == lexer.LBracket && p.peekAt(1).Kind == lexer.RBracket {
+		p.advance() // '['
+		p.advance() // ']'
+		base = &TypeRef{At: base.At, Element: base}
+	}
+	return base, nil
+}
+
+// parseBaseType parses a single type name without array suffixes.
+func (p *parser) parseBaseType() (*TypeRef, error) {
 	token := p.peek()
 	switch token.Kind {
 	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.Ident:
@@ -383,15 +397,30 @@ func (p *parser) parseStatement() (Stmt, error) {
 // variable declaration.
 //
 // A declaration begins with a built-in type keyword, or with an identifier that
-// names a type and is immediately followed by the declared name. This
-// distinguishes "Rectangle room = ...;" from an expression statement such as
-// "room = ...;" or "call(...);".
+// names a type, optionally followed by "[]" array suffixes, and then the
+// declared name. This distinguishes "Rectangle room = ...;" and
+// "Rectangle[] rooms = ...;" from expression statements such as "room = ...;"
+// or "rooms[0] = ...;".
 func (p *parser) startsVariableDeclaration() bool {
-	switch p.peek().Kind {
+	if isTypeKeyword(p.peek().Kind) {
+		return true
+	}
+	if p.peek().Kind != lexer.Ident {
+		return false
+	}
+
+	offset := 1
+	for p.peekAt(offset).Kind == lexer.LBracket && p.peekAt(offset+1).Kind == lexer.RBracket {
+		offset += 2
+	}
+	return p.peekAt(offset).Kind == lexer.Ident
+}
+
+// isTypeKeyword reports whether a token kind is a built-in type name.
+func isTypeKeyword(kind lexer.Kind) bool {
+	switch kind {
 	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid:
 		return true
-	case lexer.Ident:
-		return p.peekAt(1).Kind == lexer.Ident
 	default:
 		return false
 	}
@@ -753,6 +782,17 @@ func (p *parser) parsePostfix() (Expr, error) {
 			}
 			expression = &MemberExpr{Dot: positionOf(dot), Receiver: expression, Member: member.Text}
 
+		case lexer.LBracket:
+			bracket := p.advance()
+			index, err := p.parseExpression()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(lexer.RBracket, "']'", "after the index expression"); err != nil {
+				return nil, err
+			}
+			expression = &IndexExpr{At: positionOf(bracket), Target: expression, Index: index}
+
 		case lexer.Inc, lexer.Dec:
 			operator := p.advance()
 			expression = &UnaryExpr{
@@ -798,8 +838,8 @@ func (p *parser) parseArguments() ([]Expr, error) {
 	return arguments, nil
 }
 
-// parsePrimary parses a literal, identifier, struct literal, or parenthesized
-// expression.
+// parsePrimary parses a literal, identifier, struct literal, array creation, or
+// parenthesized expression.
 func (p *parser) parsePrimary() (Expr, error) {
 	token := p.peek()
 
@@ -824,6 +864,9 @@ func (p *parser) parsePrimary() (Expr, error) {
 		p.advance()
 		return &BoolLiteral{At: positionOf(token), Value: false}, nil
 
+	case lexer.New:
+		return p.parseNewArray()
+
 	case lexer.Ident:
 		if p.peekAt(1).Kind == lexer.LBrace {
 			return p.parseStructLiteral()
@@ -845,6 +888,33 @@ func (p *parser) parsePrimary() (Expr, error) {
 	default:
 		return nil, p.errorAt(token, "expected an expression, found %s", describe(token))
 	}
+}
+
+// parseNewArray parses array creation, "new ElementType[Length]".
+//
+// The element type may itself be an array type written with "[]", so
+// "new int[][3]" creates an array of three int[] elements. Only the outermost
+// bracket pair carries a length.
+func (p *parser) parseNewArray() (Expr, error) {
+	keyword := p.advance() // 'new'
+
+	element, err := p.parseType()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := p.expect(lexer.LBracket, "'['", "after the array element type"); err != nil {
+		return nil, err
+	}
+	length, err := p.parseExpression()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(lexer.RBracket, "']'", "after the array length"); err != nil {
+		return nil, err
+	}
+
+	return &NewArrayExpr{At: positionOf(keyword), Element: element, Length: length}, nil
 }
 
 // parseStructLiteral parses a struct literal expression, "Name { field = value,

@@ -184,7 +184,7 @@ func TestUsageAndExitCodes(t *testing.T) {
 func TestFixturesEndToEnd(t *testing.T) {
 	requireToolchain(t)
 
-	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings"}
+	fixtures := []string{"hello", "fizzbuzz", "math", "room", "strings", "arrays"}
 	for _, name := range fixtures {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -294,6 +294,108 @@ fn main() {
 		t.Fatalf("program exited with status %d", exitCode)
 	}
 	want := "abc\ntrue\n"
+	if stdout != want {
+		t.Errorf("output = %q, want %q", stdout, want)
+	}
+}
+
+// runCompiledProgram builds source and runs the program, returning its stdout,
+// stderr, and exit code. It fails the test on a build error or unexpected C
+// compiler diagnostics.
+func runCompiledProgram(t *testing.T, source string) (string, string, int) {
+	t.Helper()
+
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "program.ktn")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o644); err != nil {
+		t.Fatalf("writing source: %v", err)
+	}
+	executablePath := filepath.Join(directory, "program")
+
+	var diagnostics bytes.Buffer
+	if err := buildExecutable(sourcePath, executablePath, &diagnostics); err != nil {
+		t.Fatalf("building: %v\n%s", err, diagnostics.String())
+	}
+	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+		t.Fatalf("C compiler diagnostics:\n%s", warnings)
+	}
+
+	command := exec.Command(executablePath)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			return stdout.String(), stderr.String(), exitError.ExitCode()
+		}
+		t.Fatalf("running %s: %v", executablePath, err)
+	}
+	return stdout.String(), stderr.String(), 0
+}
+
+func TestArrayOutOfRangeIndexIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    int[] values = new int[2];
+    values[0] = 1;
+    print(values[0]);
+    print(values[5]);
+}
+`
+	stdout, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "out of range") {
+		t.Errorf("stderr = %q, want an out-of-range message", stderr)
+	}
+	if !strings.Contains(stdout, "1") {
+		t.Errorf("stdout = %q, want output produced before the failing access", stdout)
+	}
+}
+
+func TestArrayNegativeIndexIsARuntimeError(t *testing.T) {
+	requireToolchain(t)
+
+	source := `fn main() {
+    int[] values = new int[2];
+    values[-1] = 1;
+}
+`
+	_, stderr, exitCode := runCompiledProgram(t, source)
+	if exitCode == 0 {
+		t.Fatalf("program exited with status 0, want a nonzero status")
+	}
+	if !strings.Contains(stderr, "out of range") {
+		t.Errorf("stderr = %q, want an out-of-range message", stderr)
+	}
+}
+
+func TestArrayIndexEvaluatedOnceInModification(t *testing.T) {
+	requireToolchain(t)
+
+	// The index expression has an observable side effect. Compound append and
+	// increment must evaluate it exactly once.
+	source := `fn pick() -> int {
+    print("pick");
+    return 0;
+}
+fn main() {
+    string[] words = new string[1];
+    words[0] = "a";
+    words[pick()] += "b";
+    int[] numbers = new int[1];
+    numbers[pick()]++;
+    print(words[0], numbers[0]);
+}
+`
+	stdout, _, exitCode := runCompiledProgram(t, source)
+	if exitCode != 0 {
+		t.Fatalf("program exited with status %d", exitCode)
+	}
+	want := "pick\npick\nab 1\n"
 	if stdout != want {
 		t.Errorf("output = %q, want %q", stdout, want)
 	}

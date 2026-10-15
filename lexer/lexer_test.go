@@ -70,6 +70,7 @@ func TestKeywords(t *testing.T) {
 		{"for", For},
 		{"return", Return},
 		{"fn", Fn},
+		{"new", New},
 		{"public", Public},
 		{"private", Private},
 	}

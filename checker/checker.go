@@ -135,6 +135,10 @@ type checker struct {
 	builtins  map[string]*Function
 	declared  map[string]parser.Position
 
+	// arrayTypes interns array types so that the same element type always maps
+	// to a single *Type, which lets types be compared by identity.
+	arrayTypes map[*Type]*Type
+
 	result *Result
 
 	// returnType is the return type of the function currently being checked.
@@ -156,10 +160,11 @@ func Check(program *parser.Program) (*Result, error) {
 	}
 
 	c := &checker{
-		structs:   map[string]*Type{},
-		functions: map[string]*Function{},
-		builtins:  builtinFunctions(),
-		declared:  map[string]parser.Position{},
+		structs:    map[string]*Type{},
+		functions:  map[string]*Function{},
+		builtins:   builtinFunctions(),
+		declared:   map[string]parser.Position{},
+		arrayTypes: map[*Type]*Type{},
 		result: &Result{
 			Program:         program,
 			StructTypes:     map[string]*Type{},
@@ -189,16 +194,21 @@ func Check(program *parser.Program) (*Result, error) {
 	return c.result, nil
 }
 
-// builtinFunctions returns the language's built-in functions. print is provided
-// by the language, not declared by the user.
+// builtinFunctions returns the language's built-in functions. print and length
+// are provided by the language, not declared by the user.
 func builtinFunctions() map[string]*Function {
 	return map[string]*Function{
 		"print": {
 			Name:         "print",
 			ReturnType:   VoidType,
-			Builtin:      true,
+			Builtin:      BuiltinPrint,
 			Variadic:     true,
 			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
+		},
+		"length": {
+			Name:       "length",
+			ReturnType: IntType,
+			Builtin:    BuiltinLength,
 		},
 	}
 }
@@ -376,6 +386,19 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "missing type reference"}
 	}
 
+	if reference.Element != nil {
+		element, err := c.resolveType(reference.Element)
+		if err != nil {
+			return nil, err
+		}
+		if element.IsVoid() {
+			return nil, c.errorAt(InvalidType, reference.Pos(), "array element type cannot be void")
+		}
+		resolved := c.arrayType(element)
+		c.result.TypeRefs[reference] = resolved
+		return resolved, nil
+	}
+
 	var resolved *Type
 	switch {
 	case primitiveTypes[reference.Name] != nil:
@@ -388,6 +411,17 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 
 	c.result.TypeRefs[reference] = resolved
 	return resolved, nil
+}
+
+// arrayType returns the interned array type whose element type is element, so
+// that the same element type always yields the same *Type.
+func (c *checker) arrayType(element *Type) *Type {
+	if existing, ok := c.arrayTypes[element]; ok {
+		return existing
+	}
+	resolved := &Type{Kind: KindArray, Name: element.Name + "[]", Element: element}
+	c.arrayTypes[element] = resolved
+	return resolved
 }
 
 // errorAt builds a semantic error positioned at pos.

@@ -328,6 +328,47 @@ fn main() {
 }
 `,
 		},
+		{
+			name: "arrays",
+			source: `struct Point {
+    int x;
+}
+fn sum(int[] values) -> int {
+    int total = 0;
+    for (int index = 0; index < length(values); index++) {
+        total += values[index];
+    }
+    return total;
+}
+fn make_words() -> string[] {
+    string[] words = new string[2];
+    words[0] = "a";
+    words[1] = "b";
+    return words;
+}
+fn main() {
+    int[] values = new int[3];
+    values[0] = 1;
+    values[1] = 2;
+    values[2] = 3;
+    values[1] += 1;
+    values[2]++;
+    int[] empty = new int[0];
+    print(sum(values), length(values), length(empty));
+    int[][] grid = new int[][2];
+    grid[0] = new int[1];
+    grid[0][0] = 7;
+    print(grid[0][0], length(grid));
+    Point[] points = new Point[1];
+    points[0] = Point { x = 9 };
+    points[0].x = 10;
+    print(points[0].x);
+    string[] words = make_words();
+    words[0] += "!";
+    print(words[0], words[1], length(words));
+}
+`,
+		},
 	}
 
 	for _, testCase := range cases {
@@ -642,6 +683,110 @@ func TestErrorCases(t *testing.T) {
 			line:     6,
 			column:   18,
 			contains: "same type",
+		},
+		{
+			name:     "index a non-array",
+			source:   "fn main() {\n    int x = 1;\n    int y = x[0];\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   14,
+			contains: "cannot index",
+		},
+		{
+			name:     "index with a non-int",
+			source:   "fn main() {\n    int[] values = new int[2];\n    int y = values[true];\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   20,
+			contains: "index must be int",
+		},
+		{
+			name:     "length of a non-array",
+			source:   "fn main() {\n    int n = length(1);\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   20,
+			contains: "length expects an array",
+		},
+		{
+			name:     "length with no arguments",
+			source:   "fn main() {\n    int[] values = new int[1];\n    int n = length();\n}\n",
+			kind:     BadCall,
+			line:     3,
+			column:   19,
+			contains: "expects 1 argument",
+		},
+		{
+			name:     "array length is not an int",
+			source:   "fn main() {\n    int[] values = new int[true];\n}\n",
+			kind:     TypeMismatch,
+			line:     2,
+			column:   28,
+			contains: "array length must be int",
+		},
+		{
+			name:     "array element type is void",
+			source:   "fn main() {\n    new void[3];\n}\n",
+			kind:     InvalidType,
+			line:     2,
+			column:   9,
+			contains: "element type cannot be void",
+		},
+		{
+			name:     "void array type",
+			source:   "fn main() {\n    void[] items;\n}\n",
+			kind:     InvalidType,
+			line:     2,
+			column:   5,
+			contains: "element type cannot be void",
+		},
+		{
+			name:     "array equality",
+			source:   "fn main() {\n    int[] a = new int[1];\n    int[] b = new int[1];\n    bool c = a == b;\n}\n",
+			kind:     InvalidOperator,
+			line:     4,
+			column:   16,
+			contains: "not supported",
+		},
+		{
+			name:     "assign to an element of a non-lvalue",
+			source:   "fn f() -> int[] {\n    return new int[1];\n}\nfn main() {\n    f()[0] = 1;\n}\n",
+			kind:     InvalidAssignment,
+			line:     5,
+			column:   5,
+			contains: "cannot assign",
+		},
+		{
+			name:     "print an array",
+			source:   "fn main() {\n    int[] values = new int[1];\n    print(values);\n}\n",
+			kind:     TypeMismatch,
+			line:     3,
+			column:   11,
+			contains: "cannot print",
+		},
+		{
+			name:     "length used as a value",
+			source:   "fn main() {\n    int n = length;\n}\n",
+			kind:     InvalidExpression,
+			line:     2,
+			column:   13,
+			contains: "cannot be used as a value",
+		},
+		{
+			name:     "arithmetic on arrays",
+			source:   "fn main() {\n    int[] a = new int[1];\n    int[] b = a + a;\n}\n",
+			kind:     InvalidOperator,
+			line:     3,
+			column:   17,
+			contains: "numeric operands",
+		},
+		{
+			name:     "undefined array element type",
+			source:   "fn main() {\n    Widget[] items;\n}\n",
+			kind:     UndefinedName,
+			line:     2,
+			column:   5,
+			contains: "undefined type",
 		},
 		{
 			name:     "increment on string",

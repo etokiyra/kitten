@@ -45,6 +45,10 @@ func (c *checker) checkExpression(expression parser.Expr, scope *Scope) (*Type, 
 		return c.checkMember(e, scope)
 	case *parser.StructLiteral:
 		return c.checkStructLiteral(e, scope)
+	case *parser.NewArrayExpr:
+		return c.checkNewArray(e, scope)
+	case *parser.IndexExpr:
+		return c.checkIndex(e, scope)
 	default:
 		return nil, c.errorAt(InvalidExpression, expression.Pos(), "unsupported expression %T", expression)
 	}
@@ -195,7 +199,7 @@ func (c *checker) checkEquality(operator string, left, right *Type, at parser.Po
 	if left != right {
 		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
 	}
-	if left.IsStruct() {
+	if left.IsStruct() || left.IsArray() {
 		return nil, c.errorAt(InvalidOperator, at, "operator %q is not supported for values of type %s", operator, left)
 	}
 	return BoolType, nil
@@ -294,6 +298,16 @@ func (c *checker) assignableType(expression parser.Expr, scope *Scope) (*Type, e
 		}
 		return c.resolveMember(e, receiverType)
 
+	case *parser.IndexExpr:
+		if e == nil || e.Target == nil {
+			return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "index expression is incomplete")
+		}
+		targetType, err := c.checkAssignable(e.Target, scope)
+		if err != nil {
+			return nil, err
+		}
+		return c.checkIndexOperands(e, targetType, scope)
+
 	case nil:
 		return nil, c.errorAt(InvalidAssignment, parser.Position{Line: 1, Column: 1}, "assignment target is missing")
 
@@ -340,8 +354,11 @@ func (c *checker) checkCall(expression *parser.CallExpr, scope *Scope) (*Type, e
 		return nil, err
 	}
 
-	if function.Variadic {
+	switch function.Builtin {
+	case BuiltinPrint:
 		return c.checkVariadicCall(expression, function, scope)
+	case BuiltinLength:
+		return c.checkLengthCall(expression, function, scope)
 	}
 
 	if len(expression.Arguments) != len(function.ParameterTypes) {
@@ -416,6 +433,80 @@ func (c *checker) checkVariadicCall(expression *parser.CallExpr, function *Funct
 		}
 	}
 	return function.ReturnType, nil
+}
+
+// checkNewArray checks an array creation expression, "new Element[length]".
+func (c *checker) checkNewArray(expression *parser.NewArrayExpr, scope *Scope) (*Type, error) {
+	if expression == nil || expression.Element == nil {
+		return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "array creation is missing its element type")
+	}
+	elementType, err := c.resolveType(expression.Element)
+	if err != nil {
+		return nil, err
+	}
+	if elementType.IsVoid() {
+		return nil, c.errorAt(InvalidType, expression.Element.Pos(), "array element type cannot be void")
+	}
+
+	if expression.Length == nil {
+		return nil, c.errorAt(InvalidExpression, expression.At, "array creation is missing its length")
+	}
+	lengthType, err := c.checkExpr(expression.Length, scope)
+	if err != nil {
+		return nil, err
+	}
+	if lengthType != IntType {
+		return nil, c.errorAt(TypeMismatch, expression.Length.Pos(), "array length must be int, found %s", lengthType)
+	}
+	return c.arrayType(elementType), nil
+}
+
+// checkIndex checks an indexing expression used as a value.
+func (c *checker) checkIndex(expression *parser.IndexExpr, scope *Scope) (*Type, error) {
+	if expression == nil || expression.Target == nil {
+		return nil, c.errorAt(InvalidExpression, parser.Position{Line: 1, Column: 1}, "index expression is incomplete")
+	}
+	targetType, err := c.checkExpr(expression.Target, scope)
+	if err != nil {
+		return nil, err
+	}
+	return c.checkIndexOperands(expression, targetType, scope)
+}
+
+// checkIndexOperands checks the index of an indexing expression whose target
+// already has type targetType, and returns the element type.
+func (c *checker) checkIndexOperands(expression *parser.IndexExpr, targetType *Type, scope *Scope) (*Type, error) {
+	if !targetType.IsArray() {
+		return nil, c.errorAt(TypeMismatch, expression.At, "cannot index a value of type %s", targetType)
+	}
+	if expression.Index == nil {
+		return nil, c.errorAt(InvalidExpression, expression.At, "index expression is missing its index")
+	}
+	indexType, err := c.checkExpr(expression.Index, scope)
+	if err != nil {
+		return nil, err
+	}
+	if indexType != IntType {
+		return nil, c.errorAt(TypeMismatch, expression.Index.Pos(), "array index must be int, found %s", indexType)
+	}
+	return targetType.Element, nil
+}
+
+// checkLengthCall checks a call to the built-in length, which takes exactly one
+// array argument and returns its length as an int.
+func (c *checker) checkLengthCall(expression *parser.CallExpr, function *Function, scope *Scope) (*Type, error) {
+	if len(expression.Arguments) != 1 {
+		return nil, c.errorAt(BadCall, expression.OpenParen, "function %q expects 1 argument, got %d", function.Name, len(expression.Arguments))
+	}
+	argument := expression.Arguments[0]
+	argumentType, err := c.checkExpr(argument, scope)
+	if err != nil {
+		return nil, err
+	}
+	if !argumentType.IsArray() {
+		return nil, c.errorAt(TypeMismatch, argument.Pos(), "length expects an array, found %s", argumentType)
+	}
+	return IntType, nil
 }
 
 // checkStructLiteral checks a struct literal expression.
@@ -509,6 +600,10 @@ func describeExpression(expression parser.Expr) string {
 		return "an assignment"
 	case *parser.StructLiteral:
 		return "a struct literal"
+	case *parser.NewArrayExpr:
+		return "an array creation"
+	case *parser.IndexExpr:
+		return "an indexed element"
 	case nil:
 		return "a missing expression"
 	default:

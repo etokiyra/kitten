@@ -37,6 +37,18 @@ const (
 	// concatenated.
 	StringConcatFunction = "ktn_rt_string_concat"
 
+	// StringAppendFunction appends to the string stored at a slot address.
+	StringAppendFunction = "ktn_rt_string_append"
+
+	// ArrayNewFunction allocates a zero-initialized array.
+	ArrayNewFunction = "ktn_rt_array_new"
+
+	// ArrayAtFunction returns a bounds-checked pointer to an array element.
+	ArrayAtFunction = "ktn_rt_array_at"
+
+	// ArrayLengthFunction returns the number of elements in an array.
+	ArrayLengthFunction = "ktn_rt_array_length"
+
 	// PrintIntFunction, PrintFloatFunction, PrintBoolFunction, and
 	// PrintStringFunction write one value of the corresponding primitive type.
 	PrintIntFunction    = "ktn_rt_print_int"

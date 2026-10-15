@@ -128,6 +128,10 @@ func renderExpression(expression Expr) string {
 			parts = append(parts, fmt.Sprintf("(%s %s)", field.Name, renderExpression(field.Value)))
 		}
 		return "(" + strings.Join(parts, " ") + ")"
+	case *NewArrayExpr:
+		return fmt.Sprintf("(new %s %s)", node.Element.String(), renderExpression(node.Length))
+	case *IndexExpr:
+		return fmt.Sprintf("(index %s %s)", renderExpression(node.Target), renderExpression(node.Index))
 	default:
 		return fmt.Sprintf("<?%T>", expression)
 	}
@@ -614,6 +618,97 @@ func TestStructLiteralExpressionRendering(t *testing.T) {
 	}
 }
 
+func TestArrayExpressionSyntax(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{"new int[3]", "(new int 3)"},
+		{"new string[count]", "(new string count)"},
+		{"new int[count + 1]", "(new int (+ count 1))"},
+		{"new int[][3]", "(new int[] 3)"},
+		{"values[0]", "(index values 0)"},
+		{"values[index + 1]", "(index values (+ index 1))"},
+		{"grid[0][1]", "(index (index grid 0) 1)"},
+		{"values[0] + 1", "(+ (index values 0) 1)"},
+		{"-values[0]", "(- (index values 0))"},
+		{"values[0]++", "((index values 0) ++)"},
+		{"rooms[0].width", "(. (index rooms 0) width)"},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.source, func(t *testing.T) {
+			got := renderExpression(parseExpressionSource(t, testCase.source))
+			if got != testCase.want {
+				t.Errorf("%q rendered as %q, want %q", testCase.source, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestArrayTypeDeclaration(t *testing.T) {
+	program, err := ParseSource("fn main() {\n    int[] values = new int[3];\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	declaration := firstFunction(t, program).Body.Statements[0].(*VarDeclStmt)
+	if declaration.Type.String() != "int[]" {
+		t.Errorf("declared type = %q, want %q", declaration.Type.String(), "int[]")
+	}
+	if declaration.Type.Element == nil || declaration.Type.Element.Name != "int" {
+		t.Fatalf("declared element type = %+v, want int", declaration.Type.Element)
+	}
+	creation, ok := declaration.Initializer.(*NewArrayExpr)
+	if !ok {
+		t.Fatalf("initializer is %T, want *NewArrayExpr", declaration.Initializer)
+	}
+	if creation.Element.String() != "int" {
+		t.Errorf("element type = %q, want int", creation.Element.String())
+	}
+	if literal, ok := creation.Length.(*IntLiteral); !ok || literal.Text != "3" {
+		t.Errorf("length = %v, want integer literal 3", creation.Length)
+	}
+}
+
+func TestNestedArrayTypeDeclaration(t *testing.T) {
+	program, err := ParseSource("fn main() {\n    int[][] grid = new int[][2];\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	declaration := firstFunction(t, program).Body.Statements[0].(*VarDeclStmt)
+	if declaration.Type.String() != "int[][]" {
+		t.Errorf("declared type = %q, want int[][]", declaration.Type.String())
+	}
+	creation, ok := declaration.Initializer.(*NewArrayExpr)
+	if !ok {
+		t.Fatalf("initializer is %T, want *NewArrayExpr", declaration.Initializer)
+	}
+	if creation.Element.String() != "int[]" {
+		t.Errorf("element type = %q, want int[]", creation.Element.String())
+	}
+}
+
+func TestArrayDeclarationVersusIndexing(t *testing.T) {
+	// An identifier followed by "[]" starts a declaration; an identifier
+	// followed by "[expression]" is an indexing expression statement.
+	declarationProgram, err := ParseSource("fn main() {\n    Rectangle[] rooms = new Rectangle[2];\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	if _, ok := firstFunction(t, declarationProgram).Body.Statements[0].(*VarDeclStmt); !ok {
+		t.Fatalf("statement is %T, want *VarDeclStmt", firstFunction(t, declarationProgram).Body.Statements[0])
+	}
+
+	indexProgram, err := ParseSource("fn main() {\n    rooms[0] = rooms[1];\n}\n")
+	if err != nil {
+		t.Fatalf("ParseSource error: %v", err)
+	}
+	if _, ok := firstFunction(t, indexProgram).Body.Statements[0].(*ExprStmt); !ok {
+		t.Fatalf("statement is %T, want *ExprStmt", firstFunction(t, indexProgram).Body.Statements[0])
+	}
+}
+
 func TestCommentsAreIgnored(t *testing.T) {
 	source := `// leading comment
 fn main() { // trailing comment
@@ -773,6 +868,41 @@ func TestParseErrors(t *testing.T) {
 			line:     1,
 			column:   15,
 			contains: "a member name",
+		},
+		{
+			name:     "array creation without a length bracket",
+			source:   "fn main() {\n    new int;\n}\n",
+			line:     2,
+			column:   12,
+			contains: "expected '['",
+		},
+		{
+			name:     "array creation without a closing bracket",
+			source:   "fn main() {\n    new int[3;\n}\n",
+			line:     2,
+			column:   14,
+			contains: "expected ']'",
+		},
+		{
+			name:     "index without a closing bracket",
+			source:   "fn main() {\n    values[0;\n}\n",
+			line:     2,
+			column:   13,
+			contains: "expected ']'",
+		},
+		{
+			name:     "array declaration without a name",
+			source:   "fn main() {\n    int[] = 1;\n}\n",
+			line:     2,
+			column:   11,
+			contains: "an identifier",
+		},
+		{
+			name:     "array type with a length in a declaration",
+			source:   "fn main() {\n    int[n] values = new int[1];\n}\n",
+			line:     2,
+			column:   8,
+			contains: "an identifier",
 		},
 	}
 

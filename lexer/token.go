@@ -42,6 +42,7 @@ const (
 	For
 	Return
 	Fn
+	New
 	Public
 	Private
 
@@ -109,6 +110,7 @@ var kindNames = map[Kind]string{
 	For:     "For",
 	Return:  "Return",
 	Fn:      "Fn",
+	New:     "New",
 	Public:  "Public",
 	Private: "Private",
 

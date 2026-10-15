@@ -231,6 +231,10 @@ func (g *generator) expression(expression parser.Expr) (string, error) {
 		return g.memberExpression(e)
 	case *parser.StructLiteral:
 		return g.structLiteral(e)
+	case *parser.NewArrayExpr:
+		return g.newArrayExpression(e)
+	case *parser.IndexExpr:
+		return g.indexExpression(e)
 	default:
 		if expression == nil {
 			return "", &Error{Line: 1, Column: 1, Message: "nil expression"}
@@ -295,8 +299,11 @@ func (g *generator) binaryExpression(expression *parser.BinaryExpr) (string, err
 }
 
 // assignExpression renders an assignment. Kitten and C agree on "=" and "-=",
-// and both yield the assigned value. String "+=" has no C equivalent, so it is
-// lowered to concatenation followed by assignment.
+// and both yield the assigned value.
+//
+// String "+=" has no C equivalent, so it is lowered to a runtime append that
+// receives the address of the target slot. Taking the address evaluates the
+// target once, so an index target such as "a[i] += value" evaluates i once.
 func (g *generator) assignExpression(expression *parser.AssignExpr) (string, error) {
 	if expression == nil || expression.Target == nil || expression.Value == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete assignment"}
@@ -316,7 +323,7 @@ func (g *generator) assignExpression(expression *parser.AssignExpr) (string, err
 			return "", err
 		}
 		if targetType == checker.StringType {
-			return fmt.Sprintf("(%s = %s(%s, %s))", target, runtime.StringConcatFunction, target, value), nil
+			return fmt.Sprintf("%s(&(%s), %s)", runtime.StringAppendFunction, target, value), nil
 		}
 	}
 
@@ -370,14 +377,22 @@ func (g *generator) structLiteral(expression *parser.StructLiteral) (string, err
 }
 
 // callExpression renders a function call. The built-in print is expanded into a
-// comma expression of runtime helpers; user functions become plain C calls.
+// comma expression of runtime helpers, the built-in length reads the array
+// header, and user functions become plain C calls.
 func (g *generator) callExpression(expression *parser.CallExpr) (string, error) {
 	if expression == nil || expression.Callee == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete call expression"}
 	}
 
-	if g.isBuiltinPrintCall(expression) {
+	switch g.builtinKind(expression.Callee) {
+	case checker.BuiltinPrint:
 		return g.printExpression(expression)
+	case checker.BuiltinLength:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", runtime.ArrayLengthFunction, argument), nil
 	}
 
 	identifier, ok := expression.Callee.(*parser.Identifier)
@@ -397,17 +412,66 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 	return fmt.Sprintf("%s(%s)", functionName(identifier.Name), strings.Join(arguments, ", ")), nil
 }
 
-// isBuiltinPrintCall reports whether a call resolves to the built-in print.
-func (g *generator) isBuiltinPrintCall(expression *parser.CallExpr) bool {
-	identifier, ok := expression.Callee.(*parser.Identifier)
+// builtinKind reports which built-in function a callee resolves to, or
+// checker.NotBuiltin when the callee is not a built-in.
+func (g *generator) builtinKind(callee parser.Expr) checker.BuiltinKind {
+	identifier, ok := callee.(*parser.Identifier)
 	if !ok {
-		return false
+		return checker.NotBuiltin
 	}
 	symbol := g.checked.Symbols[identifier]
 	if symbol == nil || symbol.Function == nil {
-		return false
+		return checker.NotBuiltin
 	}
 	return symbol.Function.Builtin
+}
+
+// newArrayExpression renders "new Element[length]" as a runtime allocation.
+// The allocation is zero-initialized by the collector.
+func (g *generator) newArrayExpression(expression *parser.NewArrayExpr) (string, error) {
+	if expression == nil || expression.Element == nil || expression.Length == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "incomplete array creation"}
+	}
+	elementType, err := g.declaredType(expression.Element)
+	if err != nil {
+		return "", err
+	}
+	elementCType, err := cType(elementType)
+	if err != nil {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: err.Error()}
+	}
+	length, err := g.expression(expression.Length)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s(%s, sizeof(%s))", runtime.ArrayNewFunction, length, elementCType), nil
+}
+
+// indexExpression renders "target[index]". The runtime accessor performs the
+// bounds check and returns a pointer to the element, which the generated code
+// dereferences. Because it is a C l-value, compound assignment and increment
+// evaluate the target and index exactly once.
+func (g *generator) indexExpression(expression *parser.IndexExpr) (string, error) {
+	if expression == nil || expression.Target == nil || expression.Index == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "incomplete index expression"}
+	}
+	elementType, err := g.expressionType(expression)
+	if err != nil {
+		return "", err
+	}
+	elementCType, err := cType(elementType)
+	if err != nil {
+		return "", &Error{Line: expression.At.Line, Column: expression.At.Column, Message: err.Error()}
+	}
+	target, err := g.expression(expression.Target)
+	if err != nil {
+		return "", err
+	}
+	index, err := g.expression(expression.Index)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("(*((%s *)%s(%s, %s)))", elementCType, runtime.ArrayAtFunction, target, index), nil
 }
 
 // printExpression expands print(a, b, ...) into a comma expression that writes
