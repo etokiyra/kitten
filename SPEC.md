@@ -4,10 +4,11 @@ Status: **Provisional.** This document describes the agreed direction for the
 Kitten language. Syntax in this document is fixed for Phase 1. Semantics marked
 as deferred are not decided and must not be assumed by any component.
 
-This revision covers the language surface and its static semantics. The lexer,
-parser, and checker are implemented; the code generator and runtime are not.
-Where this document mentions behavior that does not yet exist, it describes
-intent, not current capability.
+This revision covers the language surface, its static semantics, and the native
+compilation model. The lexer, parser, checker, C code generator, and C runtime
+are implemented, and `kitten build`/`kitten run` produce and execute native
+executables on the host platform. Self-hosting, a native backend, and the
+standard library are not implemented.
 
 ---
 
@@ -348,6 +349,14 @@ Rectangle room = Rectangle {
 };
 ```
 
+**Reference semantics (provisional).** A struct value is a reference to a
+garbage-collected object, not an inline copy of its fields. Evaluating a struct
+literal allocates an object. Assigning one struct variable to another copies the
+reference, so both names refer to the same object, and a field mutated through
+either name is visible through the other. Nested struct fields use the same
+model, and passing or returning a struct passes or returns the reference. See
+Section 19 for the full model and its consequences.
+
 - The lexer recognizes this syntax but does not validate field names, field
   order, or struct semantics. The checker validates all of these
   (Section 18.7): field types must exist and not be `void`, field names must be
@@ -421,12 +430,13 @@ print("5! =", factorial(5));
   function that accepts one or more arguments, each of type `int`, `float`,
   `bool`, or `string`. Calling it with no arguments, or with a struct value, is
   a semantic error (Section 18.8). A user-defined `print` shadows the built-in.
-- The formatting rules — how multiple arguments are separated, how values are
-  rendered, and whether a trailing newline is emitted — are **deferred** to the
-  runtime and code-generation phases. The `.ktn` fixtures under `tests/`
-  document the intended results.
-- `print` is not executable in this phase: the checker validates calls to it,
-  but no code is generated and nothing runs.
+- **Output format.** Each call writes its arguments separated by a single
+  space, then a newline. An `int` is written in decimal; a `float` is written
+  with C's `%g` conversion (six significant digits by default), so `2.5` prints
+  as `2.5` and `4.0` prints as `4`; a `bool` is written as `true` or `false`; a
+  `string` is written as its bytes. This fixes the behavior the `.ktn` fixtures
+  depend on. The `float` and `bool` renderings are provisional (no fixture
+  covers them) and are recorded in Section 19.
 
 ---
 
@@ -434,13 +444,15 @@ print("5! =", factorial(5));
 
 - Kitten is garbage-collected. Ordinary programs allocate objects and strings
   and never free them manually.
-- The planned initial collector is the **Boehm–Demers–Weiser conservative
-  garbage collector** (Boehm GC, `libgc`), linked into compiled programs.
-- The compiler is planned to generate C, which a system C compiler then compiles
-  and links against Boehm GC to produce a native executable.
+- The initial collector is the **Boehm–Demers–Weiser conservative garbage
+  collector** (Boehm GC, `libgc`), linked into compiled programs. Struct
+  literals are allocated with the collector (Section 19).
+- The compiler generates C, which a system C compiler then compiles and links
+  against Boehm GC to produce a native executable.
 - The precise collector configuration, finalization behavior, and any
   distinction between stack, heap, and static storage are **deferred**
-  (Section 16).
+  (Section 16). There is no finalizer support and no way to trigger collection
+  from Kitten code.
 
 ---
 
@@ -454,22 +466,20 @@ one per phase:
 | `lexer` | Source text → tokens | Implemented (Phase 1) |
 | `parser` | Tokens → syntax tree | Implemented (Phase 2A) |
 | `checker` | Semantic analysis and type checking | Implemented (Phase 2B) |
-| `codegen` | Checked tree → C source | Not implemented |
-| `runtime` | Support code linked into compiled programs, including GC integration | Not implemented |
+| `codegen` | Checked tree → C source | Implemented (Phase 2C) |
+| `runtime` | C runtime: GC initialization, allocation, print, string equality | Implemented (Phase 2C) |
 
 Supporting layout:
 
-- `cmd/kitten` — the `kitten` command-line entry point. It recognizes
-  `kitten build <file.ktn>` and `kitten run <file.ktn>`. Neither command is
-  implemented; each reports that clearly instead of pretending to succeed. The
-  checker is not yet wired into the command line.
+- `cmd/kitten` — the `kitten` command-line entry point. It runs the full
+  pipeline and invokes the system C compiler and linker.
 - `tests/` — `.ktn` programs and matching `.expected` output files. They are
-  lexer, parser, and checker inputs today and executable-program tests in later
-  phases.
+  compiled and executed by the end-to-end tests.
 
-Pipeline (intended): source → lexer → parser → checker → code generator (C) →
-system C compiler → link with Boehm GC → native executable. The lexer, parser,
-and checker are implemented; the remaining stages are not.
+Pipeline: source → lexer → parser → checker → C code generator → C
+compiler/linker → link with Boehm GC → native executable. All stages are
+implemented for the host platform. See Section 19 for the compilation model and
+its limitations.
 
 Phase boundaries are strict: a package must not take on another phase's
 responsibility, and later phases are not started without explicit authorization.
@@ -496,8 +506,13 @@ outcome here.
 
 **Strings**
 
-- In-memory representation, mutability, indexing, and slicing.
-- Runtime operations (length, concatenation, comparison) and their semantics.
+- In-memory representation, mutability, indexing, and slicing. In this revision
+  a string is a pointer to NUL-terminated constant bytes; string literals use
+  static storage (Section 19). Mutability, indexing, and slicing are not
+  implemented.
+- Runtime operations (length, concatenation, comparison). Value equality (`==`,
+  `!=`) is implemented by comparing byte content; length and concatenation are
+  not implemented.
 - Whether string interpolation or raw/multiline strings exist.
 
 **Visibility and declarations**
@@ -540,7 +555,9 @@ outcome here.
 **Modules and program structure**
 
 - Imports and modules, including whether a file maps to a module.
-- Entry-point requirements and program startup.
+- Entry-point requirements and program startup. The native build requires a
+  zero-parameter, void-returning `main` (Section 19); the language itself has no
+  implicit `main`, and `main` is an ordinary function to the checker.
 
 **Errors, concurrency, and runtime**
 
@@ -560,9 +577,13 @@ outcome here.
 
 - The parser is implemented (Phase 2A) and accepts the grammar in Section 17.
 - The checker is implemented (Phase 2B) and enforces the rules in Section 18.
-- The code generator and runtime are not implemented.
-- The `.ktn` fixtures lex, parse, and check successfully but do not execute;
-  the lexer, parser, and checker process them, and no native code is produced.
+- The C code generator and C runtime are implemented (Phase 2C), and
+  `kitten build` and `kitten run` compile to native executables on the host
+  platform.
+- The `.ktn` fixtures lex, parse, check, compile, and execute; the end-to-end
+  tests compare their output with the matching `.expected` files byte-for-byte.
+- Self-hosting, a native (LLVM or assembly) backend, dynamic strings, and the
+  standard library are not implemented (Section 19.8).
 
 ---
 
@@ -881,3 +902,162 @@ malformed or incomplete syntax trees.
 10. Struct literals must initialize every field.
 11. Checker errors are fail-fast: only the first error is reported.
 12. There is no implicit `main` or entry-point check.
+
+---
+
+## 19. Compilation model (provisional)
+
+This section records how Kitten programs are compiled to native executables. It
+is **provisional**: the representation choices are the first working backend and
+are expected to evolve.
+
+### 19.1 C type mapping
+
+| Kitten | C |
+| --- | --- |
+| `int` | `int64_t` (signed 64-bit) |
+| `float` | `double` (IEEE 754 binary64) |
+| `bool` | `bool` (`<stdbool.h>`) |
+| `string` | `const char *` (pointer to NUL-terminated constant bytes) |
+| `void` | `void` (function return position only) |
+| struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
+
+Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
+header, so no C integer-width assumption is made and no undefined behavior is
+relied upon.
+
+### 19.2 Struct representation and reference semantics
+
+A struct value is a **reference to a heap object**, not an inline copy:
+
+- Evaluating a struct literal allocates a fresh object with the garbage
+  collector and initializes its fields. The collector zeroes the memory, so the
+  object is safely initialized before fields are written.
+- Assigning one struct variable to another copies the reference. Both names then
+  refer to the same object, and mutating a field through either name is visible
+  through the other.
+- Nested struct fields are references, so a field access chain such as
+  `line.start.x` reads the object reached through the outer references.
+- Passing a struct as a function argument, and returning a struct from a
+  function, pass and return the reference. A function that mutates a struct
+  parameter mutates the caller's object.
+- Struct fields are mutable; a field reached through an l-value is assignable,
+  including fields at any nesting depth.
+
+Because values are references, two struct expressions are never structurally
+equal; struct equality is a checker error (Section 18.3). Whether Kitten should
+instead offer value semantics, an explicit reference type, or copy-on-assignment
+is **deferred**.
+
+### 19.3 Runtime and garbage collection
+
+- The runtime is written in C and has no dependency on the compiler's
+  implementation language.
+- `ktn_rt_init` initializes the Boehm–Demers–Weiser conservative collector. The
+  generated C entry point calls it before any allocation.
+- `ktn_rt_alloc` allocates a zero-initialized, pointer-scanned object with the
+  collector. Struct allocation goes through it. The collector reclaims objects
+  automatically; Kitten code never frees memory by hand.
+- The runtime also provides `ktn_rt_string_equal` and the built-in print
+  helpers.
+- Strings are pointers to constant bytes, so structs may still contain pointers
+  (to strings and to nested structs) and must be scanned; the runtime therefore
+  uses the scanning allocator (`GC_MALLOC`), not the atomic one.
+- Dynamic strings, string concatenation, arrays, exceptions, and finalizers are
+  **not** implemented.
+
+### 19.4 Built-in `print` behavior
+
+`print` is expanded by the code generator into calls to typed runtime helpers.
+Each argument is written with the helper for its type; arguments are separated
+by a single space; the call ends with a newline (Section 13). Printed strings
+are written with `fputs`, never as a `printf` format string, so a string value
+cannot be interpreted as a format specifier.
+
+Rendering is provisional: `int` uses `%lld` of the 64-bit value; `float` uses
+`%g` (six significant digits by default); `bool` prints `true` or `false`;
+`string` prints its bytes. The `float` and `bool` renderings are not exercised
+by the current fixtures and may change.
+
+### 19.5 Entry-point contract
+
+To build an executable, a program must define:
+
+```text
+fn main() {
+    // ...
+}
+```
+
+or the equivalent `fn main() -> void`. The entry point:
+
+- must be named `main`;
+- must take no parameters; and
+- must return no value.
+
+A missing or invalid entry point is rejected at build time with a diagnostic;
+the compiler never invents a `main`. The generated C entry point is the C
+function `main`, which calls the runtime initializer and then the compiled
+Kitten `main` function. The two never collide because Kitten functions are
+emitted with a reserved prefix.
+
+### 19.6 Native build pipeline and command line
+
+`kitten build <file.ktn> [-o <output>]` runs the whole pipeline and writes a
+native executable. Without `-o`, the executable is written to the current
+directory as the source file's base name without the `.ktn` extension. The
+command never reports success unless the executable was produced.
+
+`kitten run <file.ktn>` compiles through the same pipeline into a temporary
+location, executes the program, forwards its standard output and standard error,
+and removes the temporary artifacts. It returns the program's exit status.
+
+Toolchain discovery:
+
+- A compiler set through the `CC` environment variable is used, before
+  `cc`/`gcc`/`clang` are searched for on `PATH`.
+- Boehm GC flags are taken from `pkg-config bdw-gc` when available, and
+  otherwise link against `-lgc` using the system include path.
+- Missing compilers, headers, or libraries are reported as actionable errors.
+  The compiler does not install packages or run privileged commands, and never
+  falls back to a non-GC implementation.
+
+The compiler invokes subprocesses with argument arrays, never through a shell,
+so paths containing spaces or shell metacharacters are safe. The initial backend
+targets the host platform; cross-compilation and Windows are **not** supported.
+
+### 19.7 Generated code conventions
+
+- Generated C is deterministic for a given program: declarations are emitted in
+  source order and generated names follow a fixed scheme.
+- Kitten identifiers are never copied verbatim into C. Functions, variables,
+  struct types, struct fields, and constructors are emitted with reserved
+  prefixes (`ktn_fn_`, `ktn_var_`, `ktn_s_`, `ktn_f_`, `ktn_new_`), so C
+  keywords and generated helper names cannot collide, and shadowing maps onto C
+  block scoping.
+- Struct declarations are forward-declared, and function prototypes are emitted
+  before bodies, so functions and structs may refer to declarations that appear
+  later in the source, including recursion and mutual recursion.
+- String literals are decoded and then re-encoded for C: quotes, backslashes,
+  control characters, question marks, and non-ASCII bytes are escaped
+  explicitly. Source text is never inserted into a C string literal unchanged.
+- Code generation returns an error, rather than panicking, when the syntax tree
+  is inconsistent with the checked result.
+
+### 19.8 Limitations and provisional decisions
+
+1. Struct values are GC-managed references with pointer-copy assignment.
+2. `int` is `int64_t` and `float` is `double`.
+3. Strings are pointers to constant bytes; dynamic strings, concatenation,
+   indexing, and length are not implemented. String `==`/`!=` compare content.
+4. The runtime only provides GC initialization, struct allocation, string
+   equality, and print helpers.
+5. The entry point must be a zero-parameter, void-returning `main`.
+6. Default `build` output is the source base name in the current directory.
+7. Only the host platform is supported; there is no cross-compilation.
+8. Code generation targets C; there is no LLVM or native object-code backend.
+9. `float` prints with `%g` and `bool` prints as `true`/`false`.
+10. Optimization is left to the system C compiler; the compiler passes no
+    optimization level of its own.
+11. Self-hosting and the standard library are not implemented. The long-term
+    roadmap is recorded in AGENTS.md.

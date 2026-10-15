@@ -22,11 +22,11 @@ Project instructions for everyone (human or AI) working on Kitten.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
-The current `.ktn` files under `tests/` are lexer, parser, and checker inputs
-and future executable-program tests. Their `.expected` files document intended
-program output. The current compiler cannot execute them: the lexer tokenizes
-them, the parser builds a syntax tree from them, and the checker validates them.
-Do not describe them as passing run tests.
+The `.ktn` files under `tests/` are end-to-end tests: the lexer tokenizes them,
+the parser builds a syntax tree, the checker validates them, the code generator
+emits C, and the native executable's output is compared byte-for-byte with the
+matching `.expected` file. Keep the `.expected` files in sync with actual,
+verified program output; never edit them to match buggy behavior.
 
 ## Architecture
 
@@ -42,8 +42,9 @@ Do not describe them as passing run tests.
 
 10. Make small, focused changes. One coherent change per commit, with a clear
     message.
-11. Do not begin future phases without explicit authorization. Packages for
-    later phases currently contain documentation only.
+11. Do not begin future phases without explicit authorization. Do not implement
+    self-hosting, a native backend, or standard-library features without
+    explicit authorization.
 12. Update documentation when established behavior changes: `SPEC.md` for
     language behavior, `AGENTS.md` for process and architecture.
 
@@ -51,12 +52,22 @@ Do not describe them as passing run tests.
 
 Phase 1 delivered the project skeleton, the provisional specification, the
 example programs, and the lexer. Phase 2A delivered the parser and the abstract
-syntax tree. Phase 2B delivered semantic analysis and the type checker. The
-code generator and runtime are still intentionally unimplemented: do not add
-implementation code to `codegen/` or `runtime/` without explicit authorization,
-do not wire the checker into the CLI, and do not begin later phases.
+syntax tree. Phase 2B delivered semantic analysis and the type checker. Phase 2C
+delivered the C code generator, the C runtime, and native compilation through
+`kitten build` and `kitten run`.
+
+Self-hosting, a native backend, dynamic strings, and the standard library are
+still intentionally unimplemented: do not start them without explicit
+authorization.
 
 ## Roadmap
+
+1. Go-based compiler frontend and C backend. **Done** (Phases 1–2C).
+2. A working, tested native compiler for the current language. **In progress.**
+3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
+4. Explore an LLVM IR or native assembly/object-code backend.
+5. Grow a broader standard library and ecosystem for CLI, GUI, and game
+   development.
 
 The initial compiler is written in Go. The long-term goal is for Kitten to
 compile its own compiler (self-hosting). This is a direction for future design,

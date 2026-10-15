@@ -116,6 +116,12 @@ type Result struct {
 	// expression in the program, including sub-expressions, appears here.
 	ExpressionTypes map[parser.Expr]*Type
 
+	// TypeRefs maps each declared type reference (a variable's declared type, a
+	// parameter type, a return type, or a struct field type) to its resolved
+	// type, so later phases can look up declared types without re-resolving
+	// names.
+	TypeRefs map[*parser.TypeRef]*Type
+
 	// Symbols maps each identifier reference that resolved to a symbol (a
 	// variable, parameter, or function) to that symbol.
 	Symbols map[*parser.Identifier]*Symbol
@@ -160,6 +166,7 @@ func Check(program *parser.Program) (*Result, error) {
 			Functions:       map[string]*Function{},
 			Builtins:        map[string]*Function{},
 			ExpressionTypes: map[parser.Expr]*Type{},
+			TypeRefs:        map[*parser.TypeRef]*Type{},
 			Symbols:         map[*parser.Identifier]*Symbol{},
 		},
 	}
@@ -368,13 +375,19 @@ func (c *checker) resolveType(reference *parser.TypeRef) (*Type, error) {
 	if reference == nil {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "missing type reference"}
 	}
-	if primitive, ok := primitiveTypes[reference.Name]; ok {
-		return primitive, nil
+
+	var resolved *Type
+	switch {
+	case primitiveTypes[reference.Name] != nil:
+		resolved = primitiveTypes[reference.Name]
+	case c.structs[reference.Name] != nil:
+		resolved = c.structs[reference.Name]
+	default:
+		return nil, c.errorAt(UndefinedName, reference.Pos(), "undefined type %q", reference.Name)
 	}
-	if structType, ok := c.structs[reference.Name]; ok {
-		return structType, nil
-	}
-	return nil, c.errorAt(UndefinedName, reference.Pos(), "undefined type %q", reference.Name)
+
+	c.result.TypeRefs[reference] = resolved
+	return resolved, nil
 }
 
 // errorAt builds a semantic error positioned at pos.

@@ -892,6 +892,12 @@ fn main() {
 	if symbol.Kind != SymbolVariable || symbol.Type != IntType {
 		t.Errorf("total symbol = %+v, want a variable of type int", symbol)
 	}
+
+	// Declared type references are recorded for the backend.
+	totalDeclaration := mainFunction.Body.Statements[0].(*parser.VarDeclStmt)
+	if resolved := result.TypeRefs[totalDeclaration.Type]; resolved != IntType {
+		t.Errorf("declared type of total = %v, want int", resolved)
+	}
 }
 
 func TestNoStateLeakBetweenChecks(t *testing.T) {
