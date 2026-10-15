@@ -1,0 +1,213 @@
+# A semantic checker for Kitten, written in Kitten
+
+This directory holds the third component of the eventual self-hosting compiler: a
+semantic checker written in Kitten that consumes the AST produced by the
+Kitten-written parser and validates it exactly as the Go reference checker does.
+
+It is **not** the production front end. `kitten build` and `kitten run` still use
+the Go checker in `checker/`, which remains authoritative. Nothing here changes
+the language, and no language feature was added to make the checker easier.
+
+## Files
+
+| File | Contents |
+| --- | --- |
+| `model.ktn` | the data model: types, variant and struct definitions, optional wrappers |
+| `state.ktn` | symbols, functions, scopes, the checker state, name and type resolution, diagnostics |
+| `expr.ktn` | expression checking |
+| `stmt.ktn` | statement checking and the conservative control-flow analysis |
+| `checker.ktn` | the five passes and the public entry points |
+
+The driver is `../check.ktn`, one directory up, rather than `main.ktn` here. The
+loader requires every import to resolve **inside the directory of the file being
+compiled**, so a driver that uses the lexer, the parser, and the checker has to
+sit above all three. This is a property of the current import policy, not of the
+checker.
+
+## Building and running
+
+```sh
+# From the repository root. The driver reads fixed relative paths, so the
+# working directory selects the input.
+printf 'struct Point { int x; }\nfn main() {\n    Point p = Point { x = 1 };\n}\n' > input.txt
+printf '' > input2.txt
+go build -o /tmp/kitten ./cmd/kitten
+/tmp/kitten build selfhost/check.ktn -o /tmp/kitten-check
+/tmp/kitten-check
+# ok modules 2 types 1 functions 1 bodies 1
+```
+
+The driver checks **two modules**: `input.txt` is the root module and
+`input2.txt` is imported. Cross-module checking needs a module context, and the
+runtime exposes no way to discover or enumerate files, so the context is fixed:
+a single-module program supplies an empty `input2.txt`, which declares nothing and
+cannot change the outcome (`TestEmptySecondModuleIsInert` checks exactly that on
+the corpus). Output is one line:
+
+```text
+ok modules <n> types <n> functions <n> bodies <n>
+error <phase> <kind> <file> <line> <column> <message>
+```
+
+`<phase>` is `Lex`, `Parse`, or `Check`, so a lexical or syntax failure is
+distinguishable from a semantic one; `<kind>` is the semantic error's category
+for `Check` and `-` for the other phases. The driver cannot take a path from the
+command line, write to standard error, or choose an exit status, because the
+runtime exposes none of those (SPEC.md 16), so it reports on standard output and
+leaves the exit status to the runtime, exactly like the lexer and parser drivers.
+
+## Public API
+
+`checker.ktn` exposes two entry points. Both are meant to be called directly by a
+future compiler driver; nothing here is reached by parsing printed output.
+
+```kitten
+public fn check_modules(Module[] modules, int module_count) -> CheckResult
+public fn check_program(Program program) -> CheckResult
+```
+
+`check_program` is the single-module entry point, mirroring the reference's
+`Check`; `check_modules` is the general one, mirroring `CheckModules`. A caller
+with one module passes an array of one to `check_modules`, which is exactly what
+`check_program` does.
+
+`Module` is `{ string path; int id; Program program; }`, mirroring
+`parser.Module`. `CheckResult` is a union: `Success` carries a `CheckSummary` of
+what was covered (module, named-type, function, and checked-body counts), and
+`Failure` carries a `CheckError` of `{ ErrorKind kind; string file; int line;
+int column; string message; }`. Checking is fail-fast: the first error is
+returned and nothing else is reported, exactly as in the reference.
+
+Data flow: a caller loads and parses one or more modules, passes them to
+`check_modules`, and receives either a summary or the first error. The checker
+owns its state for the duration of one call and keeps none between calls, so
+checking one program never affects another — as in the reference, which holds no
+package-level mutable state.
+
+## Types, symbols, and scopes
+
+Types mirror `checker/types.go`: `int`, `float`, `bool`, `string`, `void`,
+struct, array, enum, union, and map. Two representations differ, both because
+Kitten has no null value and no pointer identity to compare with `==`:
+
+- **Named types carry an integer id** and are compared by it; array and map types
+  are compared through their parts. The reference interns array and map types and
+  compares every type by pointer, which gives the same answers: two composite
+  types are equal exactly when their parts are, and two named types are equal
+  exactly when they are the same declaration.
+- **Absence is a value.** An absent type is the `None` kind, an absent payload
+  slot is `Absent` in an optional union, and a scope's parent is an optional
+  scope. A struct value cannot be constructed recursively in Kitten, so an
+  optional payload is a union rather than a placeholder object.
+
+Symbols mirror `checker/symbols.go`: a scope is a name table plus an optional
+enclosing scope, `declare` refuses a duplicate within one scope (which is what
+makes shadowing work in a nested one), and `lookup` walks outward. The reference
+records a resolved function on the symbol of a call callee; nothing that decides
+whether a program is valid reads that field, so it is not carried here.
+
+## Passes
+
+The checker performs the reference's five passes, in the reference's order, each
+walking the modules and each module's declarations in source order, and reports
+the first error:
+
+1. **Collect declarations.** Registers every named type and function, creating
+   placeholder types and signatures, so declarations may refer to one another in
+   any order. Detects duplicate names within a module, duplicate public names
+   across modules, duplicate enum cases, and duplicate union variants. Rejects an
+   enum with no cases and a union with no variants, as the reference does.
+2. **Resolve struct fields.** Resolves each field's type, rejects a `void` field,
+   and detects duplicate fields.
+3. **Resolve union variant fields.** The same, per variant.
+4. **Resolve function signatures.** Resolves parameter and return types, rejects a
+   `void` parameter, and detects duplicate parameters.
+5. **Check bodies.** Checks every function body, with parameters and the body's
+   outermost statements sharing one scope, and requires a non-void function to
+   return on every path the conservative analysis can prove.
+
+The reference resolves a declaration by AST node identity, in maps keyed by the
+declaration pointer. Kitten has no map keyed by object identity, so a declaration
+is looked up by its module and name, which duplicate detection makes exact.
+
+## Coverage
+
+Every rule the reference enforces is implemented, with the same diagnostics at
+the same positions: declaration registration and duplicates, name resolution
+including private-access detection, type resolution (`void` in every position
+that forbids it, non-string map keys, `void` map values), function signatures and
+calls, struct literals and field access, enum and union variant references and
+construction, `match` exhaustiveness, duplicate and unknown bindings, local
+variables and shadowing, assignment and compound assignment, every unary and
+binary operator with its operand rules, array creation, indexing and length, maps
+and `has`, strings and `substring`, `print`'s variadic argument rule, conditions,
+`return`, and the conservative return-path analysis.
+
+The reference's nil-guards (`"a module contains a nil struct declaration"`,
+`"identifier is nil"`, `"unsupported expression %T"`, `"function %q has no
+body"`, and similar) are **not** implemented, because a parser-produced tree
+cannot contain a nil node or a missing block: those branches are unreachable for
+the reference too. Absence that *is* reachable — a missing initializer, a bare
+`return`, an empty `for` clause, a function without a return type — is modelled
+explicitly and handled.
+
+## What is not produced
+
+The reference builds a `Result` for a later code generator: resolved types per
+expression and per type reference, variant references, resolved symbols, and
+visible type and function tables. Nothing that decides whether a program is valid
+reads any of it, and this phase has no code generator, so the checker computes
+those types and discards them. Exposing them again is the natural next milestone,
+and is **deferred** (SPEC.md 27.6); a future code generator would need either
+per-node annotation or a new result API.
+
+The language has no built-in integer-to-string conversion, so a checker that must
+embed a position or a count in a message performs one (`decimal` in `state.ktn`).
+That is a helper inside a Kitten program, not a language feature; the built-in
+conversion remains deferred.
+
+## Differential testing
+
+`cmd/kitten/checker_differential_test.go` builds the checker once and runs it over
+a corpus of **1849 inputs**, comparing its rendering with the reference
+implementation's rendering of the same input:
+
+```sh
+go test -count=1 -v -run TestKittenChecker ./cmd/kitten/
+```
+
+The corpus covers valid programs for every construct; one invalid program per
+rule with the reference's wording; a systematic matrix of every binary operator
+applied to every type (13 × 100 cases); a matrix of every assignment operator to
+every target type (3 × 100); a matrix of every indexable type indexed by every
+index type; name resolution and forward references; scoping, shadowing, and
+duplicate declarations; enum, union, variant, and `match` rules; arrays, maps, and
+built-ins; lexical and syntax failures, which must be distinguished from semantic
+ones; deeply nested and generated larger inputs; sixteen cross-module cases
+covering public and private functions and types, duplicate public declarations,
+imported types in fields and maps, and a malformed imported module; and every
+fixture and every self-hosted source, including the checker's own. A self-hosted
+source that declares `import` statements is checked as a one-module program, so
+the corpus exercises the reference's undefined-name diagnostics on them rather
+than checking them cleanly.
+
+**All 1849 inputs render byte-identically**, so this is exact parity on
+success/failure, error category, position, message, and the declaration counts
+reported on success. `TestKittenCheckerOutputFormat` additionally pins the
+rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
+confirms that checking a single-module program as two modules cannot change the
+outcome.
+
+The only expected differences are inherited from the shared Kitten lexer and
+parser rather than from the checker: a column after a byte at or above 128 counts
+bytes rather than code points, and a message that quotes such a byte names the
+byte. The harness requires exact equality for ASCII input and compares the phase,
+category, and position otherwise.
+
+## What is deliberately not here
+
+- Code generation, and the annotated result a code generator would consume.
+- A module loader: the driver checks the two modules it is given, and a caller
+  supplies the module set as the reference's loader does.
+- Command-line arguments, standard error, and a chosen exit status.
+- Recovery from an error: the first error is reported and checking stops.

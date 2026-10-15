@@ -1,0 +1,559 @@
+// checker.ktn - the Kitten-written semantic checker's entry point and passes.
+//
+// It mirrors the reference implementation in checker/checker.go: the same five
+// passes in the same order (collect declarations, resolve struct fields, resolve
+// union variant fields, resolve function signatures, check bodies), each walking
+// the modules and each module's declarations in source order, and the same
+// fail-fast reporting of the first error.
+//
+// The reference resolves a declaration by AST node identity, in maps keyed by
+// the declaration pointer; Kitten has no map keyed by object identity, so a
+// declaration is looked up by its module and name, which duplicate detection
+// makes exact.
+//
+// The reference also builds a Result for a later code generator: resolved types
+// per expression and per type reference, variant references, and symbols. None of
+// that is read by anything that decides whether a program is valid, and this
+// phase has no code generator, so it is not produced. The summary a successful
+// check returns counts what was checked.
+
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "expr.ktn";
+import "model.ktn";
+import "state.ktn";
+import "stmt.ktn";
+
+// check_modules performs semantic analysis and type checking on a program that
+// may span several modules. The first module is the root module; the others are
+// imported.
+//
+// Every module resolves names against its own declarations first, then against
+// the public declarations of all modules, then against the built-ins. A
+// declaration is public only when it is marked public, so private declarations
+// are never visible to other modules.
+public fn check_modules(Module[] modules, int module_count) -> CheckResult {
+    if (module_count == 0) {
+        return CheckResult.Failure {
+            error = CheckError { kind = ErrorKind.InvalidType, file = "", line = 1, column = 1, message = "cannot check a program with no modules" }
+        };
+    }
+
+    Checker checker = Checker {
+        modules = modules,
+        module_count = module_count,
+        infos = new ModuleInfo[module_count],
+        current = -1,
+        builtins = builtin_functions(),
+        public_types = new map[string]Type,
+        public_functions = new map[string]Function,
+        return_type = none_type(),
+        next_type_id = 1,
+        type_count = 0,
+        function_count = 0,
+        body_count = 0
+    };
+
+    int index = 0;
+    while (index < module_count) {
+        checker.infos[index] = ModuleInfo {
+            types = new map[string]Type,
+            functions = new map[string]Function,
+            declared = new map[string]Position
+        };
+        index++;
+    }
+
+    StepResult collected = collect_declarations(checker);
+    if (!step_ok(collected)) {
+        return CheckResult.Failure { error = step_error(collected) };
+    }
+    StepResult structs = resolve_structs(checker);
+    if (!step_ok(structs)) {
+        return CheckResult.Failure { error = step_error(structs) };
+    }
+    StepResult unions = resolve_union_fields(checker);
+    if (!step_ok(unions)) {
+        return CheckResult.Failure { error = step_error(unions) };
+    }
+    StepResult functions = resolve_functions(checker);
+    if (!step_ok(functions)) {
+        return CheckResult.Failure { error = step_error(functions) };
+    }
+    StepResult bodies = check_bodies(checker);
+    if (!step_ok(bodies)) {
+        return CheckResult.Failure { error = step_error(bodies) };
+    }
+
+    checker.current = -1;
+    return CheckResult.Success {
+        summary = CheckSummary {
+            module_count = checker.module_count,
+            type_count = checker.type_count,
+            function_count = checker.function_count,
+            body_count = checker.body_count
+        }
+    };
+}
+
+// check_program performs semantic analysis on a single parsed program. It is the
+// single-module entry point; check_modules checks a program split across several
+// modules.
+public fn check_program(Program program) -> CheckResult {
+    Module[] modules = new Module[1];
+    modules[0] = Module { path = "", id = 0, program = program };
+    return check_modules(modules, 1);
+}
+
+// --- Pass 1: declarations ----------------------------------------------------
+
+// collect_declarations records every top-level name of every module and creates
+// placeholder types and signatures. It detects duplicate names within a module
+// and duplicate public names across modules. Within a module, types and
+// functions share one namespace.
+fn collect_declarations(Checker checker) -> StepResult {
+    int index = 0;
+    while (index < checker.module_count) {
+        checker.current = index;
+        Module module = checker.modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            Decl declaration = module.program.declarations[declaration_index];
+            StepResult result = collect_declaration(checker, index, module, declaration);
+            if (!step_ok(result)) {
+                return result;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    checker.current = -1;
+    return StepResult.Ok;
+}
+
+// collect_declaration registers one top-level declaration.
+fn collect_declaration(Checker checker, int module_index, Module module, Decl declaration) -> StepResult {
+    match (declaration) {
+        Import(keyword, path) {
+            // An import declaration carries no language declarations; the module
+            // loader resolves them before checking.
+            return StepResult.Ok;
+        }
+        Struct(at, visibility, name, fields, field_count) {
+            Type named = named_type(checker.next_type_id, TypeKind.Struct, name.text, module.id, 0, name.text, field_count);
+            checker.next_type_id = checker.next_type_id + 1;
+            return register_type(checker, module_index, position_of_token(at), name.text, visibility, named);
+        }
+        Enum(at, visibility, name, cases, case_count) {
+            if (case_count == 0) {
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidType, position_of_token(at), "enum " + quoted(name.text) + " must have at least one case")
+                };
+            }
+            Type named = named_type(checker.next_type_id, TypeKind.Enum, name.text, module.id, case_count, "", 0);
+            checker.next_type_id = checker.next_type_id + 1;
+
+            int case_index = 0;
+            while (case_index < case_count) {
+                Token case_name = cases[case_index].name;
+                if (has(named.variant_index, case_name.text)) {
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.DuplicateDeclaration, position_of_token(case_name), "duplicate case " + quoted(case_name.text) + " in enum " + quoted(name.text))
+                    };
+                }
+                Variant variant = Variant {
+                    name = case_name.text,
+                    index = case_index,
+                    fields = empty_field_array(0),
+                    field_count = 0,
+                    field_index = new map[string]StructField,
+                    at = position_of_token(case_name)
+                };
+                named.variants[case_index] = variant;
+                named.variant_count = named.variant_count + 1;
+                named.variant_index[case_name.text] = variant;
+                case_index++;
+            }
+            return register_type(checker, module_index, position_of_token(at), name.text, visibility, named);
+        }
+        Union(at, visibility, name, variants, variant_count) {
+            if (variant_count == 0) {
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidType, position_of_token(at), "union " + quoted(name.text) + " must have at least one variant")
+                };
+            }
+            Type named = named_type(checker.next_type_id, TypeKind.Union, name.text, module.id, variant_count, "", 0);
+            checker.next_type_id = checker.next_type_id + 1;
+
+            int variant_index = 0;
+            while (variant_index < variant_count) {
+                VariantDecl variant_declaration = variants[variant_index];
+                Token variant_name = variant_declaration.name;
+                if (has(named.variant_index, variant_name.text)) {
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.DuplicateDeclaration, position_of_token(variant_name), "duplicate variant " + quoted(variant_name.text) + " in union " + quoted(name.text))
+                    };
+                }
+                Variant variant = Variant {
+                    name = variant_name.text,
+                    index = variant_index,
+                    fields = empty_field_array(variant_declaration.field_count),
+                    field_count = 0,
+                    field_index = new map[string]StructField,
+                    at = position_of_token(variant_name)
+                };
+                named.variants[variant_index] = variant;
+                named.variant_count = named.variant_count + 1;
+                named.variant_index[variant_name.text] = variant;
+                variant_index++;
+            }
+            return register_type(checker, module_index, position_of_token(at), name.text, visibility, named);
+        }
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+            if (has(checker.infos[module_index].declared, name.text)) {
+                Position earlier = checker.infos[module_index].declared[name.text];
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.DuplicateDeclaration, position_of_token(at), "duplicate declaration of " + quoted(name.text) + " (previously declared at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+                };
+            }
+            checker.infos[module_index].declared[name.text] = position_of_token(at);
+
+            Function function = Function {
+                name = name.text,
+                parameter_names = new string[parameter_count + 1],
+                parameter_count = 0,
+                parameter_types = new Type[parameter_count + 1],
+                return_type = none_type(),
+                module = module.id,
+                builtin = BuiltinKind.NotBuiltin,
+                variadic = false,
+                allowed_types = new Type[1],
+                allowed_count = 0
+            };
+            checker.infos[module_index].functions[name.text] = function;
+            checker.function_count = checker.function_count + 1;
+
+            if (visibility == Visibility.Public) {
+                if (has(checker.public_functions, name.text)) {
+                    Function existing = checker.public_functions[name.text];
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.DuplicateDeclaration, position_of_token(at), "duplicate public declaration of " + quoted(name.text) + " (also declared in " + module_path(checker, existing.module) + ")")
+                    };
+                }
+                checker.public_functions[name.text] = function;
+            }
+            return StepResult.Ok;
+        }
+    }
+}
+
+// register_type adds a named type to its module and, when it is public, to the
+// shared public namespace, detecting duplicate names.
+fn register_type(Checker checker, int module_index, Position at, string name, Visibility visibility, Type named) -> StepResult {
+    if (has(checker.infos[module_index].declared, name)) {
+        Position earlier = checker.infos[module_index].declared[name];
+        return StepResult.Failed {
+            error = error_at(checker, ErrorKind.DuplicateDeclaration, at, "duplicate declaration of " + quoted(name) + " (previously declared at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+        };
+    }
+    checker.infos[module_index].declared[name] = at;
+    checker.infos[module_index].types[name] = named;
+    checker.type_count = checker.type_count + 1;
+
+    if (visibility == Visibility.Public) {
+        if (has(checker.public_types, name)) {
+            Type existing = checker.public_types[name];
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.DuplicateDeclaration, at, "duplicate public declaration of " + quoted(name) + " (also declared in " + module_path(checker, existing.module) + ")")
+            };
+        }
+        checker.public_types[name] = named;
+    }
+    return StepResult.Ok;
+}
+
+// --- Pass 2: struct fields ---------------------------------------------------
+
+// resolve_structs resolves each struct's field types and detects duplicate
+// fields. Field types must exist and must not be void.
+fn resolve_structs(Checker checker) -> StepResult {
+    int index = 0;
+    while (index < checker.module_count) {
+        checker.current = index;
+        Module module = checker.modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            StepResult result = resolve_struct_declaration(checker, index, module.program.declarations[declaration_index]);
+            if (!step_ok(result)) {
+                return result;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    checker.current = -1;
+    return StepResult.Ok;
+}
+
+// resolve_struct_declaration resolves one declaration for the struct pass.
+fn resolve_struct_declaration(Checker checker, int module_index, Decl declaration) -> StepResult {
+    match (declaration) {
+        Struct(at, visibility, name, fields, field_count) {
+            StructInfo info = struct_info_of(checker.infos[module_index].types[name.text]);
+            int field_index = 0;
+            while (field_index < field_count) {
+                Field field = fields[field_index];
+                TypeResult field_type_result = resolve_type(checker, field.type);
+                if (!type_ok(field_type_result)) {
+                    return StepResult.Failed { error = type_error(field_type_result) };
+                }
+                Type field_type = type_value(field_type_result);
+                if (is_void(field_type)) {
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.InvalidType, type_position(field.type), "struct field " + quoted(field.name.text) + " cannot have type void")
+                    };
+                }
+                if (has(info.field_index, field.name.text)) {
+                    StructField earlier = info.field_index[field.name.text];
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.DuplicateDeclaration, type_position(field.type), "duplicate field " + quoted(field.name.text) + " in struct " + quoted(name.text) + " (previously declared at " + decimal(earlier.at.line) + ":" + decimal(earlier.at.column) + ")")
+                    };
+                }
+                StructField struct_field = StructField { name = field.name.text, type = field_type, at = type_position(field.type) };
+                info.fields[info.field_count] = struct_field;
+                info.field_count = info.field_count + 1;
+                info.field_index[field.name.text] = struct_field;
+                field_index++;
+            }
+        }
+        Import(keyword, path) { }
+        Enum(at, visibility, name, cases, case_count) { }
+        Union(at, visibility, name, variants, variant_count) { }
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+    }
+    return StepResult.Ok;
+}
+
+// --- Pass 3: union variant fields --------------------------------------------
+
+// resolve_union_fields resolves each union variant's field types and detects
+// duplicate fields. Field types must exist and must not be void.
+fn resolve_union_fields(Checker checker) -> StepResult {
+    int index = 0;
+    while (index < checker.module_count) {
+        checker.current = index;
+        Module module = checker.modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            StepResult result = resolve_union_declaration(checker, index, module.program.declarations[declaration_index]);
+            if (!step_ok(result)) {
+                return result;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    checker.current = -1;
+    return StepResult.Ok;
+}
+
+// resolve_union_declaration resolves one declaration for the union pass.
+fn resolve_union_declaration(Checker checker, int module_index, Decl declaration) -> StepResult {
+    match (declaration) {
+        Union(at, visibility, name, variants, variant_count) {
+            Type union_type = checker.infos[module_index].types[name.text];
+            int variant_index = 0;
+            while (variant_index < variant_count) {
+                VariantDecl declaration_variant = variants[variant_index];
+                Variant variant = union_type.variants[variant_index];
+                int field_index = 0;
+                while (field_index < declaration_variant.field_count) {
+                    Field field = declaration_variant.fields[field_index];
+                    TypeResult field_type_result = resolve_type(checker, field.type);
+                    if (!type_ok(field_type_result)) {
+                        return StepResult.Failed { error = type_error(field_type_result) };
+                    }
+                    Type field_type = type_value(field_type_result);
+                    if (is_void(field_type)) {
+                        return StepResult.Failed {
+                            error = error_at(checker, ErrorKind.InvalidType, type_position(field.type), "field " + quoted(field.name.text) + " of variant " + quoted(variant.name) + " cannot have type void")
+                        };
+                    }
+                    if (has(variant.field_index, field.name.text)) {
+                        return StepResult.Failed {
+                            error = error_at(checker, ErrorKind.DuplicateDeclaration, type_position(field.type), "duplicate field " + quoted(field.name.text) + " in variant " + quoted(variant.name))
+                        };
+                    }
+                    StructField struct_field = StructField { name = field.name.text, type = field_type, at = type_position(field.type) };
+                    variant.fields[variant.field_count] = struct_field;
+                    variant.field_count = variant.field_count + 1;
+                    variant.field_index[field.name.text] = struct_field;
+                    field_index++;
+                }
+                variant_index++;
+            }
+        }
+        Import(keyword, path) { }
+        Struct(at, visibility, name, fields, field_count) { }
+        Enum(at, visibility, name, cases, case_count) { }
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) { }
+    }
+    return StepResult.Ok;
+}
+
+// --- Pass 4: function signatures ---------------------------------------------
+
+// resolve_functions resolves each function's parameter and return types and
+// detects duplicate parameters. Parameter types must exist and must not be void.
+// A return type may be void, which means the function returns no value.
+fn resolve_functions(Checker checker) -> StepResult {
+    int index = 0;
+    while (index < checker.module_count) {
+        checker.current = index;
+        Module module = checker.modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            StepResult result = resolve_function_declaration(checker, index, module.program.declarations[declaration_index]);
+            if (!step_ok(result)) {
+                return result;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    checker.current = -1;
+    return StepResult.Ok;
+}
+
+// resolve_function_declaration resolves one declaration for the signature pass.
+fn resolve_function_declaration(Checker checker, int module_index, Decl declaration) -> StepResult {
+    match (declaration) {
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+            Function function = checker.infos[module_index].functions[name.text];
+            map[string]Position seen = new map[string]Position;
+
+            int parameter_index = 0;
+            while (parameter_index < parameter_count) {
+                Parameter parameter = parameters[parameter_index];
+                TypeResult parameter_type_result = resolve_type(checker, parameter.type);
+                if (!type_ok(parameter_type_result)) {
+                    return StepResult.Failed { error = type_error(parameter_type_result) };
+                }
+                Type parameter_type = type_value(parameter_type_result);
+                if (is_void(parameter_type)) {
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.InvalidType, type_position(parameter.type), "parameter " + quoted(parameter.name.text) + " cannot have type void")
+                    };
+                }
+                if (has(seen, parameter.name.text)) {
+                    Position earlier = seen[parameter.name.text];
+                    return StepResult.Failed {
+                        error = error_at(checker, ErrorKind.DuplicateDeclaration, type_position(parameter.type), "duplicate parameter " + quoted(parameter.name.text) + " (previously declared at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+                    };
+                }
+                seen[parameter.name.text] = type_position(parameter.type);
+                function.parameter_names[function.parameter_count] = parameter.name.text;
+                function.parameter_types[function.parameter_count] = parameter_type;
+                function.parameter_count = function.parameter_count + 1;
+                parameter_index++;
+            }
+
+            Type resolved_return = primitive_type(TypeKind.Void, "void");
+            match (return_type) {
+                Present(reference) {
+                    TypeResult return_result = resolve_type(checker, reference);
+                    if (!type_ok(return_result)) {
+                        return StepResult.Failed { error = type_error(return_result) };
+                    }
+                    resolved_return = type_value(return_result);
+                }
+                Absent {
+                }
+            }
+            function.return_type = resolved_return;
+        }
+        Import(keyword, path) { }
+        Struct(at, visibility, name, fields, field_count) { }
+        Enum(at, visibility, name, cases, case_count) { }
+        Union(at, visibility, name, variants, variant_count) { }
+    }
+    return StepResult.Ok;
+}
+
+// --- Pass 5: function bodies -------------------------------------------------
+
+// check_bodies checks every user-defined function body in every module.
+fn check_bodies(Checker checker) -> StepResult {
+    int index = 0;
+    while (index < checker.module_count) {
+        checker.current = index;
+        Module module = checker.modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            StepResult result = check_body_declaration(checker, index, module.program.declarations[declaration_index]);
+            if (!step_ok(result)) {
+                return result;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    checker.current = -1;
+    return StepResult.Ok;
+}
+
+// check_body_declaration checks one declaration for the body pass.
+fn check_body_declaration(Checker checker, int module_index, Decl declaration) -> StepResult {
+    match (declaration) {
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+            Function function = checker.infos[module_index].functions[name.text];
+
+            // Parameters and the body's outermost statements share one scope.
+            Scope scope = new_scope(no_parent());
+            int parameter_index = 0;
+            while (parameter_index < function.parameter_count) {
+                declare_scope(scope, Symbol {
+                    name = function.parameter_names[parameter_index],
+                    kind = SymbolKind.Variable,
+                    type = function.parameter_types[parameter_index],
+                    at = type_position(parameters[parameter_index].type)
+                });
+                parameter_index++;
+            }
+
+            Type previous_return = checker.return_type;
+            checker.return_type = function.return_type;
+
+            StepResult body_result = StepResult.Ok;
+            match (body) {
+                Block(open_brace, statements, statement_count) {
+                    body_result = check_statements(checker, statements, statement_count, scope);
+                }
+                VarDecl(type_ref, name_token, initializer) { }
+                Expression(expression) { }
+                If(at_token, condition, then_branch, else_branch) { }
+                While(at_token, condition, while_body) { }
+                For(at_token, initializer, condition, increment, for_body) { }
+                Return(at_token, value) { }
+                Match(at_token, scrutinee, arms, arm_count) { }
+            }
+
+            checker.return_type = previous_return;
+            if (!step_ok(body_result)) {
+                return body_result;
+            }
+
+            checker.body_count = checker.body_count + 1;
+            if (!is_void(function.return_type) && !block_returns(body)) {
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidReturn, position_of_token(at), "function " + quoted(name.text) + " must return a value of type " + type_string(function.return_type) + " on all control-flow paths")
+                };
+            }
+        }
+        Import(keyword, path) { }
+        Struct(at, visibility, name, fields, field_count) { }
+        Enum(at, visibility, name, cases, case_count) { }
+        Union(at, visibility, name, variants, variant_count) { }
+    }
+    return StepResult.Ok;
+}

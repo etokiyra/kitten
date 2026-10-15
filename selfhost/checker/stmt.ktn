@@ -1,0 +1,467 @@
+// stmt.ktn - statement checking for the Kitten-written checker.
+//
+// It mirrors the reference implementation in checker/stmt.go rule for rule: the
+// same scope boundaries, the same declaring order, the same match rules, and the
+// same conservative control-flow analysis.
+//
+// A block in the reference is a distinct AST node; in the parser's Kitten AST a
+// block is a statement variant, so a helper extracts its statements. The other
+// statement variants cannot appear where a block is required, so those arms do
+// nothing and are unreachable.
+
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "expr.ktn";
+import "model.ktn";
+import "state.ktn";
+
+// check_statements checks a list of statements in the given scope.
+public fn check_statements(Checker checker, Stmt[] statements, int count, Scope scope) -> StepResult {
+    int index = 0;
+    while (index < count) {
+        StepResult result = check_statement(checker, statements[index], scope);
+        if (!step_ok(result)) {
+            return result;
+        }
+        index++;
+    }
+    return StepResult.Ok;
+}
+
+// check_statement checks a single statement in the given scope.
+public fn check_statement(Checker checker, Stmt statement, Scope scope) -> StepResult {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            return check_statements(checker, statements, statement_count, new_scope(OptionalScope.Present { scope = scope }));
+        }
+        VarDecl(type_ref, name, initializer) {
+            return check_var_decl(checker, type_ref, name, initializer, scope);
+        }
+        Expression(expression) {
+            TypeResult result = check_expr(checker, expression, scope);
+            if (!type_ok(result)) {
+                return StepResult.Failed { error = type_error(result) };
+            }
+            return StepResult.Ok;
+        }
+        If(at, condition, then_branch, else_branch) {
+            return check_if(checker, condition, then_branch, else_branch, scope);
+        }
+        While(at, condition, body) {
+            return check_while(checker, condition, body, scope);
+        }
+        For(at, initializer, condition, increment, body) {
+            return check_for(checker, initializer, condition, increment, body, scope);
+        }
+        Return(at, value) {
+            return check_return(checker, at, value, scope);
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            return check_match(checker, at, scrutinee, arms, arm_count, scope);
+        }
+    }
+}
+
+// check_block checks a block statement's statements in a new nested scope. The
+// absent case cannot occur, because a block position always holds a block.
+public fn check_block(Checker checker, Stmt block, Scope scope) -> StepResult {
+    match (block) {
+        Block(open_brace, statements, statement_count) {
+            return check_statements(checker, statements, statement_count, new_scope(OptionalScope.Present { scope = scope }));
+        }
+        VarDecl(type_ref, name, initializer) { return StepResult.Ok; }
+        Expression(expression) { return StepResult.Ok; }
+        If(at, condition, then_branch, else_branch) { return StepResult.Ok; }
+        While(at, condition, body) { return StepResult.Ok; }
+        For(at, initializer, condition, increment, body) { return StepResult.Ok; }
+        Return(at, value) { return StepResult.Ok; }
+        Match(at, scrutinee, arms, arm_count) { return StepResult.Ok; }
+    }
+}
+
+// check_var_decl checks a local variable declaration and introduces the name
+// into scope. The initializer is checked before the name is declared, so a
+// variable is not visible in its own initializer.
+fn check_var_decl(Checker checker, TypeRef type_ref, Token name, OptionalExpr initializer, Scope scope) -> StepResult {
+    TypeResult declared_result = resolve_type(checker, type_ref);
+    if (!type_ok(declared_result)) {
+        return StepResult.Failed { error = type_error(declared_result) };
+    }
+    Type declared_type = type_value(declared_result);
+    if (is_void(declared_type)) {
+        return StepResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, type_position(type_ref), "variable " + quoted(name.text) + " cannot have type void")
+        };
+    }
+
+    match (initializer) {
+        Present(expression) {
+            TypeResult initializer_result = check_expr(checker, expression, scope);
+            if (!type_ok(initializer_result)) {
+                return StepResult.Failed { error = type_error(initializer_result) };
+            }
+            string context = "initializer for variable " + quoted(name.text);
+            OptionalError mismatch = require_same_type(checker, ErrorKind.TypeMismatch, type_value(initializer_result), declared_type, expr_position(expression), context);
+            match (mismatch) {
+                Present(error) {
+                    return StepResult.Failed { error = error };
+                }
+                Absent {
+                }
+            }
+        }
+        Absent {
+        }
+    }
+
+    Symbol symbol = Symbol {
+        name = name.text,
+        kind = SymbolKind.Variable,
+        type = declared_type,
+        at = type_position(type_ref)
+    };
+    match (declare_scope(scope, symbol)) {
+        Duplicate(earlier) {
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.DuplicateDeclaration, type_position(type_ref), "duplicate declaration of " + quoted(name.text) + " in this scope (previously declared at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+            };
+        }
+        Ok {
+        }
+    }
+    return StepResult.Ok;
+}
+
+// check_if checks an if statement. The condition is checked in the enclosing
+// scope; each branch body gets its own nested scope. An else-if is checked in
+// the enclosing scope, and an else body in a nested scope.
+fn check_if(Checker checker, Expr condition, Stmt then_branch, OptionalStmt else_branch, Scope scope) -> StepResult {
+    StepResult condition_result = check_condition(checker, condition, scope, "if");
+    if (!step_ok(condition_result)) {
+        return condition_result;
+    }
+    StepResult then_result = check_block(checker, then_branch, scope);
+    if (!step_ok(then_result)) {
+        return then_result;
+    }
+    match (else_branch) {
+        Absent {
+        }
+        Present(statement) {
+            return check_statement(checker, statement, scope);
+        }
+    }
+    return StepResult.Ok;
+}
+
+// check_while checks a while loop.
+fn check_while(Checker checker, Expr condition, Stmt body, Scope scope) -> StepResult {
+    StepResult condition_result = check_condition(checker, condition, scope, "while");
+    if (!step_ok(condition_result)) {
+        return condition_result;
+    }
+    return check_block(checker, body, scope);
+}
+
+// check_for checks a C-style for loop.
+//
+// The loop gets its own scope containing the initializer, so an initializer
+// variable is visible in the condition, the increment, and the body, but not
+// after the loop.
+fn check_for(Checker checker, OptionalStmt initializer, OptionalExpr condition, OptionalExpr increment, Stmt body, Scope scope) -> StepResult {
+    Scope loop_scope = new_scope(OptionalScope.Present { scope = scope });
+
+    match (initializer) {
+        Present(init_statement) {
+            match (init_statement) {
+                VarDecl(type_ref, name, init_expression) {
+                    StepResult declaration_result = check_var_decl(checker, type_ref, name, init_expression, loop_scope);
+                    if (!step_ok(declaration_result)) {
+                        return declaration_result;
+                    }
+                }
+                Expression(expression) {
+                    TypeResult expression_result = check_expr(checker, expression, loop_scope);
+                    if (!type_ok(expression_result)) {
+                        return StepResult.Failed { error = type_error(expression_result) };
+                    }
+                }
+                Block(open_brace, statements, statement_count) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+                If(at, init_condition, then_branch, else_branch) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+                While(at, init_condition, init_body) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+                For(at, init_initializer, init_condition, init_increment, init_body) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+                Return(at, value) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+                Match(at, scrutinee, arms, arm_count) {
+                    StepResult statement_result = check_statement(checker, init_statement, loop_scope);
+                    if (!step_ok(statement_result)) {
+                        return statement_result;
+                    }
+                }
+            }
+        }
+        Absent {
+        }
+    }
+
+    match (condition) {
+        Present(expression) {
+            StepResult condition_result = check_condition(checker, expression, loop_scope, "for");
+            if (!step_ok(condition_result)) {
+                return condition_result;
+            }
+        }
+        Absent {
+        }
+    }
+
+    match (increment) {
+        Present(expression) {
+            TypeResult increment_result = check_expr(checker, expression, loop_scope);
+            if (!type_ok(increment_result)) {
+                return StepResult.Failed { error = type_error(increment_result) };
+            }
+        }
+        Absent {
+        }
+    }
+
+    return check_block(checker, body, loop_scope);
+}
+
+// check_return checks a return statement against the enclosing function's return
+// type.
+fn check_return(Checker checker, Token at, OptionalExpr value, Scope scope) -> StepResult {
+    if (is_void(checker.return_type)) {
+        match (value) {
+            Present(expression) {
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidReturn, expr_position(expression), "cannot return a value from a function that returns no value")
+                };
+            }
+            Absent {
+            }
+        }
+        return StepResult.Ok;
+    }
+
+    match (value) {
+        Absent {
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidReturn, position_of_token(at), "expected a return value of type " + type_string(checker.return_type))
+            };
+        }
+        Present(expression) {
+            TypeResult value_result = check_expr(checker, expression, scope);
+            if (!type_ok(value_result)) {
+                return StepResult.Failed { error = type_error(value_result) };
+            }
+            OptionalError mismatch = require_same_type(checker, ErrorKind.InvalidReturn, type_value(value_result), checker.return_type, expr_position(expression), "return value");
+            match (mismatch) {
+                Present(error) {
+                    return StepResult.Failed { error = error };
+                }
+                Absent {
+                }
+            }
+            return StepResult.Ok;
+        }
+    }
+}
+
+// check_match checks a match statement.
+//
+// The scrutinee must be an enum or union value. Every variant of its type must
+// have exactly one arm, so a match is exhaustive. An arm binds the variant's
+// fields to fresh locals whose types are the field types.
+fn check_match(Checker checker, Token at, Expr scrutinee, MatchArm[] arms, int arm_count, Scope scope) -> StepResult {
+    TypeResult scrutinee_result = check_expr(checker, scrutinee, scope);
+    if (!type_ok(scrutinee_result)) {
+        return StepResult.Failed { error = type_error(scrutinee_result) };
+    }
+    Type scrutinee_type = type_value(scrutinee_result);
+    if (!is_variant(scrutinee_type)) {
+        return StepResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(scrutinee), "match requires an enum or union value, found " + type_string(scrutinee_type))
+        };
+    }
+
+    map[string]Position matched = new map[string]Position;
+
+    int index = 0;
+    while (index < arm_count) {
+        MatchArm arm = arms[index];
+        Position arm_at = position_of_token(arm.variant);
+
+        if (!has(scrutinee_type.variant_index, arm.variant.text)) {
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.UndefinedName, arm_at, variant_kind_word(scrutinee_type) + " " + scrutinee_type.name + " has no variant " + quoted(arm.variant.text))
+            };
+        }
+        if (has(matched, arm.variant.text)) {
+            Position earlier = matched[arm.variant.text];
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.DuplicateDeclaration, arm_at, "variant " + quoted(arm.variant.text) + " is matched more than once (first at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+            };
+        }
+        matched[arm.variant.text] = arm_at;
+
+        Variant variant = scrutinee_type.variant_index[arm.variant.text];
+        if (arm.binding_count != variant.field_count) {
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.BadCall, arm_at, "variant " + variant.name + " has " + decimal(variant.field_count) + " field(s) but the arm binds " + decimal(arm.binding_count))
+            };
+        }
+
+        Scope arm_scope = new_scope(OptionalScope.Present { scope = scope });
+        map[string]Position bound = new map[string]Position;
+        int binding_index = 0;
+        while (binding_index < arm.binding_count) {
+            Token binding = arm.bindings[binding_index];
+            Position binding_at = position_of_token(binding);
+            if (has(bound, binding.text)) {
+                Position earlier = bound[binding.text];
+                return StepResult.Failed {
+                    error = error_at(checker, ErrorKind.DuplicateDeclaration, binding_at, "duplicate binding " + quoted(binding.text) + " (first at " + decimal(earlier.line) + ":" + decimal(earlier.column) + ")")
+                };
+            }
+            bound[binding.text] = binding_at;
+            declare_scope(arm_scope, Symbol {
+                name = binding.text,
+                kind = SymbolKind.Variable,
+                type = variant.fields[binding_index].type,
+                at = binding_at
+            });
+            binding_index++;
+        }
+
+        StepResult body_result = check_block(checker, arm.body, arm_scope);
+        if (!step_ok(body_result)) {
+            return body_result;
+        }
+        index++;
+    }
+
+    int variant_index = 0;
+    while (variant_index < scrutinee_type.variant_count) {
+        Variant variant = scrutinee_type.variants[variant_index];
+        if (!has(matched, variant.name)) {
+            return StepResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidType, position_of_token(at), "match does not handle variant " + quoted(variant.name) + " of " + scrutinee_type.name)
+            };
+        }
+        variant_index++;
+    }
+    return StepResult.Ok;
+}
+
+// check_condition checks that an expression is a bool condition.
+fn check_condition(Checker checker, Expr expression, Scope scope, string construct) -> StepResult {
+    TypeResult condition_result = check_expr(checker, expression, scope);
+    if (!type_ok(condition_result)) {
+        return StepResult.Failed { error = type_error(condition_result) };
+    }
+    Type condition_type = type_value(condition_result);
+    if (condition_type.kind != TypeKind.Bool) {
+        return StepResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(expression), construct + " condition must be bool, found " + type_string(condition_type))
+        };
+    }
+    return StepResult.Ok;
+}
+
+// --- Control-flow analysis ---------------------------------------------------
+
+// block_returns reports whether every path through a block definitely returns.
+//
+// This is a conservative, syntactic analysis, exactly as in the reference. A
+// block definitely returns when any of its statements definitely returns;
+// statements after a return are ignored for this purpose. Loops and expression
+// statements never definitely return. The non-block statement variants cannot
+// appear here and report false.
+public fn block_returns(Stmt block) -> bool {
+    match (block) {
+        Block(open_brace, statements, statement_count) {
+            int index = 0;
+            while (index < statement_count) {
+                if (statement_returns(statements[index])) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        VarDecl(type_ref, name, initializer) { return false; }
+        Expression(expression) { return false; }
+        If(at, condition, then_branch, else_branch) { return false; }
+        While(at, condition, body) { return false; }
+        For(at, initializer, condition, increment, body) { return false; }
+        Return(at, value) { return false; }
+        Match(at, scrutinee, arms, arm_count) { return false; }
+    }
+}
+
+// statement_returns reports whether a statement definitely returns on every
+// path. An if statement returns only when it has an else branch and both
+// branches return; a match returns when every arm returns.
+public fn statement_returns(Stmt statement) -> bool {
+    match (statement) {
+        Return(at, value) {
+            return true;
+        }
+        Block(open_brace, statements, statement_count) {
+            return block_returns(statement);
+        }
+        If(at, condition, then_branch, else_branch) {
+            match (else_branch) {
+                Absent {
+                    return false;
+                }
+                Present(else_statement) {
+                    return block_returns(then_branch) && statement_returns(else_statement);
+                }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            if (arm_count == 0) {
+                return false;
+            }
+            int index = 0;
+            while (index < arm_count) {
+                if (!block_returns(arms[index].body)) {
+                    return false;
+                }
+                index++;
+            }
+            return true;
+        }
+        VarDecl(type_ref, name, initializer) { return false; }
+        Expression(expression) { return false; }
+        While(at, condition, body) { return false; }
+        For(at, initializer, condition, increment, body) { return false; }
+    }
+}

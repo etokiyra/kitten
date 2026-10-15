@@ -1,0 +1,1037 @@
+// expr.ktn - expression checking for the Kitten-written checker.
+//
+// It mirrors the reference implementation in checker/expr.go rule for rule: the
+// same operand rules, the same result types, the same assignability rules, the
+// same built-in call rules, and the same diagnostics at the same positions.
+//
+// The reference also records every expression's resolved type in its Result, for
+// a later code generator. Nothing that decides whether a program is valid reads
+// that record, and this phase has no code generator, so the type is returned to
+// the caller and not stored.
+
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "model.ktn";
+import "state.ktn";
+
+// check_expr checks an expression and returns its type.
+public fn check_expr(Checker checker, Expr expression, Scope scope) -> TypeResult {
+    match (expression) {
+        Identifier(token) {
+            return check_identifier(checker, token, scope);
+        }
+        Integer(token) {
+            return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+        }
+        Float(token) {
+            return TypeResult.Ok { type = primitive_type(TypeKind.Float, "float") };
+        }
+        String(token) {
+            return TypeResult.Ok { type = primitive_type(TypeKind.String, "string") };
+        }
+        Boolean(token, value) {
+            return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+        }
+        Unary(operator, operand, postfix) {
+            return check_unary(checker, operator, operand, scope);
+        }
+        Binary(operator, left, right) {
+            return check_binary(checker, operator, left, right, scope);
+        }
+        Assign(operator, target, value) {
+            return check_assignment(checker, operator, target, value, scope);
+        }
+        Call(open_paren, callee, arguments, argument_count) {
+            return check_call(checker, open_paren, callee, arguments, argument_count, scope);
+        }
+        Member(dot, receiver, member) {
+            return check_member(checker, dot, receiver, member, scope);
+        }
+        StructLiteral(type_ref, open_brace, fields, field_count) {
+            return check_struct_literal(checker, type_ref, open_brace, fields, field_count, scope);
+        }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
+            return check_variant_literal(checker, type_ref, variant, open_brace, fields, field_count, scope);
+        }
+        NewArray(at, element, length) {
+            return check_new_array(checker, element, length, scope);
+        }
+        NewMap(at, map_type) {
+            return check_new_map(checker, map_type);
+        }
+        Index(bracket, target, index) {
+            return check_index(checker, bracket, target, index, scope);
+        }
+    }
+}
+
+// check_identifier resolves an identifier used as a value. Only variables and
+// parameters are values; functions and types are not.
+fn check_identifier(Checker checker, Token token, Scope scope) -> TypeResult {
+    match (lookup_scope(scope, token.text)) {
+        Present(symbol) {
+            return TypeResult.Ok { type = symbol.type };
+        }
+        Absent {
+            // The remaining checks preserve the reference's order: a function, a
+            // built-in, a type, then a private declaration in another module.
+        }
+    }
+    if (has_function(checker, token.text)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidExpression, position_of_token(token), "function " + quoted(token.text) + " cannot be used as a value")
+        };
+    }
+    if (has(checker.builtins, token.text)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidExpression, position_of_token(token), "function " + quoted(token.text) + " cannot be used as a value")
+        };
+    }
+    match (lookup_type(checker, token.text)) {
+        Present(named) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidExpression, position_of_token(token), "type " + quoted(token.text) + " cannot be used as a value")
+            };
+        }
+        Absent {
+        }
+    }
+    match (private_function(checker, token.text)) {
+        Present(path) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.PrivateAccess, position_of_token(token), "function " + quoted(token.text) + " is private to " + path)
+            };
+        }
+        Absent {
+        }
+    }
+    match (private_type(checker, token.text)) {
+        Present(path) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.PrivateAccess, position_of_token(token), "type " + quoted(token.text) + " is private to " + path)
+            };
+        }
+        Absent {
+        }
+    }
+    return TypeResult.Failed {
+        error = error_at(checker, ErrorKind.UndefinedName, position_of_token(token), "undefined name " + quoted(token.text))
+    };
+}
+
+// has_function reports whether a user-defined function is visible by name.
+fn has_function(Checker checker, string name) -> bool {
+    match (lookup_function(checker, name)) {
+        Present(function) { return true; }
+        Absent { return false; }
+    }
+}
+
+// check_unary checks a prefix or postfix unary expression.
+fn check_unary(Checker checker, Token operator, Expr operand, Scope scope) -> TypeResult {
+    if (operator.text == "-") {
+        TypeResult operand_result = check_expr(checker, operand, scope);
+        if (!type_ok(operand_result)) {
+            return operand_result;
+        }
+        Type operand_type = type_value(operand_result);
+        if (!is_numeric(operand_type)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidOperator, position_of_token(operator), "operator '-' requires a numeric operand, found " + type_string(operand_type))
+            };
+        }
+        return TypeResult.Ok { type = operand_type };
+    }
+
+    if (operator.text == "!") {
+        TypeResult operand_result = check_expr(checker, operand, scope);
+        if (!type_ok(operand_result)) {
+            return operand_result;
+        }
+        Type operand_type = type_value(operand_result);
+        if (operand_type.kind != TypeKind.Bool) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidOperator, position_of_token(operator), "operator '!' requires a bool operand, found " + type_string(operand_type))
+            };
+        }
+        return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+    }
+
+    // "++" and "--": the operand must be an assignable numeric location.
+    TypeResult target_result = check_assignable(checker, operand, scope);
+    if (!type_ok(target_result)) {
+        return target_result;
+    }
+    Type operand_type = type_value(target_result);
+    if (!is_numeric(operand_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidAssignment, position_of_token(operator), "operator " + quoted(operator.text) + " requires a numeric variable or field, found " + type_string(operand_type))
+        };
+    }
+    return TypeResult.Ok { type = operand_type };
+}
+
+// check_binary checks a binary operation.
+fn check_binary(Checker checker, Token operator, Expr left_expression, Expr right_expression, Scope scope) -> TypeResult {
+    TypeResult left_result = check_expr(checker, left_expression, scope);
+    if (!type_ok(left_result)) {
+        return left_result;
+    }
+    Type left = type_value(left_result);
+
+    TypeResult right_result = check_expr(checker, right_expression, scope);
+    if (!type_ok(right_result)) {
+        return right_result;
+    }
+    Type right = type_value(right_result);
+
+    string operator_text = operator.text;
+    Position at = position_of_token(operator);
+
+    if (operator_text == "+" || operator_text == "-" || operator_text == "*" || operator_text == "/" || operator_text == "%") {
+        return check_arithmetic(checker, operator_text, left, right, at);
+    }
+    if (operator_text == "<" || operator_text == "<=" || operator_text == ">" || operator_text == ">=") {
+        return check_relational(checker, operator_text, left, right, at);
+    }
+    if (operator_text == "==" || operator_text == "!=") {
+        return check_equality(checker, operator_text, left, right, at);
+    }
+    return check_logical(checker, operator_text, left, right, at);
+}
+
+// check_arithmetic checks "+", "-", "*", "/", and "%".
+//
+// The operands must be the same type (no implicit conversions). "+" is defined
+// for two ints, two floats, or two strings; on strings it concatenates. "%" is
+// int-only. The remaining operators are numeric-only.
+fn check_arithmetic(Checker checker, string operator, Type left, Type right, Position at) -> TypeResult {
+    if (is_void(left) || is_void(right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " cannot be applied to a void value")
+        };
+    }
+    if (!same_type(left, right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator) + " requires operands of the same type, found " + type_string(left) + " and " + type_string(right))
+        };
+    }
+    if (operator == "+" && left.kind == TypeKind.String) {
+        return TypeResult.Ok { type = primitive_type(TypeKind.String, "string") };
+    }
+    if (operator == "%") {
+        if (left.kind != TypeKind.Int) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidOperator, at, "operator '%' requires int operands, found " + type_string(left))
+            };
+        }
+        return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+    }
+    if (!is_numeric(left)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " requires numeric operands, found " + type_string(left))
+        };
+    }
+    return TypeResult.Ok { type = left };
+}
+
+// check_relational checks "<", "<=", ">", and ">=". The operands must be the
+// same numeric type; the result is bool.
+fn check_relational(Checker checker, string operator, Type left, Type right, Position at) -> TypeResult {
+    if (is_void(left) || is_void(right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " cannot be applied to a void value")
+        };
+    }
+    if (!same_type(left, right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator) + " requires operands of the same type, found " + type_string(left) + " and " + type_string(right))
+        };
+    }
+    if (!is_numeric(left)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " requires numeric operands, found " + type_string(left))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+}
+
+// check_equality checks "==" and "!=". The operands must be the same primitive
+// type; the result is bool. Struct, array, union, and map equality is not
+// supported.
+fn check_equality(Checker checker, string operator, Type left, Type right, Position at) -> TypeResult {
+    if (is_void(left) || is_void(right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " cannot be applied to a void value")
+        };
+    }
+    if (!same_type(left, right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator) + " requires operands of the same type, found " + type_string(left) + " and " + type_string(right))
+        };
+    }
+    if (is_struct(left) || is_array(left) || is_union(left) || is_map(left)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " is not supported for values of type " + type_string(left))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+}
+
+// check_logical checks "&&" and "||". Both operands must be bool.
+fn check_logical(Checker checker, string operator, Type left, Type right, Position at) -> TypeResult {
+    if (left.kind != TypeKind.Bool || right.kind != TypeKind.Bool) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " requires bool operands, found " + type_string(left) + " and " + type_string(right))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+}
+
+// check_assignment checks "=", "+=", and "-=".
+fn check_assignment(Checker checker, Token operator, Expr target, Expr value, Scope scope) -> TypeResult {
+    TypeResult target_result = check_assignable(checker, target, scope);
+    if (!type_ok(target_result)) {
+        return target_result;
+    }
+    Type target_type = type_value(target_result);
+
+    TypeResult value_result = check_expr(checker, value, scope);
+    if (!type_ok(value_result)) {
+        return value_result;
+    }
+    Type value_type = type_value(value_result);
+    Position at = position_of_token(operator);
+
+    if (operator.text == "=") {
+        OptionalError mismatch = require_same_type(checker, ErrorKind.TypeMismatch, value_type, target_type, at, "assignment to " + type_string(target_type));
+        match (mismatch) {
+            Present(error) {
+                return TypeResult.Failed { error = error };
+            }
+            Absent {
+            }
+        }
+        return TypeResult.Ok { type = target_type };
+    }
+
+    // "+=" and "-=".
+    if (is_void(target_type) || is_void(value_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator.text) + " cannot be applied to a void value")
+        };
+    }
+    if (!same_type(target_type, value_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator.text) + " requires operands of the same type, found " + type_string(target_type) + " and " + type_string(value_type))
+        };
+    }
+    if (operator.text == "+=" && target_type.kind == TypeKind.String) {
+        return TypeResult.Ok { type = primitive_type(TypeKind.String, "string") };
+    }
+    if (!is_numeric(target_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator.text) + " requires numeric operands, found " + type_string(target_type))
+        };
+    }
+    return TypeResult.Ok { type = target_type };
+}
+
+// check_assignable checks that an expression is a mutable l-value and returns its
+// type. Only local variables, parameters, and struct fields reached through an
+// l-value are assignable.
+public fn check_assignable(Checker checker, Expr expression, Scope scope) -> TypeResult {
+    match (expression) {
+        Identifier(token) {
+            match (lookup_scope(scope, token.text)) {
+                Absent {
+                    return TypeResult.Failed {
+                        error = error_at(checker, ErrorKind.UndefinedName, position_of_token(token), "undefined name " + quoted(token.text))
+                    };
+                }
+                Present(symbol) {
+                    if (symbol.kind != SymbolKind.Variable) {
+                        return TypeResult.Failed {
+                            error = error_at(checker, ErrorKind.InvalidAssignment, position_of_token(token), quoted(token.text) + " is not assignable")
+                        };
+                    }
+                    return TypeResult.Ok { type = symbol.type };
+                }
+            }
+        }
+        Member(dot, receiver, member) {
+            TypeResult receiver_result = check_assignable(checker, receiver, scope);
+            if (!type_ok(receiver_result)) {
+                return receiver_result;
+            }
+            return resolve_member(checker, dot, member, type_value(receiver_result));
+        }
+        Index(bracket, target, index) {
+            TypeResult target_result = check_assignable(checker, target, scope);
+            if (!type_ok(target_result)) {
+                return target_result;
+            }
+            Type target_type = type_value(target_result);
+            if (target_type.kind == TypeKind.String) {
+                return TypeResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidAssignment, position_of_token(bracket), "cannot assign to a string byte; strings are immutable")
+                };
+            }
+            return check_index_operands(checker, bracket, target_type, index, scope);
+        }
+        Integer(token) { return cannot_assign(checker, expression); }
+        Float(token) { return cannot_assign(checker, expression); }
+        String(token) { return cannot_assign(checker, expression); }
+        Boolean(token, value) { return cannot_assign(checker, expression); }
+        Unary(operator, operand, postfix) { return cannot_assign(checker, expression); }
+        Binary(operator, left, right) { return cannot_assign(checker, expression); }
+        Assign(operator, target, value) { return cannot_assign(checker, expression); }
+        Call(open_paren, callee, arguments, argument_count) { return cannot_assign(checker, expression); }
+        StructLiteral(type_ref, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return cannot_assign(checker, expression); }
+        NewArray(at, element, length) { return cannot_assign(checker, expression); }
+        NewMap(at, map_type) { return cannot_assign(checker, expression); }
+    }
+}
+
+// cannot_assign reports an expression that is not a mutable l-value.
+fn cannot_assign(Checker checker, Expr expression) -> TypeResult {
+    return TypeResult.Failed {
+        error = error_at(checker, ErrorKind.InvalidAssignment, expr_position(expression), "cannot assign to " + describe_expression(expression))
+    };
+}
+
+// check_member checks a member access expression used as a value.
+//
+// When the receiver is a type name rather than a value - "Enum.Case" or
+// "Union.Variant" - the member is interpreted as a variant reference instead of
+// a field access.
+fn check_member(Checker checker, Token dot, Expr receiver, Token member, Scope scope) -> TypeResult {
+    match (receiver) {
+        Identifier(receiver_token) {
+            match (lookup_scope(scope, receiver_token.text)) {
+                Absent {
+                    match (lookup_type(checker, receiver_token.text)) {
+                        Present(named_type) {
+                            if (is_variant(named_type)) {
+                                return resolve_variant_reference(checker, dot, member, named_type);
+                            }
+                        }
+                        Absent {
+                        }
+                    }
+                }
+                Present(symbol) {
+                }
+            }
+        }
+        Integer(token) { }
+        Float(token) { }
+        String(token) { }
+        Boolean(token, value) { }
+        Unary(operator, operand, postfix) { }
+        Binary(operator, left, right) { }
+        Assign(operator, target, value) { }
+        Call(open_paren, callee, arguments, argument_count) { }
+        Member(receiver_dot, receiver_value, receiver_member) { }
+        StructLiteral(type_ref, open_brace, fields, field_count) { }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { }
+        NewArray(at, element, length) { }
+        NewMap(at, map_type) { }
+        Index(bracket, target, index) { }
+    }
+
+    TypeResult receiver_result = check_expr(checker, receiver, scope);
+    if (!type_ok(receiver_result)) {
+        return receiver_result;
+    }
+    return resolve_member(checker, dot, member, type_value(receiver_result));
+}
+
+// resolve_variant_reference resolves a qualified variant reference, "Type.Variant",
+// which denotes the variant itself. Only a variant with no fields is a value.
+fn resolve_variant_reference(Checker checker, Token dot, Token member, Type named_type) -> TypeResult {
+    Position at = position_of_token(dot);
+    if (!has(named_type.variant_index, member.text)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.UndefinedName, at, variant_kind_word(named_type) + " " + named_type.name + " has no variant " + quoted(member.text))
+        };
+    }
+    Variant variant = named_type.variant_index[member.text];
+    if (variant_has_fields(variant)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, at, "variant " + named_type.name + "." + variant.name + " carries fields and must be constructed as " + named_type.name + "." + variant.name + " { ... }")
+        };
+    }
+    return TypeResult.Ok { type = named_type };
+}
+
+// variant_kind_word names the kind of a variant type for diagnostics.
+public fn variant_kind_word(Type named_type) -> string {
+    if (is_enum(named_type)) {
+        return "enum";
+    }
+    return "union";
+}
+
+// check_variant_literal checks a tagged-union variant construction,
+// "Union.Variant { field = value, ... }".
+fn check_variant_literal(Checker checker, TypeRef type_ref, Token variant_token, Token open_brace, FieldInit[] fields, int field_count, Scope scope) -> TypeResult {
+    TypeResult union_result = resolve_type(checker, type_ref);
+    if (!type_ok(union_result)) {
+        return union_result;
+    }
+    Type union_type = type_value(union_result);
+    if (!is_union(union_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, type_position(type_ref), type_string(union_type) + " is not a union type")
+        };
+    }
+
+    if (!has(union_type.variant_index, variant_token.text)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.UndefinedName, type_position(type_ref), "union " + union_type.name + " has no variant " + quoted(variant_token.text))
+        };
+    }
+    Variant variant = union_type.variant_index[variant_token.text];
+    if (!variant_has_fields(variant)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, position_of_token(open_brace), "variant " + union_type.name + "." + variant.name + " carries no fields and is written without braces")
+        };
+    }
+
+    map[string]FieldInit initialized = new map[string]FieldInit;
+    int index = 0;
+    while (index < field_count) {
+        FieldInit field = fields[index];
+        Position field_at = position_of_token(field.name);
+
+        if (!has(variant.field_index, field.name.text)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.UndefinedName, field_at, "variant " + variant.name + " has no field " + quoted(field.name.text))
+            };
+        }
+        if (has(initialized, field.name.text)) {
+            FieldInit earlier = initialized[field.name.text];
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.DuplicateDeclaration, field_at, "field " + quoted(field.name.text) + " is initialized more than once (first at " + decimal(position_of_token(earlier.name).line) + ":" + decimal(position_of_token(earlier.name).column) + ")")
+            };
+        }
+        initialized[field.name.text] = field;
+
+        StructField definition = variant.field_index[field.name.text];
+        TypeResult value_result = check_expr(checker, field.value, scope);
+        if (!type_ok(value_result)) {
+            return value_result;
+        }
+        OptionalError mismatch = require_same_type(checker, ErrorKind.TypeMismatch, type_value(value_result), definition.type, expr_position(field.value), "field " + quoted(field.name.text) + " of " + union_type.name + "." + variant.name);
+        match (mismatch) {
+            Present(error) {
+                return TypeResult.Failed { error = error };
+            }
+            Absent {
+            }
+        }
+        index++;
+    }
+
+    int field_index = 0;
+    while (field_index < variant.field_count) {
+        StructField definition = variant.fields[field_index];
+        if (!has(initialized, definition.name)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, position_of_token(open_brace), "variant literal for " + union_type.name + "." + variant.name + " is missing field " + quoted(definition.name))
+            };
+        }
+        field_index++;
+    }
+
+    return TypeResult.Ok { type = union_type };
+}
+
+// resolve_member resolves a field access on a receiver of the given type.
+fn resolve_member(Checker checker, Token dot, Token member, Type receiver_type) -> TypeResult {
+    Position at = position_of_token(dot);
+    if (is_none(receiver_type) || is_void(receiver_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "cannot access member " + quoted(member.text) + " on a value with no value")
+        };
+    }
+    if (is_union(receiver_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "cannot access member " + quoted(member.text) + " on union " + receiver_type.name + "; use match to inspect a variant")
+        };
+    }
+    if (is_enum(receiver_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "cannot access member " + quoted(member.text) + " on enum " + receiver_type.name)
+        };
+    }
+    if (!is_struct(receiver_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "cannot access member " + quoted(member.text) + " on a value of type " + type_string(receiver_type))
+        };
+    }
+    StructInfo info = struct_info_of(receiver_type);
+    if (!has(info.field_index, member.text)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.UndefinedName, at, "struct " + receiver_type.name + " has no field " + quoted(member.text))
+        };
+    }
+    return TypeResult.Ok { type = info.field_index[member.text].type };
+}
+
+// check_call checks a function call.
+fn check_call(Checker checker, Token open_paren, Expr callee, Expr[] arguments, int argument_count, Scope scope) -> TypeResult {
+    FunctionResult callee_result = resolve_callee(checker, callee, scope);
+    if (!function_ok(callee_result)) {
+        return TypeResult.Failed { error = function_error(callee_result) };
+    }
+    Function function = function_value(callee_result);
+
+    if (function.builtin == BuiltinKind.Print) {
+        return check_variadic_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
+    if (function.builtin == BuiltinKind.Length) {
+        return check_length_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
+    if (function.builtin == BuiltinKind.MapHas) {
+        return check_map_has_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
+    if (function.builtin == BuiltinKind.Substring) {
+        return check_substring_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
+
+    if (argument_count != function.parameter_count) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects " + decimal(function.parameter_count) + " argument(s), got " + decimal(argument_count))
+        };
+    }
+
+    int index = 0;
+    while (index < argument_count) {
+        TypeResult argument_result = check_expr(checker, arguments[index], scope);
+        if (!type_ok(argument_result)) {
+            return argument_result;
+        }
+        string context = "argument " + decimal(index + 1) + " of " + quoted(function.name);
+        OptionalError mismatch = require_same_type(checker, ErrorKind.TypeMismatch, type_value(argument_result), function.parameter_types[index], expr_position(arguments[index]), context);
+        match (mismatch) {
+            Present(error) {
+                return TypeResult.Failed { error = error };
+            }
+            Absent {
+            }
+        }
+        index++;
+    }
+
+    return TypeResult.Ok { type = function.return_type };
+}
+
+// resolve_callee resolves the callee of a call expression to a function. The
+// callee must be a plain identifier naming a user function or a built-in.
+fn resolve_callee(Checker checker, Expr callee, Scope scope) -> FunctionResult {
+    match (callee) {
+        Identifier(identifier) {
+            match (lookup_scope(scope, identifier.text)) {
+                Present(symbol) {
+                    return FunctionResult.Failed {
+                        error = error_at(checker, ErrorKind.BadCall, position_of_token(identifier), quoted(identifier.text) + " is a variable, not a function")
+                    };
+                }
+                Absent {
+                }
+            }
+            match (lookup_function(checker, identifier.text)) {
+                Present(function) {
+                    return FunctionResult.Ok { function = function };
+                }
+                Absent {
+                }
+            }
+            if (has(checker.builtins, identifier.text)) {
+                return FunctionResult.Ok { function = checker.builtins[identifier.text] };
+            }
+            match (lookup_type(checker, identifier.text)) {
+                Present(named) {
+                    return FunctionResult.Failed {
+                        error = error_at(checker, ErrorKind.BadCall, position_of_token(identifier), "type " + quoted(identifier.text) + " is not a function")
+                    };
+                }
+                Absent {
+                }
+            }
+            match (private_function(checker, identifier.text)) {
+                Present(path) {
+                    return FunctionResult.Failed {
+                        error = error_at(checker, ErrorKind.PrivateAccess, position_of_token(identifier), "function " + quoted(identifier.text) + " is private to " + path)
+                    };
+                }
+                Absent {
+                }
+            }
+            match (private_type(checker, identifier.text)) {
+                Present(path) {
+                    return FunctionResult.Failed {
+                        error = error_at(checker, ErrorKind.PrivateAccess, position_of_token(identifier), "type " + quoted(identifier.text) + " is private to " + path)
+                    };
+                }
+                Absent {
+                }
+            }
+            return FunctionResult.Failed {
+                error = error_at(checker, ErrorKind.UndefinedName, position_of_token(identifier), "undefined function " + quoted(identifier.text))
+            };
+        }
+        Integer(token) { return cannot_call(checker, callee); }
+        Float(token) { return cannot_call(checker, callee); }
+        String(token) { return cannot_call(checker, callee); }
+        Boolean(token, value) { return cannot_call(checker, callee); }
+        Unary(operator, operand, postfix) { return cannot_call(checker, callee); }
+        Binary(operator, left, right) { return cannot_call(checker, callee); }
+        Assign(operator, target, value) { return cannot_call(checker, callee); }
+        Call(open_paren, inner_callee, arguments, argument_count) { return cannot_call(checker, callee); }
+        Member(dot, receiver, member) { return cannot_call(checker, callee); }
+        StructLiteral(type_ref, open_brace, fields, field_count) { return cannot_call(checker, callee); }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) { return cannot_call(checker, callee); }
+        NewArray(at, element, length) { return cannot_call(checker, callee); }
+        NewMap(at, map_type) { return cannot_call(checker, callee); }
+        Index(bracket, target, index) { return cannot_call(checker, callee); }
+    }
+}
+
+// cannot_call reports an expression that is not callable.
+fn cannot_call(Checker checker, Expr callee) -> FunctionResult {
+    return FunctionResult.Failed {
+        error = error_at(checker, ErrorKind.BadCall, expr_position(callee), "cannot call " + describe_expression(callee))
+    };
+}
+
+// check_variadic_call checks a call to a variadic built-in such as print. It
+// requires at least one argument, and every argument must be one of the
+// built-in's allowed types.
+fn check_variadic_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
+    if (argument_count == 0) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects at least one argument")
+        };
+    }
+    int index = 0;
+    while (index < argument_count) {
+        TypeResult argument_result = check_expr(checker, arguments[index], scope);
+        if (!type_ok(argument_result)) {
+            return argument_result;
+        }
+        if (!contains_type(function.allowed_types, function.allowed_count, type_value(argument_result))) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[index]), "argument " + decimal(index + 1) + " of " + quoted(function.name) + " cannot print a value of type " + type_string(type_value(argument_result)))
+            };
+        }
+        index++;
+    }
+    return TypeResult.Ok { type = function.return_type };
+}
+
+// check_new_array checks an array creation expression, "new Element[length]".
+fn check_new_array(Checker checker, TypeRef element_ref, Expr length, Scope scope) -> TypeResult {
+    TypeResult element_result = resolve_type(checker, element_ref);
+    if (!type_ok(element_result)) {
+        return element_result;
+    }
+    Type element = type_value(element_result);
+    if (is_void(element)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, type_position(element_ref), "array element type cannot be void")
+        };
+    }
+
+    TypeResult length_result = check_expr(checker, length, scope);
+    if (!type_ok(length_result)) {
+        return length_result;
+    }
+    if (type_value(length_result).kind != TypeKind.Int) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(length), "array length must be int, found " + type_string(type_value(length_result)))
+        };
+    }
+    return TypeResult.Ok { type = array_type(element) };
+}
+
+// check_index checks an indexing expression used as a value.
+fn check_index(Checker checker, Token bracket, Expr target, Expr index, Scope scope) -> TypeResult {
+    TypeResult target_result = check_expr(checker, target, scope);
+    if (!type_ok(target_result)) {
+        return target_result;
+    }
+    return check_index_operands(checker, bracket, type_value(target_result), index, scope);
+}
+
+// check_index_operands checks the index of an indexing expression whose target
+// already has type target_type, and returns the element, value, or byte type.
+fn check_index_operands(Checker checker, Token bracket, Type target_type, Expr index, Scope scope) -> TypeResult {
+    bool indexable = is_array(target_type) || is_map(target_type) || target_type.kind == TypeKind.String;
+    if (!indexable) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, position_of_token(bracket), "cannot index a value of type " + type_string(target_type))
+        };
+    }
+
+    TypeResult index_result = check_expr(checker, index, scope);
+    if (!type_ok(index_result)) {
+        return index_result;
+    }
+    Type index_type = type_value(index_result);
+    Position at = expr_position(index);
+
+    if (is_map(target_type)) {
+        Type key_type = key_of(target_type);
+        if (!same_type(index_type, key_type)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, at, "map key must be " + type_string(key_type) + ", found " + type_string(index_type))
+            };
+        }
+        return TypeResult.Ok { type = value_of(target_type) };
+    }
+
+    if (index_type.kind != TypeKind.Int) {
+        if (target_type.kind == TypeKind.String) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, at, "string index must be int, found " + type_string(index_type))
+            };
+        }
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "array index must be int, found " + type_string(index_type))
+        };
+    }
+    if (target_type.kind == TypeKind.String) {
+        // A string is indexed by byte and yields the byte's value.
+        return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+    }
+    return TypeResult.Ok { type = element_of(target_type) };
+}
+
+// check_length_call checks a call to the built-in length, which takes exactly one
+// array, map, or string argument and returns its number of elements or bytes as
+// an int.
+fn check_length_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
+    if (argument_count != 1) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects 1 argument, got " + decimal(argument_count))
+        };
+    }
+    TypeResult argument_result = check_expr(checker, arguments[0], scope);
+    if (!type_ok(argument_result)) {
+        return argument_result;
+    }
+    Type argument_type = type_value(argument_result);
+    bool acceptable = is_array(argument_type) || is_map(argument_type) || argument_type.kind == TypeKind.String;
+    if (!acceptable) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[0]), "length expects an array, map, or string, found " + type_string(argument_type))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+}
+
+// check_map_has_call checks a call to the built-in has, which takes a map and a
+// key and reports whether the key is present.
+fn check_map_has_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
+    if (argument_count != 2) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects 2 arguments, got " + decimal(argument_count))
+        };
+    }
+
+    TypeResult map_result = check_expr(checker, arguments[0], scope);
+    if (!type_ok(map_result)) {
+        return map_result;
+    }
+    Type map_type_value = type_value(map_result);
+    if (!is_map(map_type_value)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[0]), quoted(function.name) + " expects a map as its first argument, found " + type_string(map_type_value))
+        };
+    }
+
+    TypeResult key_result = check_expr(checker, arguments[1], scope);
+    if (!type_ok(key_result)) {
+        return key_result;
+    }
+    Type key_type = key_of(map_type_value);
+    if (!same_type(type_value(key_result), key_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[1]), "map key must be " + type_string(key_type) + ", found " + type_string(type_value(key_result)))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+}
+
+// check_substring_call checks a call to the built-in substring, which takes a
+// string and two int byte offsets and returns the bytes in [start, end).
+fn check_substring_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
+    if (argument_count != 3) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects 3 arguments, got " + decimal(argument_count))
+        };
+    }
+
+    TypeResult source_result = check_expr(checker, arguments[0], scope);
+    if (!type_ok(source_result)) {
+        return source_result;
+    }
+    if (type_value(source_result).kind != TypeKind.String) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[0]), quoted(function.name) + " expects a string as its first argument, found " + type_string(type_value(source_result)))
+        };
+    }
+
+    int index = 1;
+    while (index < argument_count) {
+        TypeResult offset_result = check_expr(checker, arguments[index], scope);
+        if (!type_ok(offset_result)) {
+            return offset_result;
+        }
+        if (type_value(offset_result).kind != TypeKind.Int) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[index]), "substring offsets must be int, found " + type_string(type_value(offset_result)))
+            };
+        }
+        index++;
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.String, "string") };
+}
+
+// check_new_map checks map creation, "new map[Key]Value".
+fn check_new_map(Checker checker, TypeRef map_ref) -> TypeResult {
+    TypeResult map_result = resolve_type(checker, map_ref);
+    if (!type_ok(map_result)) {
+        return map_result;
+    }
+    Type resolved = type_value(map_result);
+    if (!is_map(resolved)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, type_position(map_ref), type_string(resolved) + " is not a map type")
+        };
+    }
+    return TypeResult.Ok { type = resolved };
+}
+
+// check_struct_literal checks a struct literal expression.
+//
+// The named type must be a struct; every supplied field must exist, be
+// initialized at most once, and have the declared type; and every field of the
+// struct must be initialized.
+fn check_struct_literal(Checker checker, TypeRef type_ref, Token open_brace, FieldInit[] fields, int field_count, Scope scope) -> TypeResult {
+    TypeResult struct_result = resolve_type(checker, type_ref);
+    if (!type_ok(struct_result)) {
+        return struct_result;
+    }
+    Type struct_type = type_value(struct_result);
+    if (!is_struct(struct_type)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidType, type_position(type_ref), type_string(struct_type) + " is not a struct type")
+        };
+    }
+
+    StructInfo info = struct_info_of(struct_type);
+    map[string]FieldInit initialized = new map[string]FieldInit;
+
+    int index = 0;
+    while (index < field_count) {
+        FieldInit field = fields[index];
+        Position field_at = position_of_token(field.name);
+
+        if (!has(info.field_index, field.name.text)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.UndefinedName, field_at, "struct " + struct_type.name + " has no field " + quoted(field.name.text))
+            };
+        }
+        if (has(initialized, field.name.text)) {
+            FieldInit earlier = initialized[field.name.text];
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.DuplicateDeclaration, field_at, "field " + quoted(field.name.text) + " is initialized more than once (first at " + decimal(position_of_token(earlier.name).line) + ":" + decimal(position_of_token(earlier.name).column) + ")")
+            };
+        }
+        initialized[field.name.text] = field;
+
+        StructField definition = info.field_index[field.name.text];
+        TypeResult value_result = check_expr(checker, field.value, scope);
+        if (!type_ok(value_result)) {
+            return value_result;
+        }
+        OptionalError mismatch = require_same_type(checker, ErrorKind.TypeMismatch, type_value(value_result), definition.type, expr_position(field.value), "field " + quoted(field.name.text) + " of " + struct_type.name);
+        match (mismatch) {
+            Present(error) {
+                return TypeResult.Failed { error = error };
+            }
+            Absent {
+            }
+        }
+        index++;
+    }
+
+    int field_index = 0;
+    while (field_index < info.field_count) {
+        StructField definition = info.fields[field_index];
+        if (!has(initialized, definition.name)) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.TypeMismatch, position_of_token(open_brace), "struct literal for " + struct_type.name + " is missing field " + quoted(definition.name))
+            };
+        }
+        field_index++;
+    }
+
+    return TypeResult.Ok { type = struct_type };
+}
+
+// describe_expression renders an expression for use in an error message.
+public fn describe_expression(Expr expression) -> string {
+    match (expression) {
+        Identifier(token) {
+            return "variable " + quoted(token.text);
+        }
+        Integer(token) {
+            return "an integer literal";
+        }
+        Float(token) {
+            return "a float literal";
+        }
+        String(token) {
+            return "a string literal";
+        }
+        Boolean(token, value) {
+            return "a bool literal";
+        }
+        Call(open_paren, callee, arguments, argument_count) {
+            return "a function call";
+        }
+        Member(dot, receiver, member) {
+            return "member " + quoted(member.text);
+        }
+        Binary(operator, left, right) {
+            return "a " + quoted(operator.text) + " expression";
+        }
+        Unary(operator, operand, postfix) {
+            return "a " + quoted(operator.text) + " expression";
+        }
+        Assign(operator, target, value) {
+            return "an assignment";
+        }
+        StructLiteral(type_ref, open_brace, fields, field_count) {
+            return "a struct literal";
+        }
+        VariantLiteral(type_ref, variant, open_brace, fields, field_count) {
+            return "a variant literal";
+        }
+        NewArray(at, element, length) {
+            return "an array creation";
+        }
+        NewMap(at, map_type) {
+            return "a map creation";
+        }
+        Index(bracket, target, index) {
+            return "an indexed element";
+        }
+    }
+}

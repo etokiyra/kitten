@@ -1,0 +1,357 @@
+// model.ktn - the data model of the Kitten-written semantic checker.
+//
+// It mirrors the reference checker's data structures (checker/types.go and
+// checker/symbols.go) and holds no checking logic: types, struct and variant
+// definitions, symbols, function signatures, scopes, and the checker's state.
+//
+// Two representations differ from the reference, both because Kitten has no null
+// value and no pointer identity to compare with ==:
+//
+//   - A named type carries a unique integer id, assigned when it is registered,
+//     and types are compared structurally (same_type). The reference interns
+//     array and map types and compares every type by pointer, which yields the
+//     same answers: two composite types are equal exactly when their parts are,
+//     and two named types are equal exactly when they are the same declaration.
+//   - Absence is a value. A type's payload slots are OptionalResolvedType unions rather
+//     than nil references, and the absent type is the None kind rather than a
+//     null reference. A struct value cannot be constructed recursively, so an
+//     absent payload is Absent rather than a placeholder object.
+
+import "../parser/ast.ktn";
+
+// TypeKind classifies a resolved type.
+public enum TypeKind {
+    Int,
+    Float,
+    Bool,
+    String,
+    Void,
+    Struct,
+    Array,
+    Enum,
+    Union,
+    Map,
+
+    // None stands in for the reference implementation's nil type: the absent
+    // value of a Type, used for a type that is not yet known (a function's
+    // return type before it is resolved) and for a type that has no payload.
+    None
+}
+
+// OptionalResolvedType is a resolved type that may be absent.
+public union OptionalResolvedType {
+    Absent
+    Present { Type type; }
+}
+
+// OptionalStructInfo is a struct definition that may be absent.
+public union OptionalStructInfo {
+    Absent
+    Present { StructInfo info; }
+}
+
+// OptionalSymbol is a resolved name that may be absent.
+public union OptionalSymbol {
+    Absent
+    Present { Symbol symbol; }
+}
+
+// OptionalFunction is a function signature that may be absent.
+public union OptionalFunction {
+    Absent
+    Present { Function function; }
+}
+
+// StructField is a single struct or variant payload field.
+public struct StructField {
+    string name;
+    Type type;
+    Position at;
+}
+
+// Variant is one case of an enum or one variant of a tagged union.
+public struct Variant {
+    string name;
+    int index;
+    StructField[] fields;
+    int field_count;
+    map[string]StructField field_index;
+    Position at;
+}
+
+// StructInfo is the definition of a struct type.
+public struct StructInfo {
+    string name;
+    StructField[] fields;
+    int field_count;
+    map[string]StructField field_index;
+}
+
+// Type is a resolved Kitten type.
+public struct Type {
+    // id is the type's identity. Named types (struct, enum, union) receive a
+    // unique id when they are registered; composite kinds are compared
+    // structurally and keep id 0.
+    int id;
+
+    TypeKind kind;
+    string name;
+
+    // struct_info is present when kind is Struct.
+    OptionalStructInfo struct_info;
+
+    // element is present when kind is Array.
+    OptionalResolvedType element;
+
+    // key and value are present when kind is Map.
+    OptionalResolvedType key;
+    OptionalResolvedType value;
+
+    // variants and variant_index are filled when kind is Enum or Union.
+    Variant[] variants;
+    int variant_count;
+    map[string]Variant variant_index;
+
+    // module is the id of the module that declared a named type.
+    int module;
+}
+
+// --- Type construction -------------------------------------------------------
+
+// empty_variant_array returns an array with room for capacity variants.
+public fn empty_variant_array(int capacity) -> Variant[] {
+    int size = capacity;
+    if (size < 1) {
+        size = 1;
+    }
+    return new Variant[size];
+}
+
+// empty_field_array returns an array with room for capacity fields.
+public fn empty_field_array(int capacity) -> StructField[] {
+    int size = capacity;
+    if (size < 1) {
+        size = 1;
+    }
+    return new StructField[size];
+}
+
+// none_type returns the absent type.
+public fn none_type() -> Type {
+    return Type {
+        id = 0,
+        kind = TypeKind.None,
+        name = "",
+        struct_info = OptionalStructInfo.Absent,
+        element = OptionalResolvedType.Absent,
+        key = OptionalResolvedType.Absent,
+        value = OptionalResolvedType.Absent,
+        variants = empty_variant_array(0),
+        variant_count = 0,
+        variant_index = new map[string]Variant,
+        module = 0
+    };
+}
+
+// new_struct_info returns an empty struct definition with room for capacity
+// fields.
+public fn new_struct_info(string name, int capacity) -> StructInfo {
+    return StructInfo {
+        name = name,
+        fields = empty_field_array(capacity),
+        field_count = 0,
+        field_index = new map[string]StructField
+    };
+}
+
+// primitive_type returns one of the language's built-in types.
+public fn primitive_type(TypeKind kind, string name) -> Type {
+    return Type {
+        id = 0,
+        kind = kind,
+        name = name,
+        struct_info = OptionalStructInfo.Absent,
+        element = OptionalResolvedType.Absent,
+        key = OptionalResolvedType.Absent,
+        value = OptionalResolvedType.Absent,
+        variants = empty_variant_array(0),
+        variant_count = 0,
+        variant_index = new map[string]Variant,
+        module = 0
+    };
+}
+
+// named_type returns a newly registered struct, enum, or union type. capacity is
+// the number of variants the declaration can contribute.
+public fn named_type(int id, TypeKind kind, string name, int module, int capacity, string struct_name, int field_capacity) -> Type {
+    OptionalStructInfo info = OptionalStructInfo.Absent;
+    if (kind == TypeKind.Struct) {
+        info = OptionalStructInfo.Present { info = new_struct_info(struct_name, field_capacity) };
+    }
+    return Type {
+        id = id,
+        kind = kind,
+        name = name,
+        struct_info = info,
+        element = OptionalResolvedType.Absent,
+        key = OptionalResolvedType.Absent,
+        value = OptionalResolvedType.Absent,
+        variants = empty_variant_array(capacity),
+        variant_count = 0,
+        variant_index = new map[string]Variant,
+        module = module
+    };
+}
+
+// array_type returns the type of an array whose element type is element. Its
+// name is composed exactly as the reference composes it, so diagnostics agree.
+public fn array_type(Type element) -> Type {
+    return Type {
+        id = 0,
+        kind = TypeKind.Array,
+        name = element.name + "[]",
+        struct_info = OptionalStructInfo.Absent,
+        element = OptionalResolvedType.Present { type = element },
+        key = OptionalResolvedType.Absent,
+        value = OptionalResolvedType.Absent,
+        variants = empty_variant_array(0),
+        variant_count = 0,
+        variant_index = new map[string]Variant,
+        module = 0
+    };
+}
+
+// map_type returns the type of a map from key_type to value_type.
+public fn map_type(Type key_type, Type value_type) -> Type {
+    return Type {
+        id = 0,
+        kind = TypeKind.Map,
+        name = "map[" + key_type.name + "]" + value_type.name,
+        struct_info = OptionalStructInfo.Absent,
+        element = OptionalResolvedType.Absent,
+        key = OptionalResolvedType.Present { type = key_type },
+        value = OptionalResolvedType.Present { type = value_type },
+        variants = empty_variant_array(0),
+        variant_count = 0,
+        variant_index = new map[string]Variant,
+        module = 0
+    };
+}
+
+// --- Type accessors ----------------------------------------------------------
+
+// element_of returns an array type's element type. It is only called when the
+// kind is Array; the absent case returns the absent type so the path is defined
+// rather than undefined.
+public fn element_of(Type value) -> Type {
+    match (value.element) {
+        Present(inner) {
+            return inner;
+        }
+        Absent {
+            return none_type();
+        }
+    }
+}
+
+// key_of returns a map type's key type.
+public fn key_of(Type value) -> Type {
+    match (value.key) {
+        Present(inner) {
+            return inner;
+        }
+        Absent {
+            return none_type();
+        }
+    }
+}
+
+// value_of returns a map type's value type.
+public fn value_of(Type value) -> Type {
+    match (value.value) {
+        Present(inner) {
+            return inner;
+        }
+        Absent {
+            return none_type();
+        }
+    }
+}
+
+// struct_info_of returns a struct type's definition. It is only called when the
+// kind is Struct; the absent case returns an empty definition so the path is
+// defined rather than undefined.
+public fn struct_info_of(Type value) -> StructInfo {
+    match (value.struct_info) {
+        Present(info) {
+            return info;
+        }
+        Absent {
+            return new_struct_info("", 0);
+        }
+    }
+}
+
+// --- Type predicates and comparison -----------------------------------------
+
+public fn is_void(Type value) -> bool { return value.kind == TypeKind.Void; }
+public fn is_numeric(Type value) -> bool { return value.kind == TypeKind.Int || value.kind == TypeKind.Float; }
+public fn is_struct(Type value) -> bool { return value.kind == TypeKind.Struct; }
+public fn is_array(Type value) -> bool { return value.kind == TypeKind.Array; }
+public fn is_enum(Type value) -> bool { return value.kind == TypeKind.Enum; }
+public fn is_union(Type value) -> bool { return value.kind == TypeKind.Union; }
+public fn is_map(Type value) -> bool { return value.kind == TypeKind.Map; }
+public fn is_none(Type value) -> bool { return value.kind == TypeKind.None; }
+
+// is_variant reports whether a type has named variants: an enum or a union.
+public fn is_variant(Type value) -> bool {
+    return value.kind == TypeKind.Enum || value.kind == TypeKind.Union;
+}
+
+// same_type reports whether two types are the same type.
+//
+// Primitive and void types compare by kind, because they have one meaning each.
+// Array and map types compare through their parts, which is what interning the
+// reference performs. Named types compare by identity: their id was assigned
+// when they were registered, so two declarations never share one.
+public fn same_type(Type left, Type right) -> bool {
+    if (left.kind != right.kind) {
+        return false;
+    }
+    if (left.kind == TypeKind.Array) {
+        return same_type(element_of(left), element_of(right));
+    }
+    if (left.kind == TypeKind.Map) {
+        return same_type(key_of(left), key_of(right)) && same_type(value_of(left), value_of(right));
+    }
+    if (left.kind == TypeKind.Struct || left.kind == TypeKind.Enum || left.kind == TypeKind.Union) {
+        return left.id == right.id;
+    }
+    return true;
+}
+
+// type_string renders a type for a diagnostic, mirroring Type.String in the
+// reference: the type's name, or "<invalid>" for the absent type.
+public fn type_string(Type value) -> string {
+    if (value.kind == TypeKind.None) {
+        return "<invalid>";
+    }
+    return value.name;
+}
+
+// variant_has_fields reports whether a variant carries a payload.
+public fn variant_has_fields(Variant variant) -> bool {
+    return variant.field_count > 0;
+}
+
+// contains_type reports whether types contains target.
+public fn contains_type(Type[] types, int count, Type target) -> bool {
+    int index = 0;
+    while (index < count) {
+        if (same_type(types[index], target)) {
+            return true;
+        }
+        index++;
+    }
+    return false;
+}

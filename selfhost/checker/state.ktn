@@ -1,0 +1,669 @@
+// state.ktn - the Kitten-written checker's state, name resolution, and
+// diagnostics.
+//
+// It mirrors the reference checker's symbol table and entry points
+// (checker/symbols.go and the lookup and error helpers in checker/checker.go),
+// and it holds the checker state that every pass shares.
+//
+// The reference looks up a resolved type or signature by AST node identity, in
+// maps keyed by the declaration pointer. Kitten has no map keyed by object
+// identity, so the passes look a declaration up by its module and its name:
+// duplicate names in one module are rejected, so a (module, name) pair
+// identifies a declaration exactly as its node does.
+
+import "../parser/ast.ktn";
+import "model.ktn";
+
+// ErrorKind categorizes a semantic error so that callers can distinguish the
+// kind of problem without matching on message text.
+public enum ErrorKind {
+    UndefinedName,
+    DuplicateDeclaration,
+    InvalidOperator,
+    TypeMismatch,
+    InvalidAssignment,
+    BadCall,
+    InvalidReturn,
+    InvalidType,
+    InvalidExpression,
+    PrivateAccess
+}
+
+// error_kind_name returns a single-token name for an error kind, so that a
+// driver can print it as one field. It is the harness's normalized identity for
+// the kind, in the same order as the kind's human-readable label.
+public fn error_kind_name(ErrorKind kind) -> string {
+    match (kind) {
+        UndefinedName { return "UndefinedName"; }
+        DuplicateDeclaration { return "DuplicateDeclaration"; }
+        InvalidOperator { return "InvalidOperator"; }
+        TypeMismatch { return "TypeMismatch"; }
+        InvalidAssignment { return "InvalidAssignment"; }
+        BadCall { return "BadCall"; }
+        InvalidReturn { return "InvalidReturn"; }
+        InvalidType { return "InvalidType"; }
+        InvalidExpression { return "InvalidExpression"; }
+        PrivateAccess { return "PrivateAccess"; }
+    }
+}
+
+// CheckError is a semantic error with a source position.
+public struct CheckError {
+    ErrorKind kind;
+
+    // file is the path of the module the error was found in, mirroring the
+    // reference. It is empty when no module is current.
+    string file;
+
+    int line;
+    int column;
+    string message;
+}
+
+// OptionalError is a diagnostic that may be absent, used by helpers that report
+// at most one error.
+public union OptionalError {
+    Absent
+    Present { CheckError error; }
+}
+
+// OptionalString is a string that may be absent, used where the reference
+// returns a string and a boolean.
+public union OptionalString {
+    Absent
+    Present { string value; }
+}
+
+// TypeResult is a resolved type or the error that prevented it.
+public union TypeResult {
+    Ok { Type type; }
+    Failed { CheckError error; }
+}
+
+// StepResult is the outcome of a step that produces no value.
+public union StepResult {
+    Ok
+    Failed { CheckError error; }
+}
+
+// FunctionResult is a resolved function signature or an error.
+public union FunctionResult {
+    Ok { Function function; }
+    Failed { CheckError error; }
+}
+
+// DeclareResult reports whether a name was added to a scope, or that it was
+// already declared there.
+public union DeclareResult {
+    Ok
+    Duplicate { Position at; }
+}
+
+// CheckSummary reports what a successful check covered.
+public struct CheckSummary {
+    int module_count;
+    int type_count;
+    int function_count;
+    int body_count;
+}
+
+// CheckResult distinguishes a successful check from a semantic error.
+public union CheckResult {
+    Success { CheckSummary summary; }
+    Failure { CheckError error; }
+}
+
+// --- Value extraction from result unions -------------------------------------
+
+public fn type_ok(TypeResult result) -> bool {
+    match (result) {
+        Ok(type) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// type_value reads the type from a successful result. Its failure branch returns
+// the absent type; no caller can observe it, because the result is tested first.
+public fn type_value(TypeResult result) -> Type {
+    match (result) {
+        Ok(type) { return type; }
+        Failed(error) { return none_type(); }
+    }
+}
+
+public fn type_error(TypeResult result) -> CheckError {
+    match (result) {
+        Ok(type) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+public fn step_ok(StepResult result) -> bool {
+    match (result) {
+        Ok { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+public fn step_error(StepResult result) -> CheckError {
+    match (result) {
+        Ok { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+public fn function_ok(FunctionResult result) -> bool {
+    match (result) {
+        Ok(function) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+public fn function_value(FunctionResult result) -> Function {
+    match (result) {
+        Ok(function) { return function; }
+        Failed(error) { return absent_function(); }
+    }
+}
+
+public fn function_error(FunctionResult result) -> CheckError {
+    match (result) {
+        Ok(function) { return no_error(); }
+        Failed(error) { return error; }
+    }
+}
+
+// no_error builds the error used by the accessors above. It is never reported:
+// an accessor is only called after its result tested as successful.
+public fn no_error() -> CheckError {
+    return CheckError { kind = ErrorKind.InvalidType, file = "", line = 0, column = 0, message = "" };
+}
+
+// absent_function is the sentinel of the accessor above, which no caller can
+// observe.
+public fn absent_function() -> Function {
+    return Function {
+        name = "",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = none_type(),
+        module = 0,
+        builtin = BuiltinKind.NotBuiltin,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+}
+
+// --- Formatting helpers ------------------------------------------------------
+
+// decimal renders an int in base ten, exactly as the reference's %d verb does.
+// The language has no built-in integer-to-string conversion, so a checker that
+// must embed a position or a count in a message performs one here.
+public fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    bool negative = value < 0;
+    int remaining = value;
+    if (negative) {
+        remaining = 0 - value;
+    }
+    string digits = "0123456789";
+    string result = "";
+    while (remaining > 0) {
+        int digit = remaining % 10;
+        result = substring(digits, digit, digit + 1) + result;
+        remaining = remaining / 10;
+    }
+    if (negative) {
+        return "-" + result;
+    }
+    return result;
+}
+
+// quoted renders a name or an operator the way the reference's %q verb does.
+//
+// Every %q in a checker diagnostic quotes an identifier or an operator, both of
+// which are ASCII letters, digits, underscores, and punctuation with no
+// character that needs escaping, so wrapping the text in quotation marks is
+// exactly what %q produces.
+public fn quoted(string text) -> string {
+    return "\"" + text + "\"";
+}
+
+// --- Symbols and scopes ------------------------------------------------------
+
+// SymbolKind distinguishes the kinds of name a scope can hold.
+public enum SymbolKind {
+    Variable,
+    Function
+}
+
+// Symbol is a resolved name. The reference also records the resolved function
+// for a call callee; that field is written for code generation only and is read
+// by nothing that decides whether a program is valid, so it is not carried here.
+public struct Symbol {
+    string name;
+    SymbolKind kind;
+    Type type;
+    Position at;
+}
+
+// BuiltinKind identifies a language built-in function. NotBuiltin is the zero
+// value, used for every user-defined function.
+public enum BuiltinKind {
+    NotBuiltin,
+    Print,
+    Length,
+    ReadFile,
+    MapHas,
+    Substring
+}
+
+// Function is a resolved function signature, either user-defined or built-in.
+public struct Function {
+    string name;
+    string[] parameter_names;
+    int parameter_count;
+    Type[] parameter_types;
+    Type return_type;
+    int module;
+    BuiltinKind builtin;
+    bool variadic;
+    Type[] allowed_types;
+    int allowed_count;
+}
+
+// Scope is a lexical scope: a set of names plus an optional enclosing scope.
+// A nil parent in the reference is the Absent case here, and names in enclosing
+// scopes are not consulted when declaring, which is what allows shadowing.
+public struct Scope {
+    map[string]Symbol symbols;
+    OptionalScope parent;
+}
+
+// OptionalScope is a scope that may be absent.
+public union OptionalScope {
+    Absent
+    Present { Scope scope; }
+}
+
+// new_scope returns an empty scope nested inside parent.
+public fn new_scope(OptionalScope parent) -> Scope {
+    return Scope { symbols = new map[string]Symbol, parent = parent };
+}
+
+// no_parent returns the parent of the outermost scope.
+public fn no_parent() -> OptionalScope {
+    return OptionalScope.Absent;
+}
+
+// declare_scope adds symbol to a scope, unless a symbol with the same name is
+// already declared there. Nothing is added in that case, so the caller can
+// report the duplicate with the earlier position.
+public fn declare_scope(Scope scope, Symbol symbol) -> DeclareResult {
+    if (has(scope.symbols, symbol.name)) {
+        return DeclareResult.Duplicate { at = scope.symbols[symbol.name].at };
+    }
+    scope.symbols[symbol.name] = symbol;
+    return DeclareResult.Ok;
+}
+
+// lookup_scope returns the symbol for name, searching the scope and then its
+// enclosing scopes.
+public fn lookup_scope(Scope scope, string name) -> OptionalSymbol {
+    Scope current = scope;
+    bool searching = true;
+    while (searching) {
+        if (has(current.symbols, name)) {
+            return OptionalSymbol.Present { symbol = current.symbols[name] };
+        }
+        match (current.parent) {
+            Absent {
+                searching = false;
+            }
+            Present(enclosing) {
+                current = enclosing;
+            }
+        }
+    }
+    return OptionalSymbol.Absent;
+}
+
+// --- Checker state -----------------------------------------------------------
+
+// Module is a parsed source unit together with its identity, mirroring
+// parser.Module.
+public struct Module {
+    string path;
+    int id;
+    Program program;
+}
+
+// ModuleInfo holds the declarations of one module during checking.
+public struct ModuleInfo {
+    map[string]Type types;
+    map[string]Function functions;
+    map[string]Position declared;
+}
+
+// Checker accumulates state during a single check. It holds no state outside the
+// call, so checking one program never affects another.
+public struct Checker {
+    // modules are the modules being checked, in order, with the root first.
+    Module[] modules;
+    int module_count;
+
+    // infos holds each module's declarations, indexed like modules.
+    ModuleInfo[] infos;
+
+    // current is the index of the module whose declaration is being processed,
+    // or -1 when no module is current. The reference uses a nil pointer.
+    int current;
+
+    map[string]Function builtins;
+
+    // public_types and public_functions hold every public declaration of every
+    // module, shared across the whole program.
+    map[string]Type public_types;
+    map[string]Function public_functions;
+
+    // return_type is the return type of the function currently being checked, or
+    // the absent type when no function is being checked.
+    Type return_type;
+
+    // next_type_id numbers named types so that identity comparison is exact.
+    int next_type_id;
+
+    // The summary counters report what a successful check covered.
+    int type_count;
+    int function_count;
+    int body_count;
+}
+
+// --- Diagnostics -------------------------------------------------------------
+
+// error_at builds a semantic error positioned at a source position and located
+// in the module currently being checked.
+public fn error_at(Checker checker, ErrorKind kind, Position at, string message) -> CheckError {
+    string file = "";
+    if (checker.current >= 0) {
+        file = checker.modules[checker.current].path;
+    }
+    return CheckError { kind = kind, file = file, line = at.line, column = at.column, message = message };
+}
+
+// require_same_type reports an error unless actual and expected are the same
+// type.
+public fn require_same_type(Checker checker, ErrorKind kind, Type actual, Type expected, Position at, string context) -> OptionalError {
+    if (same_type(actual, expected)) {
+        return OptionalError.Absent;
+    }
+    if (is_void(actual)) {
+        return OptionalError.Present {
+            error = error_at(checker, kind, at, context + ": a void value cannot be used here")
+        };
+    }
+    return OptionalError.Present {
+        error = error_at(checker, kind, at, context + ": expected " + type_string(expected) + ", found " + type_string(actual))
+    };
+}
+
+// --- Built-ins ---------------------------------------------------------------
+
+// builtin_functions returns the language's built-in functions.
+public fn builtin_functions() -> map[string]Function {
+    map[string]Function builtins = new map[string]Function;
+
+    builtins["print"] = Function {
+        name = "print",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = primitive_type(TypeKind.Void, "void"),
+        module = 0,
+        builtin = BuiltinKind.Print,
+        variadic = true,
+        allowed_types = allowed_print_types(),
+        allowed_count = 4
+    };
+    builtins["length"] = Function {
+        name = "length",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = primitive_type(TypeKind.Int, "int"),
+        module = 0,
+        builtin = BuiltinKind.Length,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["read_file"] = Function {
+        name = "read_file",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = read_file_parameter_types(),
+        return_type = primitive_type(TypeKind.String, "string"),
+        module = 0,
+        builtin = BuiltinKind.ReadFile,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["has"] = Function {
+        name = "has",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = primitive_type(TypeKind.Bool, "bool"),
+        module = 0,
+        builtin = BuiltinKind.MapHas,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["substring"] = Function {
+        name = "substring",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = primitive_type(TypeKind.String, "string"),
+        module = 0,
+        builtin = BuiltinKind.Substring,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    return builtins;
+}
+
+// allowed_print_types returns the types print accepts, in the reference's order.
+fn allowed_print_types() -> Type[] {
+    Type[] types = new Type[4];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    types[1] = primitive_type(TypeKind.Float, "float");
+    types[2] = primitive_type(TypeKind.Bool, "bool");
+    types[3] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+// read_file_parameter_types returns the parameter types of read_file. The
+// reference carries them for every non-variadic built-in; only read_file has
+// any, because the others are checked by dedicated rules.
+fn read_file_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+// --- Name resolution ---------------------------------------------------------
+
+// lookup_type resolves a type name in the current module's declarations and then
+// in the shared public declarations.
+public fn lookup_type(Checker checker, string name) -> OptionalResolvedType {
+    if (checker.current >= 0) {
+        map[string]Type own = checker.infos[checker.current].types;
+        if (has(own, name)) {
+            return OptionalResolvedType.Present { type = own[name] };
+        }
+    }
+    if (has(checker.public_types, name)) {
+        return OptionalResolvedType.Present { type = checker.public_types[name] };
+    }
+    return OptionalResolvedType.Absent;
+}
+
+// lookup_function resolves a function name in the current module's declarations
+// and then in the shared public declarations.
+public fn lookup_function(Checker checker, string name) -> OptionalFunction {
+    if (checker.current >= 0) {
+        map[string]Function own = checker.infos[checker.current].functions;
+        if (has(own, name)) {
+            return OptionalFunction.Present { function = own[name] };
+        }
+    }
+    if (has(checker.public_functions, name)) {
+        return OptionalFunction.Present { function = checker.public_functions[name] };
+    }
+    return OptionalFunction.Absent;
+}
+
+// private_type reports whether name is a type declared privately in another
+// module, and returns that module's path.
+public fn private_type(Checker checker, string name) -> OptionalString {
+    int index = 0;
+    while (index < checker.module_count) {
+        if (index != checker.current && has(checker.infos[index].types, name)) {
+            return OptionalString.Present { value = module_path(checker, checker.modules[index].id) };
+        }
+        index++;
+    }
+    return OptionalString.Absent;
+}
+
+// private_function reports whether name is a function declared privately in
+// another module, and returns that module's path.
+public fn private_function(Checker checker, string name) -> OptionalString {
+    int index = 0;
+    while (index < checker.module_count) {
+        if (index != checker.current && has(checker.infos[index].functions, name)) {
+            return OptionalString.Present { value = module_path(checker, checker.modules[index].id) };
+        }
+        index++;
+    }
+    return OptionalString.Absent;
+}
+
+// module_path returns the source path of the module with the given id, or a
+// descriptive fallback.
+public fn module_path(Checker checker, int id) -> string {
+    int index = 0;
+    while (index < checker.module_count) {
+        if (checker.modules[index].id == id) {
+            if (checker.modules[index].path != "") {
+                return checker.modules[index].path;
+            }
+            return "the main module";
+        }
+        index++;
+    }
+    return "another module";
+}
+
+// --- Type resolution ---------------------------------------------------------
+
+// resolve_type resolves a declared type reference to a type. It does not reject
+// void; callers decide whether void is acceptable in their context.
+public fn resolve_type(Checker checker, TypeRef reference) -> TypeResult {
+    match (reference) {
+        Map(keyword, key_ref, value_ref) {
+            TypeResult key_result = resolve_type(checker, key_ref);
+            if (!type_ok(key_result)) {
+                return key_result;
+            }
+            Type key_type = type_value(key_result);
+
+            TypeResult value_result = resolve_type(checker, value_ref);
+            if (!type_ok(value_result)) {
+                return value_result;
+            }
+            Type value_type = type_value(value_result);
+
+            if (key_type.kind != TypeKind.String) {
+                return TypeResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidType, type_position(key_ref), "map keys must be string, found " + type_string(key_type))
+                };
+            }
+            if (is_void(value_type)) {
+                return TypeResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidType, type_position(value_ref), "map value type cannot be void")
+                };
+            }
+            return TypeResult.Ok { type = map_type(key_type, value_type) };
+        }
+        Array(element_ref) {
+            TypeResult element_result = resolve_type(checker, element_ref);
+            if (!type_ok(element_result)) {
+                return element_result;
+            }
+            Type element = type_value(element_result);
+            if (is_void(element)) {
+                return TypeResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidType, type_position(reference), "array element type cannot be void")
+                };
+            }
+            return TypeResult.Ok { type = array_type(element) };
+        }
+        Named(name_token) {
+            if (is_primitive_name(name_token.text)) {
+                return TypeResult.Ok { type = primitive_by_name(name_token.text) };
+            }
+            OptionalResolvedType named = lookup_type(checker, name_token.text);
+            match (named) {
+                Present(named_type) {
+                    return TypeResult.Ok { type = named_type };
+                }
+                Absent {
+                    OptionalString private_path = private_type(checker, name_token.text);
+                    match (private_path) {
+                        Present(path) {
+                            return TypeResult.Failed {
+                                error = error_at(checker, ErrorKind.PrivateAccess, type_position(reference), "type " + quoted(name_token.text) + " is private to " + path)
+                            };
+                        }
+                        Absent {
+                            return TypeResult.Failed {
+                                error = error_at(checker, ErrorKind.UndefinedName, type_position(reference), "undefined type " + quoted(name_token.text))
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// is_primitive_name reports whether a name is one of the built-in type names.
+public fn is_primitive_name(string name) -> bool {
+    return name == "int" || name == "float" || name == "bool" || name == "string" || name == "void";
+}
+
+// primitive_by_name returns the built-in type with the given name.
+public fn primitive_by_name(string name) -> Type {
+    if (name == "float") {
+        return primitive_type(TypeKind.Float, "float");
+    }
+    if (name == "bool") {
+        return primitive_type(TypeKind.Bool, "bool");
+    }
+    if (name == "string") {
+        return primitive_type(TypeKind.String, "string");
+    }
+    if (name == "void") {
+        return primitive_type(TypeKind.Void, "void");
+    }
+    return primitive_type(TypeKind.Int, "int");
+}

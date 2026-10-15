@@ -166,9 +166,11 @@ tokens.
 
 ## What is deliberately not here
 
-- A checker or code generator. A parser that consumes these tokens now exists in
-  `selfhost/parser`, with its driver in `selfhost/parse.ktn`; it reproduces the
-  reference parser and is checked against it by its own differential corpus.
+- A code generator. A parser that consumes these tokens exists in
+  `selfhost/parser`, with its driver in `selfhost/parse.ktn`, and a semantic
+  checker exists in `selfhost/checker`, with its driver in `selfhost/check.ktn`;
+  both reproduce the reference implementation and are checked against it by their
+  own differential corpora.
 - Code-point-aware positions and messages.
 - Command-line arguments, standard error, and program-selected exit statuses.
 - Any further optimization: the remaining cost is per-token allocation and the

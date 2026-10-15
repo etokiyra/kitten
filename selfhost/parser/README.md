@@ -197,7 +197,8 @@ large part of the cost, as it is for the lexer driver.
 
 ## What is deliberately not here
 
-- A semantic checker and a code generator: this phase is the parser and its AST.
+- A code generator. A semantic checker that consumes this AST exists in
+  `selfhost/checker`, with its driver in `selfhost/check.ktn`.
 - Module resolution: the parser parses one token stream, exactly like the
   reference parser.
 - A null or optional type in the language, which would replace the explicit

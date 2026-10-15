@@ -630,6 +630,10 @@ outcome here.
   driver in `selfhost/parse.ktn`, and is compared against the Go reference parser
   by a differential test. It also is not part of the production pipeline
   (Section 26).
+- A semantic checker written in Kitten itself exists under `selfhost/checker`,
+  with its driver in `selfhost/check.ktn`, and is compared against the Go
+  reference checker by a differential test. It also is not part of the production
+  pipeline (Section 27).
 - Self-hosting, a native (LLVM or assembly) backend, and the standard library
   are not implemented (Section 19.8).
 
@@ -792,23 +796,29 @@ These decisions were needed to parse the language. Each is provisional:
 
 **Observed inconsistencies between the grammar and the reference parser**
 
-The reference parser accepts two bodies the grammar above does not:
+The reference parser accepts two bodies the grammar above does not, and the
+reference checker then rejects both:
 
 - `enum E {}` is accepted with no cases, although `enum` requires at least one
-  `case` and Section 23.1 states that an enum must have at least one case.
+  `case` and Section 23.1 states that an enum must have at least one case. The
+  reference checker reports `enum "E" must have at least one case` at the
+  declaration, so the rule is enforced one phase later than the grammar places it.
 - `union U {}` is accepted with no variants, although Section 23.2 states that a
-  union must have at least one variant. The grammar above does allow an empty
+  union must have at least one variant; the grammar above does allow an empty
   union body (`{ variant }`), so only the prose in Section 23.2 disagrees with the
-  parser.
+  grammar. The reference checker reports `union "U" must have at least one
+  variant`, enforcing the prose.
 
-`struct S {}` with no fields is accepted and is consistent with both the grammar
-and Section 11.
+`struct S {}` with no fields is accepted by both and is consistent with the
+grammar and Section 11.
 
-Both discrepancies are **documented, not resolved**: changing either the grammar
-or the reference parser would change accepted programs, so the choice between
-tightening the grammar and relaxing the prose is deferred (Section 16). The
-Kitten-written parser accepts what the reference parser accepts, so the two stay
-in step, and the differential corpus includes both empty bodies.
+Neither discrepancy changes which programs are accepted: a program with an empty
+enum or union body is rejected, by the checker rather than by the parser. The
+difference is only *where* it is reported, and it is **documented, not resolved**:
+moving the rule into the grammar would change the parser's accepted language, so
+the choice is deferred (Section 16). The Kitten-written parser and checker follow
+the reference in both places, and the differential corpora include both empty
+bodies.
 
 ---
 
@@ -1693,8 +1703,9 @@ enum TokenKind {
 ```
 
 - A case is written with a comma between cases; a trailing comma is not allowed.
-  An enum must have at least one case. (The reference parser accepts
-  `enum E {}` with no cases, which contradicts this sentence; the discrepancy is
+  An enum must have at least one case. (The reference *parser* accepts
+  `enum E {}` with no cases and the reference *checker* then rejects it, so this
+  sentence is enforced one phase later than it is written; the discrepancy is
   recorded in Section 17.4.)
 - A value of the enum type is one of its cases. A case reference is written
   `EnumName.CaseName` and has the enum type.
@@ -1721,8 +1732,9 @@ union Expression {
 - A variant with fields is written `VariantName { type name; ... }`; a variant
   with no fields is just `VariantName`. Variants are self-delimiting, so no
   separator is needed between them. A union must have at least one variant.
-  (The reference parser accepts `union U {}` with no variants, which contradicts
-  this sentence; the discrepancy is recorded in Section 17.4.)
+  (The reference *parser* accepts `union U {}` with no variants and the reference
+  *checker* then rejects it, so this sentence is enforced one phase later than it
+  is written; the discrepancy is recorded in Section 17.4.)
 - A variant name must be unique within its union, and a field name must be
   unique within its variant.
 - A union value is a **reference** to a GC-managed object, like a struct value.
@@ -2178,3 +2190,110 @@ The following are **not** implemented and must not be assumed:
 - Recovery from a syntax error: the parser reports the first error and stops.
 - A null or optional type in the language, which would replace the explicit
   `Absent`/`Present` unions of Section 26.3.
+
+---
+
+## 27. Kitten-written semantic checker (experimental)
+
+This section records a third component written in Kitten itself, alongside the
+lexer of Section 25 and the parser of Section 26. It is **not** the production
+front end: `kitten build` and `kitten run` continue to use the Go checker in
+`checker/`, and Sections 18 and 22–24 remain the normative description of the
+rules. The section exists so that the artifact, its design decisions, and its
+known limits are documented rather than assumed.
+
+### 27.1 Location and role
+
+The sources are:
+
+- `selfhost/checker/model.ktn` — the data model: types, variant and struct
+  definitions, and the optional wrappers.
+- `selfhost/checker/state.ktn` — symbols, scopes, functions, the checker state,
+  name and type resolution, and diagnostics.
+- `selfhost/checker/expr.ktn` — expression checking.
+- `selfhost/checker/stmt.ktn` — statement checking and the conservative
+  control-flow analysis.
+- `selfhost/checker/checker.ktn` — the five passes and the public entry points.
+- `selfhost/check.ktn` — the driver.
+
+`selfhost/checker/README.md` describes how to build and run it. The driver checks
+the two modules it is given — `input.txt` as the root and `input2.txt` as an
+import — because cross-module checking needs a module context and the runtime
+exposes no way to discover files. A module loader remains Go's responsibility
+(Section 22.4).
+
+### 27.2 API
+
+```kitten
+public fn check_modules(Module[] modules, int module_count) -> CheckResult
+public fn check_program(Program program) -> CheckResult
+```
+
+`Module` mirrors `parser.Module`. `CheckResult` is `Success`, carrying a summary
+of the modules, named types, functions, and checked bodies, or `Failure`, carrying
+`ErrorKind`, file, position, and message. Checking is fail-fast: the first error
+is returned, as in the reference. The checker keeps no state between calls.
+
+### 27.3 Types, symbols, and scopes
+
+- Named types carry an integer id and are compared by it; array and map types are
+  compared through their parts. The reference interns composite types and compares
+  every type by pointer, which yields the same answers: composite types are equal
+  exactly when their parts are, and named types are equal exactly when they are
+  the same declaration.
+- Absence is a value: an absent type is the `None` kind, and an absent payload or
+  parent is the `Absent` case of an optional union. Kitten cannot construct a
+  struct value recursively, so optional payloads are unions rather than
+  placeholder objects.
+- Scopes are the reference's: a scope is a name table plus an optional enclosing
+  scope, a declaration is refused when the name is already declared in that same
+  scope, and a lookup walks outward, which is what allows shadowing.
+- A declaration is resolved by its module and name rather than by AST node
+  identity, which Kitten cannot key a map by; duplicate detection makes the pair
+  exact.
+
+### 27.4 Rules implemented
+
+The checker performs the reference's five passes in the reference's order —
+collect declarations, resolve struct fields, resolve union variant fields,
+resolve function signatures, check bodies — each walking the modules and each
+module's declarations in source order, and reports the first error. Every rule of
+Sections 18 and 22–24 that the reference enforces is implemented with the same
+diagnostic at the same position, including declaration and duplicate detection,
+name and type resolution, private-access detection, `void` where a value type is
+required, non-`string` map keys, function signatures and calls, struct literals
+and field access, enum and union variant references and construction, `match`
+exhaustiveness and bindings, scoping and shadowing, assignment and compound
+assignment, every unary and binary operator, arrays, maps, strings, the built-ins,
+conditions, `return`, and the conservative return-path analysis.
+
+The reference's guards against a nil node (a nil declaration, identifier, field,
+parameter, or arm, an unsupported node kind, or a function without a body) are not
+implemented, because a tree produced by the parser can contain neither a nil node
+nor a missing block, so those branches are unreachable for the reference as well.
+
+### 27.5 Differential testing
+
+A differential test in `cmd/kitten` compiles the checker and compares its
+rendering — the outcome, the first error's category, position, and message, and
+the declaration counts on success — against the reference implementation's
+rendering of the same input, over a corpus that includes every construct, every
+operator and assignment matrix, every collection operation, malformed input,
+cross-module cases, every fixture, and the self-hosted sources.
+`selfhost/checker/README.md` records the corpus and the results.
+
+### 27.6 Deferred
+
+- **Code generation, and the annotated result it needs.** The reference builds a
+  result holding the resolved type of every expression and type reference, the
+  variant of every variant reference, and the resolved symbol of every identifier.
+  Nothing that decides whether a program is valid reads any of it, so the checker
+  computes those types and discards them. Exposing them again — by annotating
+  nodes or by returning an equivalent result — is a prerequisite for a
+  Kitten-written code generator.
+- A module loader written in Kitten: the driver checks the modules a caller
+  supplies.
+- Command-line arguments, standard error, and a program-selected exit status
+  (Section 16).
+- Recovery from an error: the parser and the checker both report the first error
+  and stop.

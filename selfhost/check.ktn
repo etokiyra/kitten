@@ -1,0 +1,106 @@
+// check.ktn - the runnable driver for the Kitten-written semantic checker.
+//
+// It reads two source files, lexes and parses each with the Kitten-written lexer
+// and parser, checks the pair with the Kitten-written checker, and prints the
+// result:
+//
+//     ok modules <n> types <n> functions <n> bodies <n>          on a successful check
+//     error <phase> <kind> <file> <line> <column> <message>       on any failure
+//
+// where <phase> is Lex, Parse, or Check, so that a lexical or syntax failure is
+// distinguishable from a semantic one, and <kind> is the semantic error's
+// category for Check and "-" for the lexical and syntax phases. The format is what the differential
+// harness in the Go bootstrap repository reproduces from the reference
+// implementation.
+//
+// Two files are read because the checker is a module-level component: the root
+// module is input.txt and the imported module is input2.txt. A program that uses
+// one module supplies an empty input2.txt, which contributes no declarations and
+// so cannot change the outcome. The harness writes both files, which is how
+// cross-module checking is exercised without a module loader.
+//
+// Input selection: the Kitten runtime exposes no command-line arguments,
+// environment variables, or standard error to a program, so this driver cannot
+// take a path from the command line and reports failures on standard output. It
+// reads the fixed relative paths above, which makes it parameterized by its
+// working directory.
+//
+// This file is the driver rather than selfhost/checker/main.ktn because the
+// loader requires every import to resolve inside the directory of the file being
+// compiled, so a driver that uses the lexer, the parser, and the checker must sit
+// above all three, in selfhost/.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// prepare_module reads, lexes, and parses one module, printing the first lexical
+// or syntax error it finds.
+fn prepare_module(string path, int id) -> PreparedModule {
+    string source = read_file(path);
+
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program) {
+                    return PreparedModule.Ok { module = Module { path = path, id = id, program = program } };
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_module("input.txt", 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_module("input2.txt", 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Success(summary) {
+                print("ok modules", summary.module_count, "types", summary.type_count, "functions", summary.function_count, "bodies", summary.body_count);
+            }
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+        }
+    }
+}
