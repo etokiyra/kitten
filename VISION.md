@@ -1,5 +1,18 @@
 # The Kitten Vision
 
+```text
+ ,_     _
+ |\\_,-~/
+ / _  _ |    ,--.
+(  @  @ )   / ,-'
+ \  _T_/-._( (
+ /         `. \
+|         _  \ |
+ \ \ ,  /      |
+  || |-_\__   /
+ ((_/`(____,-'
+```
+
 Kitten is a compiled, statically typed, garbage-collected programming language. This
 document says what it is *for*, and where it is going.
 
@@ -175,12 +188,16 @@ none of which exist yet:
 | Capability | What it has to feel like | Status |
 | --- | --- | --- |
 | Build and run | `purr build`, `purr run` — no build system to configure | partially: the binary exists, the project model does not |
+| Scaffolding | `purr new hello-world` creates a directory with a manifest, a `.gitignore`, and `src/main.ktn`; `purr new --lib catnip` creates the same shape with `src/lib.ktn` | not started |
 | Dependencies | `purr add serde`, version resolved and written to the manifest | not started |
 | Install | `purr install <package>` fetches, builds, and puts a working binary on the path, in one command | not started |
+| One-command setup | one command installs the whole toolchain — `purr`, the compiler, the language server, the formatter, and editor and shell completion — and one command updates it | not started |
 | Reproducible builds | `purr.lock` pins exact versions; the same lockfile means the same build | not started |
 | Tests | `purr test` compiles and runs a project's tests | not started |
 | Formatting | `purr fmt` — one canonical style, no configuration to argue about, because the language defines the style | not started |
 | Documentation | `purr doc` generates browsable documentation from source comments | not started |
+| Editing | `purr lsp`, a language server giving diagnostics, completion, go-to-definition, hover, and find-references in any LSP-capable editor | not started |
+| Shell and editor integration | completion for `purr` itself, syntax highlighting, and a maintained editor extension | not started |
 | A registry | versioned, namespaced packages, published and fetched by `purr` itself | not started |
 | Distribution | one command to build a release binary for a platform | not started |
 
@@ -192,6 +209,43 @@ Two constraints on all of it:
 2. **No configuration sprawl.** The defaults should be the answer. Formatting has one
    style. A new project has no build file to write. The tool asks for configuration only
    when something genuinely varies.
+
+### Arriving installed and configured
+
+An ecosystem that is pleasant to use *and* miserable to install is still a language people
+bounce off. So the setup experience is a goal in its own right, not an afterthought:
+
+- **One command from nothing to working.** Not a compiler here, a language server there,
+  and an editor plugin found by searching. Installing Kitten installs the components that
+  make it usable, at versions that are known to work together.
+- **The editor works immediately.** Completion, diagnostics, go-to-definition, and hover
+  are what make a language feel real in the first ten minutes, so they ship with the
+  language rather than as a community project that may or may not keep up.
+- **Updating is equally unceremonious.** The toolchain is a set of components, so pieces
+  can be added or refreshed individually once installed, and no one has to assemble a
+  working setup by hand.
+
+### Scaffolding that looks familiar
+
+`purr new` should produce a layout that anyone from the Rust ecosystem recognises on
+sight — a manifest, a source directory, and nothing to configure:
+
+```text
+hello-world/
+├── .gitignore
+├── purr.toml
+└── src/
+    └── main.ktn
+```
+
+A library is the same shape with `src/lib.ktn` in place of `src/main.ktn`, so creating a
+library and publishing it are the same workflow as creating and shipping a binary.
+
+The similarity to Cargo is intentional and not cosmetic: the manifest is named after the
+tool that reads it (`purr.toml` next to `Cargo.toml`), the source lives in `src/`, and the
+default layout is the correct layout, so no project begins by writing build
+configuration.
+
 
 ---
 

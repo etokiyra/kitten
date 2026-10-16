@@ -189,9 +189,11 @@ authorization.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
    the runtime off C as well. This is independence from C.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
-   then GUI, servers, and games: the `purr` toolchain, a registry, and the
-   standard library that makes them useful. This is independence from other
-   languages' ecosystems.
+   then GUI, servers, and games. This is independence from other languages'
+   ecosystems, and it includes the whole `purr` toolchain: one-command install of
+   the toolchain, the language server and editor and shell completion, `purr new`
+   scaffolding for binaries and libraries, dependency management, the registry,
+   publishing, and the standard library that makes them useful.
 
 The initial compiler is written in Go. The long-term goal is for Kitten to
 compile its own compiler, to stop depending on C, and to stand on its own
