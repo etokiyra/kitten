@@ -282,6 +282,20 @@ output under both GCC and Clang.
 
 ## License
 
-Not yet chosen. An ecosystem language needs a permissive, well-understood license, and
-the intention is to pick one before any third party depends on the code. Until then,
-no rights are granted by default.
+Kitten is free software: you can redistribute it and/or modify it under the terms of
+the GNU General Public License as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version. See `LICENSE`.
+
+**The toolchain is GPL-3.0-or-later.** The compiler, the parser, the checker, the code
+generator, and the command-line tools stay free software. No one can take this
+implementation, close it, and ship it privately.
+
+**The runtime is MIT.** This is the deliberate exception. `runtime/csrc/` is the part
+that gets compiled and linked into every program you build, so a permissive license
+there is what keeps **the code you write in Kitten yours**: keep it private, sell it, or
+ship it under any terms you like. The GPL on the compiler does not reach your programs —
+using a compiler is not the same as being part of it, which is why the GPL on GCC has
+never required anyone to publish the programs they compile with it.
+
+Going forward, anything that ends up linked into a compiled program — the runtime, and
+any standard library — is MIT; everything else is GPL-3.0-or-later.

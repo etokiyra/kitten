@@ -56,6 +56,25 @@ them to match buggy behavior.
 13. Update documentation when established behavior changes: `SPEC.md` for
     language behavior, `AGENTS.md` for process and architecture.
 
+## Licensing
+
+Kitten is GPL-3.0-or-later, with one deliberate exception: the runtime under
+`runtime/csrc/` is MIT. The split exists to serve two goals at once. The GPL
+keeps the compiler free and stops anyone from forking this implementation into a
+closed product. The permissive runtime keeps compiled programs free of the
+compiler's license, so people can distribute what they build under any terms
+they choose.
+
+14. Keep the toolchain GPL-3.0-or-later and code linked into compiled programs
+    MIT. Do not move runtime or standard-library sources under the GPL, and do
+    not apply the GPL to anything that ends up inside a user's executable.
+15. When adding a component, decide which side of that line it is on and give it
+    the matching notice. The compiler and its tools are GPL; anything compiled
+    and linked into user programs is MIT.
+16. Leave the license notices at the top of the `runtime/csrc/` files intact.
+    Those files are copied next to generated code and compiled by third parties,
+    so the notice has to travel with them.
+
 ## Current phase
 
 Phase 1 delivered the project skeleton, the provisional specification, the
