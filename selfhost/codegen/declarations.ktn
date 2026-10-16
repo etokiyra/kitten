@@ -48,9 +48,40 @@ union EmitStep {
 }
 
 // SignatureResult is a rendered signature or parameter list, or a failure.
-union SignatureResult {
+//
+// It is public because a caller that emits a complete function definition needs
+// the signature of a declaration, and renders the definition as that signature
+// followed by the body's block.
+public union SignatureResult {
     Ok { string text; }
     Failed { GenerateError error; }
+}
+
+// function_signature_ok reports whether a signature was produced.
+public fn function_signature_ok(SignatureResult result) -> bool {
+    match (result) {
+        Ok(text) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// function_signature_text returns the text of a successful signature. Its failure
+// branch returns the empty string; no caller can observe it, because the result is
+// tested first.
+public fn function_signature_text(SignatureResult result) -> string {
+    match (result) {
+        Ok(text) { return text; }
+        Failed(error) { return ""; }
+    }
+}
+
+// function_signature_error returns the failure a result carries, or an empty error
+// when it succeeded.
+public fn function_signature_error(SignatureResult result) -> GenerateError {
+    match (result) {
+        Ok(text) { return generate_error(0, 0, ""); }
+        Failed(error) { return error; }
+    }
 }
 
 // DeclarationPhase selects which section a declaration kind is being emitted
@@ -735,7 +766,7 @@ fn emit_function_declaration(DeclarationEmitter emitter, ModuleModel module, Tok
 }
 
 // function_signature renders "returnType name(parameterTypes)" for a function.
-fn function_signature(int module, Position at, string name, Function function) -> SignatureResult {
+public fn function_signature(int module, Position at, string name, Function function) -> SignatureResult {
     CTypeResult return_type = c_type(function.return_type);
     if (!c_type_ok(return_type)) {
         return SignatureResult.Failed { error = generate_error(at.line, at.column, c_type_message(return_type)) };

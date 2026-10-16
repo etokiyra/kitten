@@ -1,0 +1,831 @@
+// statements.ktn - emit function bodies.
+//
+// It reproduces the statement and function emitters of the reference generator
+// (codegen/emit.go and codegen/codegen.go) exactly: the same braces, indentation,
+// blank lines, and parentheses, and the same order of statements and functions, so
+// that every function definition it produces is byte for byte the reference's.
+//
+// Statements and expressions share the literal pool. A body is rendered into a
+// buffer, and a string literal interned while rendering fills the pool in the
+// order the reference fills it, which is what makes the pool's declarations agree
+// with the reference's.
+//
+// Capacity. A body is written through the same bounded accumulator the declaration
+// emitter uses, and the number of lines is only known once the body has been
+// rendered. The module therefore renders twice: a dry run counts the lines through
+// the same calls that write them, and the real run is given exactly that many
+// chunks. The two runs are the same traversal with the same rules, so the count is
+// exact rather than a bound, and the match temporaries are numbered identically
+// because the counter starts at zero in each run.
+//
+// An expression the expression emitter does not implement yet is reported as a
+// failure at the statement that contains it, so a body that cannot be rendered in
+// full is never reported as rendered.
+
+import "../checker/model.ktn";
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "declarations.ktn";
+import "errors.ktn";
+import "expressions.ktn";
+import "literals.ktn";
+import "names.ktn";
+import "output.ktn";
+
+// BodyStep is the outcome of emitting one piece of a body.
+public union BodyStep {
+    Ok
+    Failed { GenerateError error; }
+}
+
+// BodyResult is the rendered function bodies or the reason none were produced.
+//
+// A failure means no bodies were produced: the count pass either completes or
+// reports the same failure before anything is written, so a partial body can never
+// be mistaken for a complete one.
+public union BodyResult {
+    Success { string text; int lines; }
+    Failure { GenerateError error; }
+}
+
+// TextResult is a rendered statement fragment, such as a local declaration, or a
+// failure.
+union TextResult {
+    Ok { string text; }
+    Failed { GenerateError error; }
+}
+
+// StatementEmitter accumulates the bodies of one translation unit.
+struct StatementEmitter {
+    SemanticModel model;
+
+    // module_index is the module whose annotations are looked up, and whose id is
+    // what names are mangled by.
+    int module_index;
+
+    // pool receives the string literals the rendered expressions use.
+    LiteralPool pool;
+
+    // output receives the text. In counting mode it is never written to.
+    Output output;
+
+    // counting selects the dry run that counts lines instead of writing them.
+    bool counting;
+
+    int indent;
+
+    // lines counts the newlines written, or counted, so far. One line is one
+    // chunk, so this is the output capacity the bodies need.
+    int lines;
+
+    // temps numbers the temporaries generated for match statements, so that
+    // generated names are unique and deterministic across the whole unit.
+    int temps;
+}
+
+// body_ok reports whether a step succeeded.
+public fn body_ok(BodyStep step) -> bool {
+    match (step) {
+        Ok { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// body_error returns the failure a step carries, or an empty error when it
+// succeeded; no caller can observe the empty error, because the step is tested
+// first.
+public fn body_error(BodyStep step) -> GenerateError {
+    match (step) {
+        Ok { return generate_error(0, 0, ""); }
+        Failed(error) { return error; }
+    }
+}
+
+// failed_at builds a failing step at a position.
+fn failed_at(Position at, string message) -> BodyStep {
+    return BodyStep.Failed { error = generate_error(at.line, at.column, message) };
+}
+
+// missing_block reports a statement where a block was required. A parser-produced
+// tree always builds a block there, so this cannot occur.
+fn missing_block() -> BodyStep {
+    return BodyStep.Failed { error = generate_error(1, 1, "missing block") };
+}
+
+fn new_statement_emitter(SemanticModel model, LiteralPool pool, bool counting, int capacity) -> StatementEmitter {
+    return StatementEmitter {
+        model = model,
+        module_index = 0,
+        pool = pool,
+        output = new_output(capacity),
+        counting = counting,
+        indent = 0,
+        lines = 0,
+        temps = 0
+    };
+}
+
+// context_of returns the expression context for the module being emitted.
+fn context_of(StatementEmitter emitter) -> ExpressionContext {
+    return ExpressionContext {
+        model = emitter.model,
+        module_index = emitter.module_index,
+        pool = emitter.pool
+    };
+}
+
+// --- Writing -----------------------------------------------------------------
+
+// count_newlines returns the number of newline bytes in text, which is the number
+// of lines the text completes.
+fn count_newlines(string text) -> int {
+    int total = 0;
+    int index = 0;
+    while (index < length(text)) {
+        if (text[index] == 10) {
+            total = total + 1;
+        }
+        index++;
+    }
+    return total;
+}
+
+// write_indent appends the current indentation, without a newline, so that a
+// construct such as "if (...)" can share the line that follows it.
+fn write_indent(StatementEmitter emitter) -> BodyStep {
+    if (emitter.counting) {
+        return BodyStep.Ok;
+    }
+    match (output_indent(emitter.output, emitter.indent)) {
+        Ok {
+            return BodyStep.Ok;
+        }
+        Overflow(capacity) {
+            return overflow_failure(capacity);
+        }
+    }
+}
+
+// write_text appends text without indentation or a newline.
+fn write_text(StatementEmitter emitter, string text) -> BodyStep {
+    emitter.lines = emitter.lines + count_newlines(text);
+    if (emitter.counting) {
+        return BodyStep.Ok;
+    }
+    match (output_write(emitter.output, text)) {
+        Ok {
+            return BodyStep.Ok;
+        }
+        Overflow(capacity) {
+            return overflow_failure(capacity);
+        }
+    }
+}
+
+// write_line appends one indented, newline-terminated line.
+fn write_line(StatementEmitter emitter, string text) -> BodyStep {
+    emitter.lines = emitter.lines + 1;
+    if (emitter.counting) {
+        return BodyStep.Ok;
+    }
+    match (output_line(emitter.output, emitter.indent, text)) {
+        Ok {
+            return BodyStep.Ok;
+        }
+        Overflow(capacity) {
+            return overflow_failure(capacity);
+        }
+    }
+}
+
+// overflow_failure reports that a body did not fit in the capacity it was given.
+// The capacity is derived from the same traversal, so this cannot occur; it is
+// reported rather than ignored so that a wrong capacity can never be mistaken for
+// a complete body.
+fn overflow_failure(int capacity) -> BodyStep {
+    return BodyStep.Failed {
+        error = generate_error(0, 0, "the function bodies do not fit in a capacity of " + decimal(capacity) + " lines")
+    };
+}
+
+// --- Statements --------------------------------------------------------------
+
+// emit_block writes a brace-delimited block. The caller is responsible for any text
+// preceding the opening brace, so that constructs like "if (...)" share the line.
+fn emit_block(StatementEmitter emitter, Stmt block) -> BodyStep {
+    match (block) {
+        Block(open_brace, statements, statement_count) {
+            BodyStep open = write_text(emitter, "{\n");
+            if (!body_ok(open)) {
+                return open;
+            }
+            emitter.indent = emitter.indent + 1;
+            BodyStep body = emit_statement_list(emitter, statements, statement_count);
+            if (!body_ok(body)) {
+                return body;
+            }
+            emitter.indent = emitter.indent - 1;
+            return write_line(emitter, "}");
+        }
+        VarDecl(type_ref, name, initializer) { return missing_block(); }
+        Expression(expression) { return missing_block(); }
+        If(at, condition, then_branch, else_branch) { return missing_block(); }
+        While(at, condition, body) { return missing_block(); }
+        For(at, initializer, condition, increment, body) { return missing_block(); }
+        Return(at, value) { return missing_block(); }
+        Match(at, scrutinee, arms, arm_count) { return missing_block(); }
+    }
+}
+
+// emit_statement_list writes each statement in order.
+fn emit_statement_list(StatementEmitter emitter, Stmt[] statements, int statement_count) -> BodyStep {
+    int index = 0;
+    while (index < statement_count) {
+        BodyStep step = emit_statement(emitter, statements[index]);
+        if (!body_ok(step)) {
+            return step;
+        }
+        index++;
+    }
+    return BodyStep.Ok;
+}
+
+// emit_statement writes one statement.
+fn emit_statement(StatementEmitter emitter, Stmt statement) -> BodyStep {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            BodyStep indented = write_indent(emitter);
+            if (!body_ok(indented)) {
+                return indented;
+            }
+            return emit_block(emitter, statement);
+        }
+        VarDecl(type_ref, name, initializer) {
+            match (var_declaration(emitter, statement)) {
+                Failed(error) { return BodyStep.Failed { error = error }; }
+                Ok(declaration) { return write_line(emitter, declaration + ";"); }
+            }
+        }
+        Expression(expression) {
+            match (emit_expression(context_of(emitter), expression)) {
+                Failed(error) { return BodyStep.Failed { error = error }; }
+                Ok(text) { return write_line(emitter, text + ";"); }
+            }
+        }
+        If(at, condition, then_branch, else_branch) {
+            BodyStep indented = write_indent(emitter);
+            if (!body_ok(indented)) {
+                return indented;
+            }
+            return emit_if_tail(emitter, statement);
+        }
+        While(at, condition, body) {
+            match (condition_expression(emitter, condition)) {
+                Failed(error) { return BodyStep.Failed { error = error }; }
+                Ok(text) {
+                    BodyStep indented = write_indent(emitter);
+                    if (!body_ok(indented)) {
+                        return indented;
+                    }
+                    BodyStep header = write_text(emitter, "while " + text + " ");
+                    if (!body_ok(header)) {
+                        return header;
+                    }
+                    return emit_block(emitter, body);
+                }
+            }
+        }
+        For(at, initializer, condition, increment, body) {
+            return emit_for(emitter, statement);
+        }
+        Return(at, value) {
+            match (value) {
+                Absent {
+                    return write_line(emitter, "return;");
+                }
+                Present(expression) {
+                    match (emit_expression(context_of(emitter), expression)) {
+                        Failed(error) { return BodyStep.Failed { error = error }; }
+                        Ok(text) { return write_line(emitter, "return " + text + ";"); }
+                    }
+                }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            return emit_match(emitter, statement);
+        }
+    }
+}
+
+// emit_if_tail writes "if (...) { ... }" and any else chain. It assumes the caller
+// has already written the leading indentation.
+fn emit_if_tail(StatementEmitter emitter, Stmt statement) -> BodyStep {
+    match (statement) {
+        If(at, condition, then_branch, else_branch) {
+            match (condition_expression(emitter, condition)) {
+                Failed(error) { return BodyStep.Failed { error = error }; }
+                Ok(text) {
+                    BodyStep header = write_text(emitter, "if " + text + " ");
+                    if (!body_ok(header)) {
+                        return header;
+                    }
+                    BodyStep then_block = emit_block(emitter, then_branch);
+                    if (!body_ok(then_block)) {
+                        return then_block;
+                    }
+                    match (else_branch) {
+                        Absent {
+                            return BodyStep.Ok;
+                        }
+                        Present(alternative) {
+                            BodyStep indented = write_indent(emitter);
+                            if (!body_ok(indented)) {
+                                return indented;
+                            }
+                            BodyStep keyword = write_text(emitter, "else ");
+                            if (!body_ok(keyword)) {
+                                return keyword;
+                            }
+                            match (alternative) {
+                                If(inner_at, inner_condition, inner_then, inner_else) {
+                                    return emit_if_tail(emitter, alternative);
+                                }
+                                Block(open_brace, statements, statement_count) {
+                                    return emit_block(emitter, alternative);
+                                }
+                                VarDecl(type_ref, name, initializer) { return unsupported_else(at); }
+                                Expression(expression) { return unsupported_else(at); }
+                                While(while_at, while_condition, while_body) { return unsupported_else(at); }
+                                For(for_at, for_initializer, for_condition, for_increment, for_body) { return unsupported_else(at); }
+                                Return(return_at, value) { return unsupported_else(at); }
+                                Match(match_at, scrutinee, arms, arm_count) { return unsupported_else(at); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        VarDecl(type_ref, name, initializer) { return incomplete_if(at_of(statement)); }
+        Expression(expression) { return incomplete_if(at_of(statement)); }
+        Block(open_brace, statements, statement_count) { return incomplete_if(at_of(statement)); }
+        While(at, condition, body) { return incomplete_if(at_of(statement)); }
+        For(at, initializer, condition, increment, body) { return incomplete_if(at_of(statement)); }
+        Return(at, value) { return incomplete_if(at_of(statement)); }
+        Match(at, scrutinee, arms, arm_count) { return incomplete_if(at_of(statement)); }
+    }
+}
+
+// unsupported_else reports an else branch that is neither a block nor another if.
+// The parser produces only those two, so this cannot occur.
+fn unsupported_else(Token at) -> BodyStep {
+    return failed_at(position_of_token(at), "unsupported else branch");
+}
+
+// incomplete_if reports a statement that is not an if where an if was required.
+// The parser produces the statement and its else branch together, so this cannot
+// occur.
+fn incomplete_if(Position at) -> BodyStep {
+    return failed_at(at, "incomplete if statement");
+}
+
+// at_of returns where a statement begins.
+fn at_of(Stmt statement) -> Position {
+    return stmt_position(statement);
+}
+
+// emit_for writes a C-style for loop.
+fn emit_for(StatementEmitter emitter, Stmt statement) -> BodyStep {
+    match (statement) {
+        For(at, initializer, condition, increment, body) {
+            string initializer_text = "";
+            match (initializer) {
+                Absent { }
+                Present(init_statement) {
+                    match (init_statement) {
+                        VarDecl(type_ref, name, init_initializer) {
+                            match (var_declaration(emitter, init_statement)) {
+                                Failed(error) { return BodyStep.Failed { error = error }; }
+                                Ok(text) { initializer_text = text; }
+                            }
+                        }
+                        Expression(init_expression) {
+                            match (emit_expression(context_of(emitter), init_expression)) {
+                                Failed(error) { return BodyStep.Failed { error = error }; }
+                                Ok(text) { initializer_text = text; }
+                            }
+                        }
+                        Block(open_brace, statements, statement_count) { return unsupported_for_initializer(at); }
+                        If(if_at, if_condition, if_then, if_else) { return unsupported_for_initializer(at); }
+                        While(while_at, while_condition, while_body) { return unsupported_for_initializer(at); }
+                        For(for_at, for_initializer, for_condition, for_increment, for_body) { return unsupported_for_initializer(at); }
+                        Return(return_at, value) { return unsupported_for_initializer(at); }
+                        Match(match_at, scrutinee, arms, arm_count) { return unsupported_for_initializer(at); }
+                    }
+                }
+            }
+
+            string condition_text = "";
+            match (condition) {
+                Absent { }
+                Present(condition_value) {
+                    match (condition_expression(emitter, condition_value)) {
+                        Failed(error) { return BodyStep.Failed { error = error }; }
+                        Ok(text) { condition_text = text; }
+                    }
+                }
+            }
+
+            string increment_text = "";
+            match (increment) {
+                Absent { }
+                Present(increment_value) {
+                    match (emit_expression(context_of(emitter), increment_value)) {
+                        Failed(error) { return BodyStep.Failed { error = error }; }
+                        Ok(text) { increment_text = text; }
+                    }
+                }
+            }
+
+            BodyStep indented = write_indent(emitter);
+            if (!body_ok(indented)) {
+                return indented;
+            }
+            BodyStep header = write_text(emitter, "for (" + initializer_text + "; " + condition_text + "; " + increment_text + ") ");
+            if (!body_ok(header)) {
+                return header;
+            }
+            return emit_block(emitter, body);
+        }
+        VarDecl(type_ref, name, initializer) { return incomplete_for(at_of(statement)); }
+        Expression(expression) { return incomplete_for(at_of(statement)); }
+        Block(open_brace, statements, statement_count) { return incomplete_for(at_of(statement)); }
+        If(at, condition, then_branch, else_branch) { return incomplete_for(at_of(statement)); }
+        While(at, condition, body) { return incomplete_for(at_of(statement)); }
+        Return(at, value) { return incomplete_for(at_of(statement)); }
+        Match(at, scrutinee, arms, arm_count) { return incomplete_for(at_of(statement)); }
+    }
+}
+
+// unsupported_for_initializer reports a for-loop initializer that is neither a
+// declaration nor an expression statement. The grammar permits only those two.
+fn unsupported_for_initializer(Token at) -> BodyStep {
+    return failed_at(position_of_token(at), "unsupported for-loop initializer");
+}
+
+// incomplete_for reports a statement that is not a for where a for was required.
+fn incomplete_for(Position at) -> BodyStep {
+    return failed_at(at, "incomplete for statement");
+}
+
+// var_declaration renders a local variable declaration without its trailing
+// semicolon, so that it can also be used as a for-loop initializer.
+fn var_declaration(StatementEmitter emitter, Stmt statement) -> TextResult {
+    match (statement) {
+        VarDecl(type_ref, name, initializer) {
+            match (type_ref_type(module_model(emitter.model, emitter.module_index), type_ref_node_id(type_ref))) {
+                Absent {
+                    return TextResult.Failed { error = generate_error(1, 1, "declared type was not resolved") };
+                }
+                Present(declared) {
+                    match (c_type(declared)) {
+                        Failed(message) {
+                            Position at = type_position(type_ref);
+                            return TextResult.Failed { error = generate_error(at.line, at.column, message) };
+                        }
+                        Ok(declared_text) {
+                            string text = declared_text + " " + variable_name(name.text);
+                            match (initializer) {
+                                Absent { }
+                                Present(initializer_value) {
+                                    match (emit_expression(context_of(emitter), initializer_value)) {
+                                        Failed(error) { return TextResult.Failed { error = error }; }
+                                        Ok(rendered) { text += " = " + rendered; }
+                                    }
+                                }
+                            }
+                            return TextResult.Ok { text = text };
+                        }
+                    }
+                }
+            }
+        }
+        Expression(expression) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        Block(open_brace, statements, statement_count) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        If(at, condition, then_branch, else_branch) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        While(at, condition, body) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        For(at, initializer, condition, increment, body) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        Return(at, value) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+        Match(at, scrutinee, arms, arm_count) { return TextResult.Failed { error = generate_error(1, 1, "nil variable declaration") }; }
+    }
+}
+
+// --- Conditions --------------------------------------------------------------
+
+// condition_expression renders an expression for use as the condition of an if,
+// while, or for.
+//
+// A compound expression is already emitted fully parenthesized, so adding another
+// pair of parentheses around it would be redundant; Clang warns about a redundant
+// parenthesized equality comparison in a condition. An assignment keeps its own
+// extra layer, because C's -Wparentheses warns when an assignment is used as a
+// condition without its own parentheses. A condition that is not already
+// parenthesized, such as a bare identifier, is wrapped.
+fn condition_expression(StatementEmitter emitter, Expr expression) -> ExpressionResult {
+    match (emit_expression(context_of(emitter), expression)) {
+        Failed(error) { return ExpressionResult.Failed { error = error }; }
+        Ok(rendered) {
+            if (is_assignment(expression)) {
+                return ExpressionResult.Ok { text = "(" + rendered + ")" };
+            }
+            if (length(rendered) >= 2 && rendered[0] == 40 && rendered[length(rendered) - 1] == 41) {
+                return ExpressionResult.Ok { text = rendered };
+            }
+            return ExpressionResult.Ok { text = "(" + rendered + ")" };
+        }
+    }
+}
+
+// is_assignment reports whether an expression is an assignment.
+//
+// Assignments are not implemented by the expression emitter yet, so a condition
+// can never be one: the emitter reports the assignment as not implemented before
+// this is reached. The rule is kept because it belongs to the assignment
+// expression, which the next phase adds.
+fn is_assignment(Expr expression) -> bool {
+    match (expression) {
+        Assign(node_id, operator, target, value) { return true; }
+        Integer(node_id, token) { return false; }
+        Float(node_id, token) { return false; }
+        Boolean(node_id, token, value) { return false; }
+        String(node_id, token) { return false; }
+        Identifier(node_id, token) { return false; }
+        Unary(node_id, operator, operand, postfix) { return false; }
+        Binary(node_id, operator, left, right) { return false; }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return false; }
+        Member(node_id, dot, receiver, member) { return false; }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return false; }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return false; }
+        NewArray(node_id, at, element, length) { return false; }
+        NewMap(node_id, at, map_type) { return false; }
+        Index(node_id, bracket, target, index) { return false; }
+    }
+}
+
+// --- Match -------------------------------------------------------------------
+
+// new_temp returns the next deterministic temporary name for a match statement.
+fn new_temp(StatementEmitter emitter) -> string {
+    string name = match_temporary_name(emitter.temps);
+    emitter.temps = emitter.temps + 1;
+    return name;
+}
+
+// emit_match writes a match statement.
+//
+// The scrutinee is evaluated once into a temporary. For a union, the temporary is
+// checked for null before its tag is read, so matching a null reference is a
+// deterministic runtime error rather than undefined behavior. Each arm becomes a
+// switch case that binds the variant's fields to locals of the field types; the
+// checker has already proved the arms are exhaustive and that the bindings match.
+fn emit_match(StatementEmitter emitter, Stmt statement) -> BodyStep {
+    match (statement) {
+        Match(at, scrutinee, arms, arm_count) {
+            ExprInfo info = expression_info(module_model(emitter.model, emitter.module_index), expr_node_id(scrutinee));
+            match (info.type) {
+                Absent {
+                    return failed_at(position_of_token(at), "expression has no recorded type");
+                }
+                Present(scrutinee_type) {
+                    if (!is_variant(scrutinee_type)) {
+                        return failed_at(position_of_token(at), "match requires an enum or union value, found " + type_string(scrutinee_type));
+                    }
+                    match (c_type(scrutinee_type)) {
+                        Failed(message) {
+                            return failed_at(position_of_token(at), message);
+                        }
+                        Ok(c_scrutinee) {
+                            match (emit_expression(context_of(emitter), scrutinee)) {
+                                Failed(error) { return BodyStep.Failed { error = error }; }
+                                Ok(scrutinee_text) {
+                                    string temporary = new_temp(emitter);
+                                    BodyStep declared = write_line(emitter, c_scrutinee + " " + temporary + " = " + scrutinee_text + ";");
+                                    if (!body_ok(declared)) {
+                                        return declared;
+                                    }
+                                    if (is_union(scrutinee_type)) {
+                                        BodyStep null_check = write_line(emitter, "if (" + temporary + " == NULL) { " + fail_function() + "(\"match on a null union reference\"); }");
+                                        if (!body_ok(null_check)) {
+                                            return null_check;
+                                        }
+                                    }
+                                    BodyStep switch_open = write_indent(emitter);
+                                    if (!body_ok(switch_open)) {
+                                        return switch_open;
+                                    }
+                                    if (is_union(scrutinee_type)) {
+                                        BodyStep opened = write_text(emitter, "switch (" + temporary + "->" + tag_field_name() + ") {\n");
+                                        if (!body_ok(opened)) {
+                                            return opened;
+                                        }
+                                    } else {
+                                        BodyStep opened = write_text(emitter, "switch (" + temporary + ") {\n");
+                                        if (!body_ok(opened)) {
+                                            return opened;
+                                        }
+                                    }
+                                    emitter.indent = emitter.indent + 1;
+
+                                    int index = 0;
+                                    while (index < arm_count) {
+                                        MatchArm arm = arms[index];
+                                        if (!has(scrutinee_type.variant_index, arm.variant.text)) {
+                                            return failed_at(position_of_token(arm.variant), "variant " + quoted(arm.variant.text) + " was not resolved");
+                                        }
+                                        Variant variant = scrutinee_type.variant_index[arm.variant.text];
+
+                                        BodyStep case_indent = write_indent(emitter);
+                                        if (!body_ok(case_indent)) {
+                                            return case_indent;
+                                        }
+                                        if (is_union(scrutinee_type)) {
+                                            BodyStep case_line = write_text(emitter, "case " + union_tag_name(scrutinee_type, variant.name) + ": {\n");
+                                            if (!body_ok(case_line)) {
+                                                return case_line;
+                                            }
+                                        } else {
+                                            BodyStep case_line = write_text(emitter, "case " + enum_case_name(scrutinee_type, variant.name) + ": {\n");
+                                            if (!body_ok(case_line)) {
+                                                return case_line;
+                                            }
+                                        }
+                                        emitter.indent = emitter.indent + 1;
+
+                                        int binding_index = 0;
+                                        while (binding_index < arm.binding_count) {
+                                            StructField field = variant.fields[binding_index];
+                                            match (c_type(field.type)) {
+                                                Failed(message) {
+                                                    return failed_at(position_of_token(arm.variant), message);
+                                                }
+                                                Ok(field_type) {
+                                                    string binding = arm.bindings[binding_index].text;
+                                                    BodyStep binding_line = write_line(emitter, field_type + " " + variable_name(binding) + " = " + temporary + "->" + variant_field_name(variant.name, field.name) + ";");
+                                                    if (!body_ok(binding_line)) {
+                                                        return binding_line;
+                                                    }
+                                                    // The arm body may not use every binding; a
+                                                    // void cast keeps an unused binding from
+                                                    // warning without changing behavior.
+                                                    BodyStep unused = write_line(emitter, "(void)" + variable_name(binding) + ";");
+                                                    if (!body_ok(unused)) {
+                                                        return unused;
+                                                    }
+                                                }
+                                            }
+                                            binding_index++;
+                                        }
+
+                                        match (arm.body) {
+                                            Block(open_brace, statements, statement_count) {
+                                                BodyStep body_step = emit_statement_list(emitter, statements, statement_count);
+                                                if (!body_ok(body_step)) {
+                                                    return body_step;
+                                                }
+                                            }
+                                            VarDecl(type_ref, name, initializer) { return missing_block(); }
+                                            Expression(expression) { return missing_block(); }
+                                            If(inner_at, inner_condition, inner_then, inner_else) { return missing_block(); }
+                                            While(inner_at, inner_condition, inner_body) { return missing_block(); }
+                                            For(inner_at, inner_initializer, inner_condition, inner_increment, inner_body) { return missing_block(); }
+                                            Return(inner_at, value) { return missing_block(); }
+                                            Match(inner_at, inner_scrutinee, inner_arms, inner_count) { return missing_block(); }
+                                        }
+
+                                        BodyStep break_line = write_line(emitter, "break;");
+                                        if (!body_ok(break_line)) {
+                                            return break_line;
+                                        }
+                                        emitter.indent = emitter.indent - 1;
+                                        BodyStep case_close = write_line(emitter, "}");
+                                        if (!body_ok(case_close)) {
+                                            return case_close;
+                                        }
+                                        index++;
+                                    }
+
+                                    // The checker proves the arms are exhaustive, so this
+                                    // default is defensive: an out-of-range tag fails
+                                    // deterministically instead of doing nothing.
+                                    emitter.indent = emitter.indent - 1;
+                                    BodyStep default_label = write_line(emitter, "default:");
+                                    if (!body_ok(default_label)) {
+                                        return default_label;
+                                    }
+                                    emitter.indent = emitter.indent + 1;
+                                    BodyStep default_body = write_line(emitter, fail_function() + "(\"match on an invalid variant tag\");");
+                                    if (!body_ok(default_body)) {
+                                        return default_body;
+                                    }
+                                    emitter.indent = emitter.indent - 1;
+                                    return write_line(emitter, "}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        VarDecl(type_ref, name, initializer) { return incomplete_match(at_of(statement)); }
+        Expression(expression) { return incomplete_match(at_of(statement)); }
+        Block(open_brace, statements, statement_count) { return incomplete_match(at_of(statement)); }
+        If(at, condition, then_branch, else_branch) { return incomplete_match(at_of(statement)); }
+        While(at, condition, body) { return incomplete_match(at_of(statement)); }
+        For(at, initializer, condition, increment, body) { return incomplete_match(at_of(statement)); }
+        Return(at, value) { return incomplete_match(at_of(statement)); }
+    }
+}
+
+// incomplete_match reports a statement that is not a match where a match was
+// required.
+fn incomplete_match(Position at) -> BodyStep {
+    return failed_at(at, "incomplete match statement");
+}
+
+// --- Function definitions ----------------------------------------------------
+
+// emit_function_bodies renders the body of every function, in module and source
+// order, and sizes the output exactly.
+//
+// The pool is filled while the bodies are rendered, and it is filled in the same
+// order in both passes, so a caller can read the pool's text once this returns.
+public fn emit_function_bodies(SemanticModel model, LiteralPool pool) -> BodyResult {
+    StatementEmitter counter = new_statement_emitter(model, pool, true, 1);
+    BodyStep counted = emit_every_function(counter);
+    if (!body_ok(counted)) {
+        return BodyResult.Failure { error = body_error(counted) };
+    }
+    StatementEmitter emitter = new_statement_emitter(model, pool, false, counter.lines);
+    BodyStep emitted = emit_every_function(emitter);
+    if (!body_ok(emitted)) {
+        return BodyResult.Failure { error = body_error(emitted) };
+    }
+    return BodyResult.Success { text = output_text(emitter.output), lines = emitter.lines };
+}
+
+// emit_every_function writes one definition per function declaration, in module
+// and source order, which is the order the reference emits them.
+fn emit_every_function(StatementEmitter emitter) -> BodyStep {
+    int module_index = 0;
+    while (module_index < emitter.model.module_count) {
+        emitter.module_index = module_index;
+        ModuleModel module = module_model(emitter.model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                    BodyStep step = emit_function_definition(emitter, module, at, name, body);
+                    if (!body_ok(step)) {
+                        return step;
+                    }
+                }
+                Import(keyword, path) { }
+                Struct(at, visibility, name, fields, field_count) { }
+                Enum(at, visibility, name, cases, case_count) { }
+                Union(at, visibility, name, variants, variant_count) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return BodyStep.Ok;
+}
+
+// emit_function_definition writes "signature { body }" and the blank line that
+// follows it.
+fn emit_function_definition(StatementEmitter emitter, ModuleModel module, Token at, Token name, Stmt body) -> BodyStep {
+    match (declaration_function(module, name.text)) {
+        Absent {
+            return failed_at(position_of_token(at), "function " + quoted(name.text) + " was not checked");
+        }
+        Present(function) {
+            match (function_signature(module.id, position_of_token(at), name.text, function)) {
+                Failed(error) { return BodyStep.Failed { error = error }; }
+                Ok(signature) {
+                    BodyStep indented = write_indent(emitter);
+                    if (!body_ok(indented)) {
+                        return indented;
+                    }
+                    BodyStep header = write_text(emitter, signature + " ");
+                    if (!body_ok(header)) {
+                        return header;
+                    }
+                    BodyStep block = emit_block(emitter, body);
+                    if (!body_ok(block)) {
+                        return block;
+                    }
+                    return write_line(emitter, "");
+                }
+            }
+        }
+    }
+}

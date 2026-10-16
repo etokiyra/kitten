@@ -1,0 +1,149 @@
+// functions.ktn - print the C function definitions of a checked program.
+//
+// It reads the two modules the other self-hosted drivers read, lexes, parses, and
+// checks them with the same Kitten front end, renders the body of every function,
+// and prints the string literal declarations those bodies produced and then the
+// definitions themselves:
+//
+//	=== literal pool ===
+//	static const ktn_string ktn_literal_1 = { 4, "beta" };
+//
+//	=== functions ===
+//	void ktn_fn_main(void) {
+//	    ...
+//	}
+//
+// The two parts are printed in the order the reference writes them, which is the
+// pool after the constructors and before the bodies. A failed preparation, check,
+// or emission prints a single "error ..." line instead.
+//
+// This is test infrastructure, not the compiler stage: the finished driver will
+// emit a whole translation unit, which also needs the declaration sections, the
+// entry point, and the entry point rule the reference applies before it emits
+// anything.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/errors.ktn";
+import "codegen/literals.ktn";
+import "codegen/statements.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// prepare_source lexes and parses one module, printing the first lexical or
+// syntax error it finds.
+fn prepare_source(string source, string path, int id) -> PreparedModule {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// print_lines writes text one line at a time, so that standard output holds it byte
+// for byte: print terminates every argument with a newline.
+fn print_lines(string text) {
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            print(substring(text, start, index));
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size) {
+        print(substring(text, start, size));
+    }
+}
+
+// literal_capacity bounds the number of distinct literals a program can pool:
+// every literal is an expression node, and each module reports how many expression
+// nodes its parse assigned.
+fn literal_capacity(SemanticModel model) -> int {
+    int total = 0;
+    int index = 0;
+    while (index < model.module_count) {
+        total = total + module_model(model, index).expression_count;
+        index++;
+    }
+    return total;
+}
+
+fn main() {
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_source(read_file("input.txt"), "input.txt", 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_source(read_file("input2.txt"), "input2.txt", 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+            Success(summary, model) {
+                LiteralPool pool = new_literal_pool(literal_capacity(model));
+                match (emit_function_bodies(model, pool)) {
+                    Failure(error) {
+                        print("error", "Generate", error.line, error.column, error.message);
+                    }
+                    Success(text, lines) {
+                        print("=== literal pool ===");
+                        print_lines(literal_pool_text(pool));
+                        print("=== functions ===");
+                        print_lines(text);
+                    }
+                }
+            }
+        }
+    }
+}

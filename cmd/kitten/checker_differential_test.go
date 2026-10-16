@@ -551,9 +551,11 @@ func checkerCorpus(t *testing.T) []checkerCase {
 		filepath.Join("..", "..", "selfhost", "codegen", "errors.ktn"),
 		filepath.Join("..", "..", "selfhost", "codegen", "expressions.ktn"),
 		filepath.Join("..", "..", "selfhost", "codegen", "literals.ktn"),
+		filepath.Join("..", "..", "selfhost", "codegen", "statements.ktn"),
 		filepath.Join("..", "..", "selfhost", "codegen", "declarations.ktn"),
 		filepath.Join("..", "..", "selfhost", "declarations.ktn"),
 		filepath.Join("..", "..", "selfhost", "expressions.ktn"),
+		filepath.Join("..", "..", "selfhost", "functions.ktn"),
 	)
 	sort.Strings(inputs)
 	for _, input := range inputs {

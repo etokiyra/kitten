@@ -101,15 +101,20 @@ floating-point, boolean, and string literals, identifiers, unary expressions, an
 binary expressions, checked against the reference node by node. Phase 4D.4 added
 the string literal pool under `selfhost/codegen/literals.ktn`, which the expression
 emitter fills as it renders and which the differential harness compares with the
-reference's own pooled declarations. Assignments, calls, member access, struct and
-variant literals, allocation, and indexing are reported as not implemented rather
-than rendered, and statements and function bodies are still to come.
+reference's own pooled declarations. Phase 4D.5 added the statement and function
+emitter under `selfhost/codegen/statements.ktn`, driven by `selfhost/functions.ktn`:
+blocks, local declarations, expression statements, `if`/`else`, `while`, `for`,
+`return`, and `match`, checked against the reference's own function definitions byte
+for byte. Assignments, calls, member access, struct and variant literals,
+allocation, and indexing are still reported as not implemented rather than rendered
+when a statement needs one, and the entry point and module loader are still to
+come.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
 which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, and no statements,
-function bodies, entry point, or module loader yet) are documented in SPEC.md
+positions, no command-line arguments or chosen exit status, and no entry point or
+module loader yet) are documented in SPEC.md
 Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
 `selfhost/checker/README.md`, and `selfhost/codegen/README.md`.
 
@@ -135,8 +140,9 @@ authorization.
    Phase 4D.2 added its declaration emitter, checked against the reference
    generator byte for byte; Phase 4D.3 added its core expression emitter, checked
    node by node against the reference; Phase 4D.4 added string literal pooling,
-   checked against the reference's pooled declarations, without statements or
-   function bodies yet).
+   checked against the reference's pooled declarations; Phase 4D.5 added the
+   statement and function-body emitter, checked against the reference's own
+   definitions, without the entry point yet).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

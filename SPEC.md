@@ -2368,23 +2368,27 @@ The sources are:
 - `selfhost/codegen/declarations.ktn` — the declaration emitter.
 - `selfhost/codegen/expressions.ktn` — the core expression emitter.
 - `selfhost/codegen/literals.ktn` — the string literal pool.
+- `selfhost/codegen/statements.ktn` — the statement and function-body emitter.
 - `selfhost/codegen.ktn` — the helper probe driver.
 - `selfhost/declarations.ktn` — the declaration driver.
 - `selfhost/expressions.ktn` — the expression driver.
+- `selfhost/functions.ktn` — the function driver.
 
 `selfhost/codegen/README.md` describes how to build and run each driver, the
 directive interface the helper probe exposes, and the measured costs. The pool has
 no driver of its own: it is exercised through the expression driver, which prints
 the declarations its renderings produced.
 
-Three drivers exist because the layers are reached differently. The helper probe
+Four drivers exist because the layers are reached differently. The helper probe
 reads directive lines from the fixed relative path `input.txt` and prints one
 result line per directive, so that every helper is reachable without a program to
 walk. The declaration driver reads the two module paths the checker's driver
 reads, runs the same front end, and prints the declaration section. The expression
 driver reads the same two modules and prints the rendering of every expression in
-their function bodies, one line per expression node. None is the finished compiler
-stage, which will emit a whole translation unit for a program.
+their function bodies, one line per expression node. The function driver reads the
+same two modules and prints the pooled declarations and the function definitions
+those bodies produced. None is the finished compiler stage, which will emit a whole
+translation unit for a program.
 
 ### 28.2 API
 
@@ -2552,7 +2556,46 @@ Two states cannot arise and are therefore not tested: a missing entry, because
 resolving a literal interns it, and an overflow of the declarations' own output,
 because that output is sized from the pool.
 
-### 28.9 Differential testing
+### 28.9 The statement and function emitter
+
+`selfhost/codegen/statements.ktn` renders the body of every function.
+`emit_function_bodies(model, pool)` returns the whole body section - one definition
+per function declaration, in module and source order, each followed by a blank line
+- or a failure, which means no bodies were produced. The string literals the bodies
+use are interned into the pool the caller supplies, in the order the reference
+interns them.
+
+The statements are a block, a local declaration, an expression statement, `if` with
+its `else` and `else if` forms, `while`, `for`, `return`, and `match`. Braces,
+indentation, blank lines, and parentheses are the reference's. The language defines
+no `break`, `continue`, or `goto`, so no statement emits one; the `break;` a `match`
+case ends with is the reference's, and so is the `default:` arm that fails through
+the runtime, which the checker's exhaustiveness rule makes unreachable.
+
+A condition keeps the parentheses of a compound expression and gains them when it
+is a bare identifier or a literal, which is the reference's rule; the reference
+also parenthesizes a condition that is an assignment, which this mirrors although
+the expression emitter reports an assignment as not implemented before the rule can
+be reached.
+
+A `match` evaluates its scrutinee once into a temporary named `ktn_match_<n>`,
+numbered across the whole unit in emission order, checks a union scrutinee for null
+before reading its tag, and turns each arm into a `case` that binds the variant's
+fields, casts each unused binding to void, emits the arm's statements, and breaks.
+
+A statement that needs an expression kind the expression emitter does not implement
+is reported with that kind's failure and produces no bodies, so an incomplete body
+can never be reported as rendered. The body section is not a translation unit: a
+unit is the declaration sections of Section 28.6, then the pool of Section 28.8,
+then these bodies, then the entry point, which is deferred.
+
+**Capacity.** A body's line count is only known once it has been rendered, so the
+module renders twice: a dry run counts the lines through the same calls that write
+them, and the real run is given exactly that many chunks. The two runs are the same
+traversal with the same rules, and the match temporaries are numbered identically
+because the counter starts at zero in each run.
+
+### 28.10 Differential testing
 
 Three differential tests in `cmd/kitten` compare the Kitten-written generator with
 the reference. The helper test compares values the reference produced rather than a
@@ -2581,34 +2624,38 @@ message, never against a rendering.
 
 The pool is compared as well: the reference writes the declarations between the
 declaration sections and the first function body, and the harness compares exactly
-those lines, together with the expression lines that produced them.
+those lines, together with the expression lines that produced them. The function
+harness compares whole definitions: the pool and the bodies the probe rendered
+against the same two regions of the reference's own output, byte for byte. A
+program whose body needs an expression kind this section does not implement is
+required to report that kind by name, so an unsupported case is never counted as a
+comparison.
 
 `selfhost/codegen/README.md` records the corpora and the results.
 
-### 28.10 Deferred
+### 28.11 Deferred
 
-- **Function bodies and statements.** No statement, block, or function body is
-  emitted, and the C entry point does not exist yet, so no complete translation
-  unit is produced by Kitten.
+- **The entry point and the unit assembly.** No `int main(void)` is emitted, the
+  entry point rule of Section 22.7 is not applied, and nothing writes the four
+  parts - declaration sections, pool, bodies, entry point - into one translation
+  unit in order. A complete translation unit therefore does not exist yet.
 - **The remaining expression kinds.** Assignments, calls, member access, struct
   and variant literals, array and map creation, and indexing are reported as not
-  implemented rather than rendered. They need the runtime ABI names, the callee's
-  signature, or the accessors that keep an assignment target evaluated once.
-- **Splicing the pool into the declaration output.** The pool is emitted on its
-  own; the phase that emits bodies will place it between the constructors and the
-  bodies, where the reference writes it.
+  implemented rather than rendered, and a statement that needs one produces no
+  bodies. They need the runtime ABI names, the callee's signature, or the accessors
+  that keep an assignment target evaluated once.
 - **Entry-point validation.** The reference validates the entry point before it
   emits anything; that rule belongs with emitting it, and until it exists the
   declaration driver emits a section for a program the reference refuses.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
-- Compiling and running a generated program, and comparing its output with the
-  reference generator's, belong to the phase that emits the whole unit. A
-  declaration section is compiled on its own, not linked.
+- Compiling, linking, and running a complete generated program, and comparing its
+  output with the reference's, belong to the phase that emits the whole unit.
 - File writing: generated C is captured from standard output.
 - Command-line arguments, standard error, and a program-selected exit status
   (Section 16).
 
 Kitten is not self-hosting: the lexer, the parser, the checker, and the generator's
-helper, declaration, and core-expression layers are written in Kitten, while the
-loader, the rest of the emitter, and the production pipeline are Go.
+helper, declaration, expression, literal-pool, and statement layers are written in
+Kitten, while the loader, the entry point, the unit assembly, the rest of the
+emitter, and the production pipeline are Go.

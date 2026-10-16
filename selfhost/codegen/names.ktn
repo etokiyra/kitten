@@ -54,6 +54,12 @@ public fn alloc_function() -> string { return "ktn_rt_alloc"; }
 public fn string_concat_function() -> string { return "ktn_rt_string_concat"; }
 public fn string_equal_function() -> string { return "ktn_rt_string_equal"; }
 
+// fail_function is the runtime helper that reports a fatal runtime error and
+// terminates. Generated match statements call it for a tag no arm covers, which
+// the checker's exhaustiveness rule makes unreachable, and for a null union
+// reference.
+public fn fail_function() -> string { return "ktn_rt_fail"; }
+
 // module_prefix returns the C name prefix for a module. The root module (id 0)
 // has no prefix, so single-module programs generate the same names as before.
 // Imported modules use "<id>_"; because a Kitten identifier cannot begin with a
