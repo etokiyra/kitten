@@ -1,0 +1,137 @@
+// unit.ktn - print the complete C translation unit of a checked program.
+//
+// It reads the two modules the other self-hosted drivers read, lexes, parses, and
+// checks them with the same Kitten front end, and then prints the whole translation
+// unit the Kitten-written generator produces for them: the generated-file comment
+// and the runtime include, the declaration sections, the pooled string literals, the
+// function bodies, and the C entry point, in the reference's order and with its
+// blank lines. Standard output is therefore the unit itself, byte for byte, so a
+// harness can compare it with the reference generator's output for the same program
+// in one comparison.
+//
+// A program the entry point rule rejects, or one whose bodies need an expression
+// kind the expression emitter does not implement, prints a single "error ..." line
+// instead and no C.
+//
+// This is test infrastructure, not a compiler CLI: the output goes to standard
+// output, the driver writes no file, and it sets no process exit status, because the
+// self-hosted runtime offers none of those.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/errors.ktn";
+import "codegen/unit.ktn";
+import "lexer/lexer.ktn";
+import "lexer/tokens.ktn";
+import "parser/ast.ktn";
+import "parser/parser.ktn";
+
+// PreparedModule is a parsed module or the report that it could not be prepared.
+union PreparedModule {
+    Ok { Module module; }
+    Failed
+}
+
+// prepare_source lexes and parses one module, printing the first lexical or syntax
+// error it finds.
+fn prepare_source(string source, string path, int id) -> PreparedModule {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            print("error", "Lex", "-", path, line, column, message);
+            return PreparedModule.Failed;
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    print("error", "Parse", "-", path, error.line, error.column, error.message);
+                    return PreparedModule.Failed;
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreparedModule.Ok {
+                        module = Module {
+                            path = path,
+                            id = id,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// print_lines writes text one line at a time, so that standard output holds it byte
+// for byte: print terminates every argument with a newline.
+fn print_lines(string text) {
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            print(substring(text, start, index));
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size) {
+        print(substring(text, start, size));
+    }
+}
+
+// report_error prints a generation failure. The file is the module the failure
+// belongs to, or "-" when it belongs to none, which is every failure except the
+// entry point rule's.
+fn report_error(GenerateError error) {
+    if (error.file == "") {
+        print("error", "Generate", "-", error.line, error.column, error.message);
+    } else {
+        print("error", "Generate", error.file, error.line, error.column, error.message);
+    }
+}
+
+fn main() {
+    Module[] modules = new Module[2];
+    int module_count = 0;
+
+    match (prepare_source(read_file("input.txt"), "input.txt", 0)) {
+        Ok(module) {
+            modules[0] = module;
+            module_count = 1;
+        }
+        Failed {
+        }
+    }
+
+    if (module_count == 1) {
+        match (prepare_source(read_file("input2.txt"), "input2.txt", 1)) {
+            Ok(module) {
+                modules[1] = module;
+                module_count = 2;
+            }
+            Failed {
+                module_count = 0;
+            }
+        }
+    }
+
+    if (module_count == 2) {
+        match (check_modules(modules, 2)) {
+            Failure(error) {
+                print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+            }
+            Success(summary, model) {
+                match (emit_translation_unit(model)) {
+                    Failure(error) {
+                        report_error(error);
+                    }
+                    Success(text, lines) {
+                        print_lines(text);
+                    }
+                }
+            }
+        }
+    }
+}

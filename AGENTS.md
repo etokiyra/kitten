@@ -107,8 +107,12 @@ blocks, local declarations, expression statements, `if`/`else`, `while`, `for`,
 `return`, and `match`, checked against the reference's own function definitions byte
 for byte. Assignments, calls, member access, struct and variant literals,
 allocation, and indexing are still reported as not implemented rather than rendered
-when a statement needs one, and the entry point and module loader are still to
-come.
+when a statement needs one. Phase 4D.6 added the translation unit emitter under
+`selfhost/codegen/unit.ktn`, driven by `selfhost/unit.ktn`: the entry point rule, the
+C entry point, and the assembly of the declaration sections, the literal pool, the
+bodies, and the entry point into one complete translation unit, checked against the
+reference's whole output byte for byte. A module loader and the eight remaining
+expression kinds are still to come.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
@@ -142,7 +146,8 @@ authorization.
    node by node against the reference; Phase 4D.4 added string literal pooling,
    checked against the reference's pooled declarations; Phase 4D.5 added the
    statement and function-body emitter, checked against the reference's own
-   definitions, without the entry point yet).
+   definitions; Phase 4D.6 added the entry point rule and the complete translation
+   unit assembly, checked against the reference's whole output).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

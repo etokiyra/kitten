@@ -11,10 +11,11 @@ being built one at a time:
   string literals, identifiers, unary expressions, and binary expressions; and
 - the string literal pool - the `static const ktn_string` objects the emitted code
   refers to; and
-- the statement and function emitter - the bodies of the generated functions.
+- the statement and function emitter - the bodies of the generated functions; and
+- the translation unit emitter - the entry point rule, the C entry point, and the
+  assembly of the whole unit.
 
-The remaining expression kinds, the C entry point, and a module loader do not exist
-yet.
+The remaining expression kinds and a module loader do not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -32,6 +33,8 @@ here.
 - `selfhost/codegen/expressions.ktn` — the core expression emitter.
 - `selfhost/codegen/literals.ktn` — the string literal pool.
 - `selfhost/codegen/statements.ktn` — the statement and function-body emitter.
+- `selfhost/codegen/unit.ktn` — the entry point rule and the translation unit
+  assembly.
 - `selfhost/codegen.ktn` — the helper probe driver: it reads directives from
   `input.txt` and prints one result line per directive.
 - `selfhost/declarations.ktn` — the declaration driver: it reads two modules,
@@ -42,11 +45,14 @@ here.
 - `selfhost/functions.ktn` — the function driver: it reads two modules, runs the
   Kitten front end, and prints the pooled declarations and the function
   definitions those bodies produced.
+- `selfhost/unit.ktn` — the unit driver: it reads two modules, runs the Kitten
+  front end, and prints the complete C translation unit.
 - `cmd/kitten/codegen_differential_test.go`,
   `cmd/kitten/declarations_differential_test.go`,
   `cmd/kitten/expressions_differential_test.go`,
-  `cmd/kitten/literals_differential_test.go`, and
-  `cmd/kitten/functions_differential_test.go` — the differential harnesses.
+  `cmd/kitten/literals_differential_test.go`,
+  `cmd/kitten/functions_differential_test.go`, and
+  `cmd/kitten/unit_differential_test.go` — the differential harnesses.
 
 ## Building and running
 
@@ -57,6 +63,7 @@ kitten build selfhost/codegen.ktn -o /tmp/codegen-probe
 kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
 kitten build selfhost/expressions.ktn -o /tmp/expressions-probe
 kitten build selfhost/functions.ktn -o /tmp/functions-probe
+kitten build selfhost/unit.ktn -o /tmp/unit-probe
 cd /tmp/example && printf 'function 0 main\nescape "a\\tb"\n' > input.txt && /tmp/codegen-probe
 ```
 
@@ -479,18 +486,22 @@ be.
 
 ### Capacity
 
-A body's line count is only known once it has been rendered, so the module renders
-twice: a dry run counts the lines through the same calls that write them, and the
-real run is given exactly that many chunks. The two runs are the same traversal
-with the same rules, and the match temporaries are numbered identically because the
-counter starts at zero in each run. A capacity that is too small is reported, never
-silently truncated.
+A body's line count is only known once it has been rendered, and rendering twice
+would render every expression twice and intern every literal twice. Instead
+`body_line_bound` counts the units that can produce a line - statements, match arms,
+arm bindings, and functions - without rendering anything and without touching the
+pool, and sizes the output for them with a generous factor; the bodies are rendered
+exactly once. A bound that proved too small is reported, never silently truncated,
+and the corpus assertions below would catch it, because an undersized bound would
+report an overflow instead of the unimplemented kind a program is expected to
+report.
 
 ### Running the function driver
 
 ```sh
 # From the repository root.
 kitten build selfhost/functions.ktn -o /tmp/functions-probe
+kitten build selfhost/unit.ktn -o /tmp/unit-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf 'fn count(int limit) -> int {\n    int index = 0;\n    while (index < limit) {\n        index++;\n    }\n    return index;\n}\nfn main() {\n}\n' > input.txt
 printf '' > input2.txt
@@ -499,6 +510,75 @@ printf '' > input2.txt
 
 The driver prints the pooled declarations the renderings produced, then the
 definitions, in the order a generated file has them.
+
+## Translation unit
+
+`selfhost/codegen/unit.ktn` renders a complete C translation unit:
+
+```kitten
+emit_translation_unit(model) -> TranslationUnitResult
+```
+
+The result is `Success { text; lines }` or `Failure { error }`, and a failure means
+no unit was produced: every section either completes or reports the failure that
+stopped it.
+
+The sections, in the reference's order, with the reference's blank lines:
+
+1. the generated-file comment, the `#include` of the runtime header, and a blank
+   line, then the declaration sections of the declaration emitter;
+2. the pooled string literal declarations, followed by one blank line, or nothing at
+   all for a program with no literals;
+3. one definition per function, each followed by a blank line, from the statement
+   emitter;
+4. `int main(void)`, which calls `ktn_rt_init()` and then the root module's
+   `ktn_fn_main()`, and returns 0.
+
+The parts are concatenated once each, so the assembly itself copies the unit a
+constant number of times.
+
+### The entry point rule
+
+The rule runs **before anything is emitted**, exactly as the reference does, so a
+program with both an invalid entry point and an unimplemented expression reports the
+entry point, and a rejected program produces no C:
+
+| Program | Failure |
+| --- | --- |
+| no `main` in the root module | `program has no entry point: define fn main() in the root module`, at 1:1 |
+| `main` with parameters | `entry point main must take no parameters` |
+| `main` returning a value | `entry point main must not return a value, but returns <type>` |
+| a `main` the checker did not annotate | `entry point main was not checked` |
+
+The rule looks at the module at index zero, which is the root, and at its first
+declaration named `main`; an imported module's `main` is never an entry point. The
+failure carries the root module's path, which is the only failure that does; every
+other failure belongs to the module being emitted and reports its position alone,
+exactly as the reference's failures do.
+
+### The two-pass dependency
+
+The pool is written before the bodies but is only complete after they have been
+rendered, because a literal is interned where it is rendered. The unit emitter
+therefore renders the bodies first and concatenates afterwards, and renders them
+exactly once: rendering them a second time to discover the pool would render every
+expression twice and intern every literal twice, and would leave the pool's order
+and the match temporary numbering dependent on a pass the file never shows. The
+statement emitter's counted line bound is what makes one pass enough.
+
+### Running the unit driver
+
+```sh
+# From the repository root.
+kitten build selfhost/unit.ktn -o /tmp/unit-probe
+mkdir -p /tmp/example && cd /tmp/example
+printf 'fn main() {\n}\n' > input.txt
+printf '' > input2.txt
+/tmp/unit-probe
+```
+
+Standard output is the complete translation unit, byte for byte, so one comparison
+covers every section. A rejected program prints a single `error ...` line instead.
 
 ## Output accumulation
 
@@ -573,7 +653,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 657 string literals whose escaping and byte length match the reference
+- 668 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -597,7 +677,7 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
   modules, declaration order, bodies with and without literals, a shared literal
   pool, many declarations of every kind, and wide field and parameter lists.
 - 35 corpus programs whose sections match byte for byte, over 544 lines, and
-  1755 whose check error the probe reports exactly as the reference checker does.
+  1757 whose check error the probe reports exactly as the reference checker does.
 - 57 corpus programs without an entry point, verified by deriving the reference
   section: prepending `fn main() {}` adds exactly one prototype line and nothing
   else, and removing it - together with the prototype block's blank line when the
@@ -697,35 +777,69 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/kitten/` reports:
 - The generated definitions, compiled and linked against the runtime and run under
   both GCC and Clang, print the values the source implies.
 
+`cmd/kitten/unit_differential_test.go` compares whole translation units, so one
+comparison per program covers the header, the declaration sections, the pool, the
+bodies, and the entry point at once, and no expected output is hand-maintained. A
+program the reference rejects is compared through its error instead, rendered in the
+driver's shape including the file, which only the entry point rule sets.
+
+Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
+
+- **13 whole units identical over 499 lines** in the targeted corpus: a minimal
+  `main`; a `main` that runs a loop, a string concatenation, and an `if`; several
+  functions in declaration order; nested blocks and control flow; loops of every
+  shape; `match` over enums and unions; structs, enums, and unions with
+  constructors; a program with no pooled strings; empty strings, escaped strings,
+  and repeated literals; the pool's order when strings appear in different
+  functions; strings inside nested statements; and two modules, one of which
+  declares its own `main`.
+- **7 whole corpus units identical over 127 lines**, plus **57 corpus programs whose
+  entry point failure is reported identically**, 27 programs reported as needing an
+  unimplemented expression kind by name, and 1757 check errors reported identically.
+  The remaining corpus programs use calls, which this phase does not implement.
+- **4 targeted and 57 corpus entry point rejections**, covering a missing `main`,
+  parameters, a return value, and an imported module that declares `main` but is not
+  the root.
+- 8 corruptions of a correct unit - a missing and an extra blank line, a changed
+  literal number, a reordered function, a changed entry point line, a dropped
+  function definition, a removed declaration section, and a dropped include - are
+  each rejected by the comparison the tests use, and an identical unit is accepted.
+- Generation is deterministic across repeated runs and across a different program in
+  between.
+- Whole units of growing size: 20, 40, and 80 functions cost 4, 6, and 11 ms.
+- **Execution:** two complete units are compiled, linked against the runtime, and run
+  under both GCC and Clang, with empty stdout and stderr and status 0. The supported
+  subset cannot print, so this checks compilation, linking, execution, and the
+  absence of a runtime failure - including the string concatenation the generated
+  `main` performs, which allocates through the collector - rather than printed
+  values, and it claims nothing about them.
+
 ## What is deliberately not here
 
-- **The entry point and the unit assembly.**
-  `selfhost/codegen/statements.ktn` emits the function bodies and
-  `selfhost/codegen/declarations.ktn` the declaration sections, but nothing emits
-  `int main(void)`, applies the entry point rule the reference applies before it
-  emits anything, or writes the four parts into one translation unit in order.
-- **The remaining expression kinds.** Assignments, calls, member access, struct
-  and variant literals, array and map creation, and indexing are reported as not
-  implemented rather than rendered. A call needs the runtime ABI names and the
-  callee's signature; indexing and assignment need the runtime accessors that keep
-  the target evaluated once.
-- **Entry-point validation.** The reference checks that the root module declares a
-  zero-parameter, void-returning `main` before it emits anything, so it rejects
-  some programs whose declarations are otherwise complete. That rule belongs with
-  emitting the entry point, and until it is implemented the declaration driver
-  emits a section for such a program while the reference refuses to generate; the
-  corpus harnesses handle those programs with the derivation above.
+- **The remaining expression kinds.** Assignments, calls, member access, struct and
+  variant literals, array and map creation, and indexing are reported as not
+  implemented rather than rendered, and a program whose bodies need one produces no
+  translation unit. A call needs the runtime ABI names and the callee's signature;
+  indexing and assignment need the runtime accessors that keep the target evaluated
+  once.
 - **A module loader.** The drivers read two fixed paths, as the checker's driver
   does. Nothing discovers imports in Kitten, so a multi-module program reaches the
-  emitters only through a caller that supplies the module set.
-- **Compiling and running generated programs.** A declaration section is not a
-  translation unit: it has no bodies and no entry point, so it is compiled alone,
-  not linked, and no claim is made that a complete generated program builds.
-- **File writing.** A driver can only print to standard output, so generated C is
-  captured from standard output rather than written to a file.
-- **Command-line arguments, standard error, and a chosen exit status.**
+  emitters only through a caller that supplies the module set. The reference's own
+  loader is Go, and `kitten build` still uses it.
+- **Writing the unit anywhere but standard output.** The unit driver prints the C;
+  the self-hosted runtime offers no file writing, no command-line arguments, and no
+  program-selected exit status.
+- **Observable behavior from the supported subset.** A generated program cannot
+  print, call, or assign yet, so the execution tests verify compilation, linking,
+  execution, exit status, and the absence of a runtime failure rather than printed
+  values.
 
-Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
-helper, declaration, expression, literal-pool, and statement layers are written in
-Kitten; the loader, the entry point, the unit assembly, the rest of the emitter, and
-the production pipeline are Go.
+Kitten is not self-hosting, and this phase does not make it so: the backend now
+emits complete translation units for the programs its expression emitter supports,
+but a full compiler still needs the eight expression kinds, a Kitten-written module
+loader, a driver that writes and builds, and a bootstrap in which the Kitten-written
+compiler compiles its own source. Until then the Go compiler remains the bootstrap
+reference and the only pipeline `kitten build` and `kitten run` use: the lexer, the
+parser, the checker, and the generator's helper, declaration, expression,
+literal-pool, statement, and unit layers are Kitten, while the loader, the pipeline
+that writes and compiles the output, and the production compiler itself are Go.

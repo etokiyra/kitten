@@ -46,6 +46,10 @@ public fn tag_field_name() -> string { return "ktn_tag"; }
 public fn header_file_name() -> string { return "kitten_runtime.h"; }
 public fn alloc_function() -> string { return "ktn_rt_alloc"; }
 
+// init_function is the runtime initialization the C entry point calls before the
+// program's own main runs, which starts the garbage collector.
+public fn init_function() -> string { return "ktn_rt_init"; }
+
 // string_concat_function and string_equal_function are the runtime helpers a
 // string "+", "==", or "!=" becomes. A Kitten string is a length-carrying
 // pointer, so "+" is a concatenation and "==" compares content rather than

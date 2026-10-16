@@ -12,11 +12,14 @@
 //
 // Capacity. A body is written through the same bounded accumulator the declaration
 // emitter uses, and the number of lines is only known once the body has been
-// rendered. The module therefore renders twice: a dry run counts the lines through
-// the same calls that write them, and the real run is given exactly that many
-// chunks. The two runs are the same traversal with the same rules, so the count is
-// exact rather than a bound, and the match temporaries are numbered identically
-// because the counter starts at zero in each run.
+// rendered. Rendering twice would render every expression twice and intern every
+// literal twice, so instead this module counts the units that can produce a line -
+// statements, match arms, arm bindings, and functions - and sizes the output for
+// them with a generous factor. The count is a bound rather than an exact figure,
+// but it is a bound over the same shape the emitter writes, and a body that
+// exceeded it would be reported rather than truncated. The bodies are therefore
+// rendered exactly once, which is also what keeps the literal pool's order and the
+// match temporary numbering a single pass's.
 //
 // An expression the expression emitter does not implement yet is reported as a
 // failure at the statement that contains it, so a body that cannot be rendered in
@@ -66,11 +69,8 @@ struct StatementEmitter {
     // pool receives the string literals the rendered expressions use.
     LiteralPool pool;
 
-    // output receives the text. In counting mode it is never written to.
+    // output receives the text.
     Output output;
-
-    // counting selects the dry run that counts lines instead of writing them.
-    bool counting;
 
     int indent;
 
@@ -112,13 +112,12 @@ fn missing_block() -> BodyStep {
     return BodyStep.Failed { error = generate_error(1, 1, "missing block") };
 }
 
-fn new_statement_emitter(SemanticModel model, LiteralPool pool, bool counting, int capacity) -> StatementEmitter {
+fn new_statement_emitter(SemanticModel model, LiteralPool pool, int capacity) -> StatementEmitter {
     return StatementEmitter {
         model = model,
         module_index = 0,
         pool = pool,
         output = new_output(capacity),
-        counting = counting,
         indent = 0,
         lines = 0,
         temps = 0
@@ -153,9 +152,6 @@ fn count_newlines(string text) -> int {
 // write_indent appends the current indentation, without a newline, so that a
 // construct such as "if (...)" can share the line that follows it.
 fn write_indent(StatementEmitter emitter) -> BodyStep {
-    if (emitter.counting) {
-        return BodyStep.Ok;
-    }
     match (output_indent(emitter.output, emitter.indent)) {
         Ok {
             return BodyStep.Ok;
@@ -169,9 +165,6 @@ fn write_indent(StatementEmitter emitter) -> BodyStep {
 // write_text appends text without indentation or a newline.
 fn write_text(StatementEmitter emitter, string text) -> BodyStep {
     emitter.lines = emitter.lines + count_newlines(text);
-    if (emitter.counting) {
-        return BodyStep.Ok;
-    }
     match (output_write(emitter.output, text)) {
         Ok {
             return BodyStep.Ok;
@@ -185,9 +178,6 @@ fn write_text(StatementEmitter emitter, string text) -> BodyStep {
 // write_line appends one indented, newline-terminated line.
 fn write_line(StatementEmitter emitter, string text) -> BodyStep {
     emitter.lines = emitter.lines + 1;
-    if (emitter.counting) {
-        return BodyStep.Ok;
-    }
     match (output_line(emitter.output, emitter.indent, text)) {
         Ok {
             return BodyStep.Ok;
@@ -198,13 +188,14 @@ fn write_line(StatementEmitter emitter, string text) -> BodyStep {
     }
 }
 
-// overflow_failure reports that a body did not fit in the capacity it was given.
-// The capacity is derived from the same traversal, so this cannot occur; it is
-// reported rather than ignored so that a wrong capacity can never be mistaken for
-// a complete body.
+// overflow_failure reports that a body exceeded the line bound the output was sized
+// for. body_line_bound counts the units that can produce a line with a generous
+// factor, so this cannot occur for a body the emitter produced; it is reported
+// rather than ignored so that a bound that proved too small could never be mistaken
+// for a complete body.
 fn overflow_failure(int capacity) -> BodyStep {
     return BodyStep.Failed {
-        error = generate_error(0, 0, "the function bodies do not fit in a capacity of " + decimal(capacity) + " lines")
+        error = generate_error(0, 0, "the function bodies exceed the line bound of " + decimal(capacity) + " lines")
     };
 }
 
@@ -754,22 +745,99 @@ fn incomplete_match(Position at) -> BodyStep {
 // --- Function definitions ----------------------------------------------------
 
 // emit_function_bodies renders the body of every function, in module and source
-// order, and sizes the output exactly.
+// order, once.
 //
-// The pool is filled while the bodies are rendered, and it is filled in the same
-// order in both passes, so a caller can read the pool's text once this returns.
+// The output is sized from body_line_bound, and the pool is filled while the bodies
+// are rendered, in that single pass, so a caller can read the pool's text once this
+// returns. A failure means no bodies were produced: nothing is written after a
+// nested failure.
 public fn emit_function_bodies(SemanticModel model, LiteralPool pool) -> BodyResult {
-    StatementEmitter counter = new_statement_emitter(model, pool, true, 1);
-    BodyStep counted = emit_every_function(counter);
-    if (!body_ok(counted)) {
-        return BodyResult.Failure { error = body_error(counted) };
-    }
-    StatementEmitter emitter = new_statement_emitter(model, pool, false, counter.lines);
+    StatementEmitter emitter = new_statement_emitter(model, pool, body_line_bound(model));
     BodyStep emitted = emit_every_function(emitter);
     if (!body_ok(emitted)) {
         return BodyResult.Failure { error = body_error(emitted) };
     }
     return BodyResult.Success { text = output_text(emitter.output), lines = emitter.lines };
+}
+
+// body_line_bound returns an upper bound on the number of lines the function bodies
+// occupy.
+//
+// Every emitted line comes from a line write or from a text write that ends a line,
+// and a statement writes only a handful of lines of its own: a block and a loop
+// write one closing brace, an if writes one per branch, a declaration, an
+// expression statement, and a return write one each, and a match writes a temporary,
+// a switch, per arm a case, a break, and a closing brace, and per binding a
+// declaration and a void cast. Counting every statement, arm, binding, and function
+// and allowing eight lines per unit therefore bounds the count with room to spare,
+// and the eight extra lines cover the header and the trailing blank line of each
+// definition.
+//
+// The count walks the statements without rendering anything and without touching
+// the literal pool, so it cannot change the pool's order or the temporary
+// numbering, and the bodies themselves are rendered exactly once.
+public fn body_line_bound(SemanticModel model) -> int {
+    int units = 1;
+    int module_index = 0;
+    while (module_index < model.module_count) {
+        ModuleModel module = module_model(model, module_index);
+        int index = 0;
+        while (index < module.program.declaration_count) {
+            match (module.program.declarations[index]) {
+                Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                    units = units + 1 + count_statement_units(body);
+                }
+                Import(keyword, path) { }
+                Struct(at, visibility, name, fields, field_count) { }
+                Enum(at, visibility, name, cases, case_count) { }
+                Union(at, visibility, name, variants, variant_count) { }
+            }
+            index++;
+        }
+        module_index++;
+    }
+    return units * 8 + 8;
+}
+
+// count_statement_units counts the units a statement subtree can turn into lines:
+// the statement itself, every statement it contains, every match arm, and every arm
+// binding.
+fn count_statement_units(Stmt statement) -> int {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            int units = 1;
+            int index = 0;
+            while (index < statement_count) {
+                units = units + count_statement_units(statements[index]);
+                index++;
+            }
+            return units;
+        }
+        VarDecl(type_ref, name, initializer) { return 1; }
+        Expression(expression) { return 1; }
+        If(at, condition, then_branch, else_branch) {
+            int units = 1 + count_statement_units(then_branch);
+            match (else_branch) {
+                Absent { }
+                Present(alternative) {
+                    units = units + count_statement_units(alternative);
+                }
+            }
+            return units;
+        }
+        While(at, condition, body) { return 1 + count_statement_units(body); }
+        For(at, initializer, condition, increment, body) { return 1 + count_statement_units(body); }
+        Return(at, value) { return 1; }
+        Match(at, scrutinee, arms, arm_count) {
+            int units = 1;
+            int index = 0;
+            while (index < arm_count) {
+                units = units + 1 + arms[index].binding_count + count_statement_units(arms[index].body);
+                index++;
+            }
+            return units;
+        }
+    }
 }
 
 // emit_every_function writes one definition per function declaration, in module

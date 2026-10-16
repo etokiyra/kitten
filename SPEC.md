@@ -2369,17 +2369,20 @@ The sources are:
 - `selfhost/codegen/expressions.ktn` — the core expression emitter.
 - `selfhost/codegen/literals.ktn` — the string literal pool.
 - `selfhost/codegen/statements.ktn` — the statement and function-body emitter.
+- `selfhost/codegen/unit.ktn` — the entry point rule and the translation unit
+  assembly.
 - `selfhost/codegen.ktn` — the helper probe driver.
 - `selfhost/declarations.ktn` — the declaration driver.
 - `selfhost/expressions.ktn` — the expression driver.
 - `selfhost/functions.ktn` — the function driver.
+- `selfhost/unit.ktn` — the unit driver.
 
 `selfhost/codegen/README.md` describes how to build and run each driver, the
 directive interface the helper probe exposes, and the measured costs. The pool has
 no driver of its own: it is exercised through the expression driver, which prints
 the declarations its renderings produced.
 
-Four drivers exist because the layers are reached differently. The helper probe
+Five drivers exist because the layers are reached differently. The helper probe
 reads directive lines from the fixed relative path `input.txt` and prints one
 result line per directive, so that every helper is reachable without a program to
 walk. The declaration driver reads the two module paths the checker's driver
@@ -2595,7 +2598,39 @@ them, and the real run is given exactly that many chunks. The two runs are the s
 traversal with the same rules, and the match temporaries are numbered identically
 because the counter starts at zero in each run.
 
-### 28.10 Differential testing
+### 28.10 The translation unit
+
+`selfhost/codegen/unit.ktn` renders a complete C translation unit:
+`emit_translation_unit(model)` returns `Success { text; lines }` or a failure, and a
+failure means no unit was produced.
+
+The sections are the reference's, in its order and with its blank lines: the
+generated-file comment, the `#include` of the runtime header, and a blank line,
+followed by the declaration sections of Section 28.6; the pooled literal
+declarations of Section 28.8, with one blank line after them or nothing at all for a
+program with no literals; one definition per function from Section 28.9, each
+followed by a blank line; and the C entry point, which calls the runtime
+initialization and then the root module's `ktn_fn_main` and returns 0.
+
+**The entry point rule** runs before anything is emitted, exactly as the reference
+runs it, so a program with both an invalid entry point and an unimplemented
+expression reports the entry point, and a rejected program produces no C. The rule
+requires a zero-parameter, void-returning `main` in the root module, which is the
+module at index zero; an imported module's `main` is never an entry point, and the
+compiler never invents one. The failures are, with the root module's path as their
+file: `program has no entry point: define fn main() in the root module` at 1:1,
+`entry point main must take no parameters`, `entry point main must not return a
+value, but returns <type>`, and `entry point main was not checked`. The entry point
+rule is the only failure that carries a file; every other failure belongs to the
+module being emitted and reports its position alone, as in the reference.
+
+**The pool's dependency on the bodies** is why the bodies are rendered before the
+text is assembled even though the pool precedes them in the file: a literal is
+interned where it is rendered. The unit emitter renders the bodies exactly once and
+concatenates the parts once each; rendering them again to discover the pool would
+render every expression twice and intern every literal twice.
+
+### 28.11 Differential testing
 
 Three differential tests in `cmd/kitten` compare the Kitten-written generator with
 the reference. The helper test compares values the reference produced rather than a
@@ -2626,36 +2661,37 @@ The pool is compared as well: the reference writes the declarations between the
 declaration sections and the first function body, and the harness compares exactly
 those lines, together with the expression lines that produced them. The function
 harness compares whole definitions: the pool and the bodies the probe rendered
-against the same two regions of the reference's own output, byte for byte. A
-program whose body needs an expression kind this section does not implement is
-required to report that kind by name, so an unsupported case is never counted as a
-comparison.
+against the same two regions of the reference's own output, byte for byte. The unit
+harness compares the complete translation unit, one comparison per program covering
+the header, the declaration sections, the pool, the bodies, and the entry point at
+once. A program whose body needs an expression kind this section does not implement
+is required to report that kind by name, and a program the entry point rule rejects
+is compared through its error, so neither is ever counted as a unit comparison.
 
 `selfhost/codegen/README.md` records the corpora and the results.
 
-### 28.11 Deferred
+### 28.12 Deferred
 
-- **The entry point and the unit assembly.** No `int main(void)` is emitted, the
-  entry point rule of Section 22.7 is not applied, and nothing writes the four
-  parts - declaration sections, pool, bodies, entry point - into one translation
-  unit in order. A complete translation unit therefore does not exist yet.
+- **Writing and building the unit.** The unit driver prints the complete C to
+  standard output; nothing writes a file, invokes a C compiler, or sets a process
+  exit status, because the self-hosted runtime offers none of those.
 - **The remaining expression kinds.** Assignments, calls, member access, struct
   and variant literals, array and map creation, and indexing are reported as not
   implemented rather than rendered, and a statement that needs one produces no
   bodies. They need the runtime ABI names, the callee's signature, or the accessors
   that keep an assignment target evaluated once.
-- **Entry-point validation.** The reference validates the entry point before it
-  emits anything; that rule belongs with emitting it, and until it exists the
-  declaration driver emits a section for a program the reference refuses.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
-- Compiling, linking, and running a complete generated program, and comparing its
-  output with the reference's, belong to the phase that emits the whole unit.
-- File writing: generated C is captured from standard output.
-- Command-line arguments, standard error, and a program-selected exit status
-  (Section 16).
+- A generated program cannot yet print, call, or assign, so comparing observable
+  behavior is limited to compilation, linking, execution, exit status, and the
+  absence of a runtime failure.
+- File writing, command-line arguments, standard error, and a program-selected exit
+  status (Section 16), none of which the self-hosted runtime offers.
 
-Kitten is not self-hosting: the lexer, the parser, the checker, and the generator's
-helper, declaration, expression, literal-pool, and statement layers are written in
-Kitten, while the loader, the entry point, the unit assembly, the rest of the
-emitter, and the production pipeline are Go.
+Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
+helper, declaration, expression, literal-pool, statement, and unit layers are written
+in Kitten, and for the programs its expression emitter supports it now produces
+complete translation units; but the loader, the pipeline that writes and compiles the
+output, and the production compiler are Go, so the Go compiler must remain the
+bootstrap reference until the Kitten-written compiler can compile its own source
+through a Kitten-written pipeline and reproduce the same behavior.

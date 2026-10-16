@@ -1,0 +1,174 @@
+// unit.ktn - assemble a complete C translation unit.
+//
+// It reproduces the reference generator's generate(): the entry point rule first,
+// then the generated-file header and the declaration sections, then the pooled
+// string literals, then the function bodies, and then the C entry point, in that
+// order and with the reference's blank lines. The result is a whole translation
+// unit that is byte for byte the reference's for a program whose expressions this
+// generator supports.
+//
+// Sequence. The entry point is validated before anything is emitted, exactly as the
+// reference does, so a program with both a bad entry point and an unsupported
+// expression reports the entry point, and a rejected program produces no C at all.
+//
+// The pool ordering is the reason the bodies are rendered before the text is
+// assembled: the reference discovers a literal while rendering a body and writes
+// its declaration before the bodies, so the bodies must be rendered - exactly once -
+// before the pool can be written. Rendering them again to discover the pool would
+// render every expression twice and intern every literal twice, so this module
+// renders them once and sizes their output from the bound the statement emitter
+// counts.
+//
+// A unit is not a program the runtime can be told to run: the driver prints the C,
+// and nothing here writes a file or sets a process exit status.
+
+import "../checker/model.ktn";
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "declarations.ktn";
+import "errors.ktn";
+import "literals.ktn";
+import "names.ktn";
+import "output.ktn";
+import "statements.ktn";
+
+// TranslationUnitResult is a complete C translation unit, or the reason none was
+// produced.
+//
+// A failure means no unit was produced: every section either completes or reports
+// the failure that stopped it, and nothing is returned after a nested failure.
+public union TranslationUnitResult {
+    Success { string text; int lines; }
+    Failure { GenerateError error; }
+}
+
+// EntryPointCheck is the outcome of the entry point rule.
+union EntryPointCheck {
+    Ok
+    Failed { GenerateError error; }
+}
+
+// emit_translation_unit renders the whole translation unit for a checked program.
+public fn emit_translation_unit(SemanticModel model) -> TranslationUnitResult {
+    match (validate_entry_point(model)) {
+        Failed(error) {
+            return TranslationUnitResult.Failure { error = error };
+        }
+        Ok {
+            match (emit_declarations(model)) {
+                Failure(error) {
+                    return TranslationUnitResult.Failure { error = error };
+                }
+                Success(declarations, declaration_lines, capacity) {
+                    LiteralPool pool = new_literal_pool(literal_capacity(model));
+                    match (emit_function_bodies(model, pool)) {
+                        Failure(error) {
+                            return TranslationUnitResult.Failure { error = error };
+                        }
+                        Success(bodies, body_lines) {
+                            // The parts are concatenated once each. The pool is empty
+                            // for a program with no string literals, in which case it
+                            // contributes no text at all, not even a blank line.
+                            return TranslationUnitResult.Success {
+                                text = declarations + literal_pool_text(pool) + bodies + entry_point_text(model),
+                                lines = declaration_lines + literal_pool_lines(pool) + body_lines + entry_point_lines()
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- Entry point -------------------------------------------------------------
+
+// validate_entry_point requires a zero-parameter, void-returning "main" declared in
+// the root module, which is the module at index zero. Imported modules are never
+// entry points, even if they declare a main, and the compiler never invents one.
+//
+// The rule runs before anything is emitted, so its failure is the only one a
+// program with an invalid entry point can report.
+fn validate_entry_point(SemanticModel model) -> EntryPointCheck {
+    ModuleModel root = module_model(model, 0);
+    int index = 0;
+    while (index < root.program.declaration_count) {
+        match (root.program.declarations[index]) {
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                if (name.text == "main") {
+                    return check_main(root, at);
+                }
+            }
+            Import(keyword, path) { }
+            Struct(at, visibility, name, fields, field_count) { }
+            Enum(at, visibility, name, cases, case_count) { }
+            Union(at, visibility, name, variants, variant_count) { }
+        }
+        index++;
+    }
+    return EntryPointCheck.Failed {
+        error = generate_error_in_file(root.path, 1, 1, "program has no entry point: define fn main() in the root module")
+    };
+}
+
+// check_main applies the entry point rule to the declaration named main, reporting
+// against the root module, which is the only file an entry point failure can belong
+// to.
+fn check_main(ModuleModel root, Token at) -> EntryPointCheck {
+    Position position = position_of_token(at);
+    match (declaration_function(root, "main")) {
+        Absent {
+            return EntryPointCheck.Failed {
+                error = generate_error_in_file(root.path, position.line, position.column, "entry point main was not checked")
+            };
+        }
+        Present(function) {
+            if (function.parameter_count != 0) {
+                return EntryPointCheck.Failed {
+                    error = generate_error_in_file(root.path, position.line, position.column, "entry point main must take no parameters")
+                };
+            }
+            if (!is_void(function.return_type)) {
+                return EntryPointCheck.Failed {
+                    error = generate_error_in_file(root.path, position.line, position.column, "entry point main must not return a value, but returns " + type_string(function.return_type))
+                };
+            }
+            return EntryPointCheck.Ok;
+        }
+    }
+}
+
+// --- The entry point ---------------------------------------------------------
+
+// entry_point_lines is the number of lines the C entry point occupies.
+public fn entry_point_lines() -> int {
+    return 5;
+}
+
+// entry_point_text renders the C entry point, which initializes the runtime and
+// calls the Kitten main of the root module. The C name "main" cannot collide with
+// the Kitten main, which is emitted as ktn_fn_main.
+fn entry_point_text(SemanticModel model) -> string {
+    Output output = new_output(entry_point_lines());
+    output_line(output, 0, "int main(void) {");
+    output_line(output, 1, init_function() + "();");
+    output_line(output, 1, function_name("main", module_model(model, 0).id) + "();");
+    output_line(output, 1, "return 0;");
+    output_line(output, 0, "}");
+    return output_text(output);
+}
+
+// --- Capacity ----------------------------------------------------------------
+
+// literal_capacity bounds the number of distinct literals a program can pool: every
+// literal is an expression node, and each module reports how many expression nodes
+// its parse assigned, so summing them cannot be too small.
+fn literal_capacity(SemanticModel model) -> int {
+    int total = 0;
+    int index = 0;
+    while (index < model.module_count) {
+        total = total + module_model(model, index).expression_count;
+        index++;
+    }
+    return total;
+}

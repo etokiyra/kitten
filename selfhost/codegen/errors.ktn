@@ -1,22 +1,33 @@
 // errors.ktn - the failure type every generator stage reports.
 //
-// The reference reports a code generation failure as a position and a message
-// (codegen.Error). The Kitten-written generator reports the same shape, so that a
-// failure produced by one stage can be compared with a failure produced by the
-// reference for the same input.
+// The reference reports a code generation failure as a position, a message, and
+// the file the failure belongs to (codegen.Error). The Kitten-written generator
+// reports the same shape, so that a failure produced by one stage can be compared
+// with a failure produced by the reference for the same input.
+//
+// Only one rule sets the file: the entry point rule, which reports against the root
+// module before anything is emitted. Every other failure is inside the module being
+// emitted, so its file is empty, exactly as in the reference.
 
 // GenerateError is a code generation failure with a source position.
 //
-// The reference carries a file name as well; the position here is the one the
-// reference uses for the same failure, which is always inside a module, and the
-// driver knows which module it was reading.
+// file is the path of the module the failure belongs to, or empty when the failure
+// has no file: a failure raised while emitting the declarations or bodies of a
+// module is reported by position only, which is what the reference does.
 public struct GenerateError {
+    string file;
     int line;
     int column;
     string message;
 }
 
-// generate_error builds a failure at a position.
+// generate_error builds a failure that belongs to no particular file.
 public fn generate_error(int line, int column, string message) -> GenerateError {
-    return GenerateError { line = line, column = column, message = message };
+    return GenerateError { file = "", line = line, column = column, message = message };
+}
+
+// generate_error_in_file builds a failure that belongs to a file, which the entry
+// point rule uses to name the root module.
+public fn generate_error_in_file(string file, int line, int column, string message) -> GenerateError {
+    return GenerateError { file = file, line = line, column = column, message = message };
 }
