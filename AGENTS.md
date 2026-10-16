@@ -75,6 +75,17 @@ they choose.
     Those files are copied next to generated code and compiled by third parties,
     so the notice has to travel with them.
 
+## Naming
+
+The language is **Kitten**, source files are **`.ktn`**, and the command-line tool
+is **`purr`**. `purr` was chosen because the Kitty terminal already ships a
+`kitten` command, so a language tool named `kitten` would collide with it in
+`PATH`. The project manifest is `purr.toml` and the lockfile is `purr.lock`.
+
+17. Write new documentation against `purr`, not `kitten`. The compiler binary is
+    still built from `cmd/kitten` and installed as `kitten`; renaming it is a
+    separate, authorized change. Do not describe that rename as done until it is.
+
 ## Current phase
 
 Phase 1 delivered the project skeleton, the provisional specification, the
@@ -173,11 +184,17 @@ authorization.
    unit assembly, checked against the reference's whole output; Phase 4D.7 added
    function calls and built-ins, with generated programs compiled, run, and compared
    against the reference's).
-3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
-4. Explore an LLVM IR or native assembly/object-code backend.
-5. Grow a broader standard library and ecosystem for CLI, GUI, and game
-   development.
+3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
+   is independence from Go.
+4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
+   the runtime off C as well. This is independence from C.
+5. Grow a broader standard library and an ecosystem for command-line tools first,
+   then GUI, servers, and games: the `purr` toolchain, a registry, and the
+   standard library that makes them useful. This is independence from other
+   languages' ecosystems.
 
 The initial compiler is written in Go. The long-term goal is for Kitten to
-compile its own compiler (self-hosting). This is a direction for future design,
-not permission to add language features or phases early.
+compile its own compiler, to stop depending on C, and to stand on its own
+tooling. Those are three separate goals that do not depend on each other;
+`VISION.md` states them in full. This is a direction for future design, not
+permission to add language features or phases early.

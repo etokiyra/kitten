@@ -1,6 +1,8 @@
 # Compiled Go binaries (including the compiler entry point built from cmd/kitten).
 /kitten
 /kitten.exe
+/purr
+/purr.exe
 
 # Go build, test, and coverage output.
 /bin/
