@@ -2367,12 +2367,15 @@ The sources are:
 - `selfhost/codegen/errors.ktn` — the failure type every stage reports.
 - `selfhost/codegen/declarations.ktn` — the declaration emitter.
 - `selfhost/codegen/expressions.ktn` — the core expression emitter.
+- `selfhost/codegen/literals.ktn` — the string literal pool.
 - `selfhost/codegen.ktn` — the helper probe driver.
 - `selfhost/declarations.ktn` — the declaration driver.
 - `selfhost/expressions.ktn` — the expression driver.
 
 `selfhost/codegen/README.md` describes how to build and run each driver, the
-directive interface the helper probe exposes, and the measured costs.
+directive interface the helper probe exposes, and the measured costs. The pool has
+no driver of its own: it is exercised through the expression driver, which prints
+the declarations its renderings produced.
 
 Three drivers exist because the layers are reached differently. The helper probe
 reads directive lines from the fixed relative path `input.txt` and prints one
@@ -2477,11 +2480,12 @@ run advances.
 ### 28.7 The core expression emitter
 
 `selfhost/codegen/expressions.ktn` renders the expressions the reference generator
-handles with a recursive walk and parentheses: integer, floating-point, and boolean
-literals; identifiers; unary `-`, `!`, `++`, and `--`; and binary `+`, `-`, `*`,
-`/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`. Every unary and binary
-operation is parenthesized, so the generated C never depends on C's precedence
-matching Kitten's.
+handles with a recursive walk and parentheses: integer, floating-point, boolean, and
+string literals; identifiers; unary `-`, `!`, `++`, and `--`; and binary `+`, `-`,
+`*`, `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`. Every unary and
+binary operation is parenthesized, so the generated C never depends on C's
+precedence matching Kitten's. A string literal renders as a reference to its pooled
+object, described in Section 28.8.
 
 A literal is emitted as its source spelling, exactly as the reference emits it, so
 no rounding, no exponent form, and no change of precision can be introduced by
@@ -2503,9 +2507,8 @@ propagated from the expression that contains it, exactly as the reference report
 child's error from its parent, so a partly rendered expression is never returned.
 
 An expression kind outside this subset is reported as not implemented, never
-rendered as something plausible: string literals, which need the pooled literal
-table; assignments; calls; member access; struct and variant literals; array and
-map creation; and indexing.
+rendered as something plausible: assignments, calls, member access, struct and
+variant literals, array and map creation, and indexing.
 
 An expression is a fragment, not a line, so it is returned as a string rather than
 written through the output accumulator of Section 28.5. Rendering a node
@@ -2514,7 +2517,42 @@ of depth *d* it copies about *d* squared characters in total. Matching the
 reference byte for byte means inheriting that cost, and the differential suite
 measures it rather than hiding it.
 
-### 28.8 Differential testing
+### 28.8 The string literal pool
+
+`selfhost/codegen/literals.ktn` holds the string literals a translation unit uses.
+A literal is interned where it is rendered, so the entries are in first-use order,
+and two literals that share a C spelling share one object, which is exactly the
+reference's rule. The order is the reference's rendering order, which is source
+order for every construct except a struct or variant literal: the reference renders
+those values in field declaration order rather than source order, so a literal
+written last there can be the first pooled entry.
+
+The pool names its objects `ktn_literal_<n>`, one-based, using the helper of
+Section 28.3, and expression emission refers to one as `(&ktn_literal_<n>)`.
+`literal_pool_text` returns the declarations, each line built from the escaped form
+of Section 28.4:
+
+	static const ktn_string ktn_literal_<n> = { <length>, "<escaped>" };
+
+with one blank line after them, and the empty string for a program with no
+literals. In a generated file they belong after the constructors and before the
+function bodies, which is where the reference writes them; `literal_pool_lines`
+reports how many lines they occupy, so a caller that writes them into an output of
+its own can size that output exactly.
+
+The pool is bounded and the caller sizes it. A sound bound is the number of
+expression nodes in the modules being generated, because every literal is an
+expression node and the parser reports how many it assigned; the expression driver
+sums each module's count. A literal that does not fit is reported at the literal,
+and the entries that did fit are the reference's entries in order: a pool that
+cannot hold every literal would refer to objects that were never declared, so the
+caller must abandon generation.
+
+Two states cannot arise and are therefore not tested: a missing entry, because
+resolving a literal interns it, and an overflow of the declarations' own output,
+because that output is sized from the pool.
+
+### 28.9 Differential testing
 
 Three differential tests in `cmd/kitten` compare the Kitten-written generator with
 the reference. The helper test compares values the reference produced rather than a
@@ -2541,18 +2579,24 @@ parenthesized text after a print helper's opening parenthesis, in emission order
 kind the phase does not implement is compared against the emitter's own failure
 message, never against a rendering.
 
+The pool is compared as well: the reference writes the declarations between the
+declaration sections and the first function body, and the harness compares exactly
+those lines, together with the expression lines that produced them.
+
 `selfhost/codegen/README.md` records the corpora and the results.
 
-### 28.9 Deferred
+### 28.10 Deferred
 
 - **Function bodies and statements.** No statement, block, or function body is
-  emitted, and the pooled string literals and the C entry point do not exist yet,
-  so no complete translation unit is produced by Kitten.
-- **The remaining expression kinds.** String literals, assignments, calls, member
-  access, struct and variant literals, array and map creation, and indexing are
-  reported as not implemented rather than rendered. They need the pooled literal
-  table, the runtime ABI names, the callee's signature, or the accessors that keep
-  an assignment target evaluated once.
+  emitted, and the C entry point does not exist yet, so no complete translation
+  unit is produced by Kitten.
+- **The remaining expression kinds.** Assignments, calls, member access, struct
+  and variant literals, array and map creation, and indexing are reported as not
+  implemented rather than rendered. They need the runtime ABI names, the callee's
+  signature, or the accessors that keep an assignment target evaluated once.
+- **Splicing the pool into the declaration output.** The pool is emitted on its
+  own; the phase that emits bodies will place it between the constructors and the
+  bodies, where the reference writes it.
 - **Entry-point validation.** The reference validates the entry point before it
   emits anything; that rule belongs with emitting it, and until it exists the
   declaration driver emits a section for a program the reference refuses.

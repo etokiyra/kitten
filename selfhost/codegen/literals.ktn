@@ -1,0 +1,181 @@
+// literals.ktn - the pool of string literals a translation unit uses.
+//
+// The reference generator pools string literals: every distinct literal becomes
+// one `static const ktn_string` object, referred to from the code that uses it as
+// `(&ktn_literal_<n>)`, and the objects are declared in first-use order with
+// duplicates sharing one entry. The reference decides both the identity and the
+// order while it renders function bodies, keyed by the literal's C spelling, and
+// then writes the declarations before the bodies.
+//
+// This module is the same pool. A caller renders expressions, which interns each
+// literal it renders; duplicates share an entry, the entries keep first-use order,
+// and the declarations are written afterwards. The escaping stays in names.ktn:
+// the pool holds the C spelling and the byte length, exactly what the declaration
+// line needs, and never re-encodes anything itself.
+//
+// The pool is bounded, as the output accumulator is. The caller sizes it for the
+// number of distinct literals it will intern. A sound bound is the number of
+// expression nodes in the modules being generated, because every literal is an
+// expression node and the parser reports how many it assigned: summing each
+// module's expression_count cannot be too small. An entry that does not fit is
+// reported rather than dropped, so an incomplete pool is never mistaken for a
+// complete one.
+
+import "../checker/state.ktn";
+import "errors.ktn";
+import "names.ktn";
+import "output.ktn";
+
+// LiteralEntry is one pooled literal: the C spelling of its bytes, including the
+// quotation marks and the escapes C needs, and the number of bytes it denotes.
+public struct LiteralEntry {
+    string escaped;
+    int length;
+}
+
+// LiteralPool holds the string literals of one translation unit in first-use
+// order. Equal literals share one entry, which is what makes two uses of the same
+// text refer to one object.
+public struct LiteralPool {
+    LiteralEntry[] entries;
+    int count;
+    int capacity;
+
+    // index maps a literal's C spelling to its one-based pool index, so that
+    // interning a literal is a lookup rather than a scan. Nothing iterates it:
+    // the entries keep the order.
+    map[string]int index;
+}
+
+// LiteralResult is a pool index, or the reason none could be produced.
+public union LiteralResult {
+    Ok { int index; }
+    Failed { GenerateError error; }
+}
+
+// literal_ok reports whether an entry was interned.
+public fn literal_ok(LiteralResult result) -> bool {
+    match (result) {
+        Ok(index) { return true; }
+        Failed(error) { return false; }
+    }
+}
+
+// literal_index returns the one-based index of an interned entry. Its failure
+// branch returns zero; no caller can observe it, because the result is tested
+// first.
+public fn literal_index(LiteralResult result) -> int {
+    match (result) {
+        Ok(index) { return index; }
+        Failed(error) { return 0; }
+    }
+}
+
+// literal_error returns the failure a result carries, or an empty error when it
+// succeeded.
+public fn literal_error(LiteralResult result) -> GenerateError {
+    match (result) {
+        Ok(index) { return generate_error(0, 0, ""); }
+        Failed(error) { return error; }
+    }
+}
+
+// new_literal_pool returns an empty pool that holds capacity entries. A capacity
+// below one is raised to one so that the array is never empty.
+public fn new_literal_pool(int capacity) -> LiteralPool {
+    int size = capacity;
+    if (size < 1) {
+        size = 1;
+    }
+    return LiteralPool {
+        entries = new LiteralEntry[size],
+        count = 0,
+        capacity = size,
+        index = new map[string]int
+    };
+}
+
+// literal_count returns the number of pooled entries, which is the number of
+// distinct literals interned so far.
+public fn literal_count(LiteralPool pool) -> int {
+    return pool.count;
+}
+
+// literal_symbol interns a literal and returns its one-based index.
+//
+// The key is the literal's C spelling, exactly as in the reference, so two
+// literals that share a spelling share an object. A literal that does not fit is
+// reported with no position: the caller knows which literal it was rendering and
+// reports it there.
+public fn literal_symbol(LiteralPool pool, string escaped, int length) -> LiteralResult {
+    if (has(pool.index, escaped)) {
+        return LiteralResult.Ok { index = pool.index[escaped] };
+    }
+    if (pool.count >= pool.capacity) {
+        return LiteralResult.Failed {
+            error = generate_error(0, 0, "the literal pool does not fit in a capacity of " + decimal(pool.capacity) + " entries")
+        };
+    }
+    int index = pool.count + 1;
+    pool.entries[pool.count] = LiteralEntry { escaped = escaped, length = length };
+    pool.count = pool.count + 1;
+    pool.index[escaped] = index;
+    return LiteralResult.Ok { index = index };
+}
+
+// literal_pool_lines returns the number of lines the pool's declarations occupy,
+// so that a caller can size an output for them exactly. An empty pool writes
+// nothing, because the reference writes nothing for a program with no literals.
+public fn literal_pool_lines(LiteralPool pool) -> int {
+    if (pool.count == 0) {
+        return 0;
+    }
+    // One line per entry, then one blank line that separates them from what
+    // follows.
+    return pool.count + 1;
+}
+
+// literal_pool_text returns the pool's C declarations, or the empty string for a
+// program with no literals.
+//
+// Each line is exactly the reference's:
+//
+//	static const ktn_string ktn_literal_<n> = { <length>, "<escaped>" };
+//
+// and the entries are followed by one blank line. The output is sized from the
+// pool itself - literal_pool_lines is the number of lines written - so a write
+// cannot be rejected; a caller places the text where the declarations belong,
+// which in the reference is after the constructors and before the function
+// bodies.
+//
+// A caller that writes the text into an output of its own must size that output
+// for literal_pool_lines of the same pool, which is why the count is exposed.
+public fn literal_pool_text(LiteralPool pool) -> string {
+    int lines = literal_pool_lines(pool);
+    if (lines == 0) {
+        return "";
+    }
+    Output output = new_output(lines);
+    int index = 0;
+    while (index < pool.count) {
+        LiteralEntry entry = pool.entries[index];
+        match (output_line(output, 0, "static const ktn_string " + literal_name(index + 1) + " = { " + decimal(entry.length) + ", " + entry.escaped + " };")) {
+            Ok { }
+            Overflow(capacity) {
+                // Unreachable: the output holds exactly the lines written below.
+                // An empty string is what a pool with no literals produces, so a
+                // caller that somehow reached this would see no declarations
+                // rather than a plausible short pool.
+                return "";
+            }
+        }
+        index++;
+    }
+    match (output_line(output, 0, "")) {
+        Ok { }
+        Overflow(capacity) {
+            return "";
+        }
+    }
+    return output_text(output);
+}

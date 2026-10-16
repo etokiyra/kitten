@@ -95,6 +95,35 @@ func referenceGenerate(modules []*parser.Module, checked *checker.Result) (strin
 	return codegen.Generate(modules, checked)
 }
 
+// probeSeparator is the line the expression driver prints between the expression
+// lines and the literal pool its renderings filled.
+const probeSeparator = "=== literal pool ==="
+
+// runProbe runs the expression driver and returns the expression lines and the
+// pooled literal declarations separately.
+func runProbe(t *testing.T, executable, directory, root, imported string) (string, string) {
+	t.Helper()
+
+	output, err := runKittenExpressions(executable, directory, root, imported)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return splitProbeOutput(t, output)
+}
+
+// splitProbeOutput splits a probe run's output into the expression lines and the
+// pooled literal declarations that follow them.
+func splitProbeOutput(t *testing.T, output string) (string, string) {
+	t.Helper()
+
+	marker := probeSeparator + "\n"
+	index := strings.Index(output, marker)
+	if index < 0 {
+		t.Fatalf("the probe output has no %q line:\n%s", probeSeparator, output)
+	}
+	return output[:index], output[index+len(marker):]
+}
+
 // --- Extractable reference text ----------------------------------------------
 
 // printArgumentTexts returns the rendering of every argument of every print
@@ -191,7 +220,6 @@ func matchingParenthesis(line string, open int) int {
 // messages are this generator's own; the reference has no counterpart, because it
 // implements every kind.
 var unsupportedKinds = []string{
-	"string",
 	"assign",
 	"call",
 	"member",
@@ -272,6 +300,67 @@ func unsupportedKindMessage(kind string) string {
 	return ""
 }
 
+// structLiteral visits a struct literal's values in field declaration order, which
+// is the order the reference renders them in.
+//
+// A literal whose type the checker did not record keeps source order, which is what
+// a tree the checker rejected would have; the checker records a type for every
+// literal it accepts, so that cannot occur.
+func (w *expressionWalk) structLiteral(node *parser.StructLiteral) {
+	resolved, ok := w.checked.TypeRefs[node.Type]
+	if !ok || resolved == nil || resolved.Struct == nil {
+		for _, field := range node.Fields {
+			if field != nil {
+				w.expression(field.Value, "")
+			}
+		}
+		return
+	}
+	for _, declared := range resolved.Struct.Fields {
+		if value := literalFieldValue(node.Fields, declared.Name); value != nil {
+			w.expression(value, "")
+		}
+	}
+}
+
+// variantLiteral visits a variant literal's values in field declaration order.
+func (w *expressionWalk) variantLiteral(node *parser.VariantLiteral) {
+	resolved, ok := w.checked.TypeRefs[node.Type]
+	if !ok || resolved == nil || !resolved.IsUnion() {
+		for _, field := range node.Fields {
+			if field != nil {
+				w.expression(field.Value, "")
+			}
+		}
+		return
+	}
+	variant := resolved.VariantIndex[node.Variant]
+	if variant == nil {
+		for _, field := range node.Fields {
+			if field != nil {
+				w.expression(field.Value, "")
+			}
+		}
+		return
+	}
+	for _, declared := range variant.Fields {
+		if value := literalFieldValue(node.Fields, declared.Name); value != nil {
+			w.expression(value, "")
+		}
+	}
+}
+
+// literalFieldValue returns the value a literal gives a field, or nil when it does
+// not initialize that field.
+func literalFieldValue(fields []*parser.FieldInit, name string) parser.Expr {
+	for _, field := range fields {
+		if field != nil && field.Name == name {
+			return field.Value
+		}
+	}
+	return nil
+}
+
 // isPrintCall reports whether a call is the built-in print, which the reference
 // recognizes through the resolved symbol of its callee.
 func (w *expressionWalk) isPrintCall(call *parser.CallExpr) bool {
@@ -350,18 +439,10 @@ func (w *expressionWalk) expression(expression parser.Expr, want string) string 
 		note(w.expression(node.Receiver, ""))
 
 	case *parser.StructLiteral:
-		for _, field := range node.Fields {
-			if field != nil {
-				note(w.expression(field.Value, ""))
-			}
-		}
+		w.structLiteral(node)
 
 	case *parser.VariantLiteral:
-		for _, field := range node.Fields {
-			if field != nil {
-				note(w.expression(field.Value, ""))
-			}
-		}
+		w.variantLiteral(node)
 
 	case *parser.NewArrayExpr:
 		note(w.expression(node.Length, ""))
@@ -767,12 +848,11 @@ func TestKittenExpressionsMatchReference(t *testing.T) {
 			continue
 		}
 		expected := referenceExpressions(t, modules, checked, generated)
-		got, err := runKittenExpressions(executable, directory, testCase.root, testCase.imported)
-		if err != nil {
-			t.Errorf("%s: %v", testCase.description, err)
-			continue
+		expressions, pool := runProbe(t, executable, directory, testCase.root, testCase.imported)
+		if want := referenceLiteralPool(t, generated); pool != want {
+			t.Errorf("%s: literal pool differs\n--- probe ---\n%s--- reference ---\n%s", testCase.description, pool, want)
 		}
-		outcome := compareExpressions(t, testCase.description, got, expected)
+		outcome := compareExpressions(t, testCase.description, expressions, expected)
 		compared += outcome.compared
 		lines += outcome.lines
 	}
@@ -875,18 +955,19 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
+	expressions, pool := splitProbeOutput(t, got)
 
 	for _, kind := range unsupportedKinds {
 		message := unsupportedMessage(kind)
 		report := ""
-		for _, line := range probeLines(got) {
+		for _, line := range probeLines(expressions) {
 			if strings.HasSuffix(line, message) {
 				report = line
 				break
 			}
 		}
 		if report == "" {
-			t.Errorf("the %s kind was not reported as not implemented:\n%s", kind, got)
+			t.Errorf("the %s kind was not reported as not implemented:\n%s", kind, expressions)
 			continue
 		}
 		fields := strings.Fields(report)
@@ -895,13 +976,14 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 		}
 	}
 
-	// Every other line must be a supported kind, rendered or not, so a kind can
-	// never appear as a rendering. A supported kind may still be reported as a
-	// failure, because it reports the failure of the expression it contains.
-	supported := map[string]bool{"int": true, "float": true, "bool": true, "ident": true, "unary": true, "binary": true}
+	// Every other line must be a kind that is implemented, rendered or not, so a
+	// kind can never appear as a rendering. An implemented kind may still be
+	// reported as a failure, because it reports the failure of the expression it
+	// contains.
+	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true}
 	rendered := 0
 	propagated := 0
-	for _, line := range probeLines(got) {
+	for _, line := range probeLines(expressions) {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			t.Errorf("malformed probe line: %q", line)
@@ -911,7 +993,7 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 			continue
 		}
 		kind := fields[3]
-		if !supported[kind] {
+		if !implemented[kind] {
 			if fields[0] != "fail" {
 				t.Errorf("the unsupported kind %s was rendered: %q", kind, line)
 			}
@@ -925,7 +1007,7 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 			continue
 		}
 		if !strings.HasSuffix(line, "not implemented yet") {
-			t.Errorf("a supported kind failed for a reason that is not an unimplemented kind: %q", line)
+			t.Errorf("an implemented kind failed for a reason that is not an unimplemented kind: %q", line)
 			continue
 		}
 		propagated++
@@ -935,6 +1017,15 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 	}
 	if propagated == 0 {
 		t.Errorf("no supported expression reported a failure from the expression it contains")
+	}
+
+	// A string literal is implemented now: it renders as a reference to its pooled
+	// object, and the program's literal is interned.
+	if !strings.Contains(expressions, "string (&ktn_literal_1)") {
+		t.Errorf("the string literal was not rendered as a pooled reference:\n%s", expressions)
+	}
+	if !strings.Contains(pool, `static const ktn_string ktn_literal_1 = { 4, "text" };`) {
+		t.Errorf("the string literal was not pooled:\n%s", pool)
 	}
 }
 
@@ -964,6 +1055,7 @@ func TestKittenExpressionsCorpus(t *testing.T) {
 	programs := 0
 	compared := 0
 	lines := 0
+	poolEntries := 0
 	checkErrors := 0
 	skipped := 0
 
@@ -1006,23 +1098,23 @@ func TestKittenExpressionsCorpus(t *testing.T) {
 		}
 
 		expected := referenceExpressions(t, modules, checked, generated)
-		got, err := runKittenExpressions(executable, directory, testCase.root, testCase.imported)
-		if err != nil {
-			t.Errorf("%s: %v", testCase.name, err)
-			continue
+		expressions, pool := runProbe(t, executable, directory, testCase.root, testCase.imported)
+		if want := referenceLiteralPool(t, generated); pool != want {
+			t.Errorf("%s: literal pool differs\n--- probe ---\n%s--- reference ---\n%s", testCase.name, pool, want)
 		}
-		outcome := compareExpressions(t, testCase.name, got, expected)
+		poolEntries += strings.Count(pool, "static const ktn_string ")
+		outcome := compareExpressions(t, testCase.name, expressions, expected)
 		compared += outcome.compared
 		lines += outcome.lines
 		programs++
 	}
 
-	if programs < 20 || compared < 100 {
-		t.Fatalf("the corpus looks too small: %d programs, %d of %d lines compared, %d check errors, %d skipped",
-			programs, compared, lines, checkErrors, skipped)
+	if programs < 20 || compared < 100 || poolEntries < 20 {
+		t.Fatalf("the corpus looks too small: %d programs, %d of %d lines compared, %d pool entries, %d check errors, %d skipped",
+			programs, compared, lines, poolEntries, checkErrors, skipped)
 	}
-	t.Logf("expression corpus: %d programs, %d of %d lines compared, %d check errors identical, %d skipped",
-		programs, compared, lines, checkErrors, skipped)
+	t.Logf("expression corpus: %d programs, %d of %d lines compared, %d pooled entries compared, %d check errors identical, %d skipped",
+		programs, compared, lines, poolEntries, checkErrors, skipped)
 }
 
 // --- Floating-point syntax ---------------------------------------------------
@@ -1081,9 +1173,9 @@ func TestKittenExpressionsFloatSyntax(t *testing.T) {
 		t.Fatalf("the floating-point program was rejected")
 	}
 	expected := referenceExpressions(t, modules, checked, generated)
-	got, err := runKittenExpressions(executable, directory, root, "")
-	if err != nil {
-		t.Fatalf("%v", err)
+	got, pool := runProbe(t, executable, directory, root, "")
+	if want := referenceLiteralPool(t, generated); pool != want {
+		t.Errorf("floating-point spellings: literal pool differs\n--- probe ---\n%s--- reference ---\n%s", pool, want)
 	}
 	outcome := compareExpressions(t, "floating-point spellings", got, expected)
 	if outcome.compared == 0 {
@@ -1151,6 +1243,7 @@ func TestKittenExpressionsReportFormat(t *testing.T) {
 		"expr 3 11 binary (ktn_var_a + 2)",
 		"expr 3 11 ident ktn_var_a",
 		"expr 3 15 int 2",
+		probeSeparator,
 	})
 	if got != want {
 		t.Errorf("probe output differs\n got:\n%s\nwant:\n%s", got, want)
@@ -1245,7 +1338,8 @@ func TestKittenExpressionsScaling(t *testing.T) {
 			}
 			got = rendered
 		}
-		outcome := compareExpressions(t, fmt.Sprintf("depth %d", depth), got, expected)
+		expressions, _ := splitProbeOutput(t, got)
+		outcome := compareExpressions(t, fmt.Sprintf("depth %d", depth), expressions, expected)
 		compared += outcome.compared
 
 		growth := ""

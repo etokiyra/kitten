@@ -24,14 +24,21 @@ import "../checker/model.ktn";
 import "../lexer/tokens.ktn";
 import "../parser/ast.ktn";
 import "errors.ktn";
+import "literals.ktn";
 import "names.ktn";
 
-// ExpressionContext is the module an expression belongs to. The index selects the
-// module's annotations in the semantic model; the module's id, which the model
-// carries, is what names are mangled by.
+// ExpressionContext is the module an expression belongs to, and the literal pool
+// its string literals are interned in. The index selects the module's annotations
+// in the semantic model; the module's id, which the model carries, is what names
+// are mangled by.
+//
+// The pool is part of the context rather than a return value because a literal is
+// interned where it is rendered, which is what gives the pool the reference's
+// first-use order.
 public struct ExpressionContext {
     SemanticModel model;
     int module_index;
+    LiteralPool pool;
 }
 
 // ExpressionResult is a rendered C expression or the reason none was produced.
@@ -134,7 +141,9 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
         Binary(node_id, operator, left, right) {
             return binary_expression(context, operator, left, right);
         }
-        String(node_id, token) { return not_implemented(expression); }
+        String(node_id, token) {
+            return string_literal(context, token);
+        }
         Assign(node_id, operator, target, value) { return not_implemented(expression); }
         Call(node_id, open_paren, callee, arguments, argument_count) { return not_implemented(expression); }
         Member(node_id, dot, receiver, member) { return not_implemented(expression); }
@@ -143,6 +152,28 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
         NewArray(node_id, at, element, length) { return not_implemented(expression); }
         NewMap(node_id, at, map_type) { return not_implemented(expression); }
         Index(node_id, bracket, target, index) { return not_implemented(expression); }
+    }
+}
+
+// string_literal interns a string literal in the pool and renders a reference to
+// the pooled object, which is how the reference renders one: the literal's bytes
+// are escaped once, an equal literal shares the pooled object, and the reference
+// is the pooled object's address.
+//
+// A literal that does not fit in the pool is reported at the literal, which is
+// where the reference reports a literal it cannot encode.
+fn string_literal(ExpressionContext context, Token token) -> ExpressionResult {
+    CStringLiteral literal = c_string_literal(token.text);
+    match (literal_symbol(context.pool, literal.escaped, literal.length)) {
+        Ok(index) {
+            return ExpressionResult.Ok { text = "(&" + literal_name(index) + ")" };
+        }
+        Failed(error) {
+            Position at = position_of_token(token);
+            return ExpressionResult.Failed {
+                error = generate_error(at.line, at.column, error.message)
+            };
+        }
     }
 }
 

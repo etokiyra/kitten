@@ -192,6 +192,40 @@ func generateErrorLine(err error) (string, bool) {
 func referenceDeclarationSection(t *testing.T, generated string) string {
 	t.Helper()
 
+	poolStart, bodyStart := referenceSectionBoundaries(t, generated)
+	end := bodyStart
+	if poolStart >= 0 && poolStart < end {
+		end = poolStart
+	}
+	lines := strings.Split(generated, "\n")
+	return strings.Join(lines[:end], "\n") + "\n"
+}
+
+// referenceLiteralPool returns the reference's pooled string literal
+// declarations, including the blank line that separates them from what follows,
+// or the empty string when the program has no literals.
+func referenceLiteralPool(t *testing.T, generated string) string {
+	t.Helper()
+
+	poolStart, bodyStart := referenceSectionBoundaries(t, generated)
+	if poolStart < 0 {
+		return ""
+	}
+	lines := strings.Split(generated, "\n")
+	return strings.Join(lines[poolStart:bodyStart], "\n") + "\n"
+}
+
+// referenceSectionBoundaries returns the line where the pooled literal
+// declarations begin, or -1 when there are none, and the line where the first
+// function definition begins.
+//
+// Both are found structurally. The pool's declarations are the only lines
+// beginning with a pooled literal declaration, and a definition is a prototype
+// with " {" in place of ";": prototypes are emitted before any body, one per
+// function, and a call inside a body is indented, so it is not a prototype line.
+func referenceSectionBoundaries(t *testing.T, generated string) (int, int) {
+	t.Helper()
+
 	lines := strings.Split(generated, "\n")
 
 	// Prototypes are the only unindented lines that end with a semicolon and
@@ -210,26 +244,28 @@ func referenceDeclarationSection(t *testing.T, generated string) string {
 		t.Fatalf("the reference output has no function prototype:\n%s", generated)
 	}
 
-	end := -1
+	poolStart := -1
+	bodyStart := -1
 	for index, line := range lines {
-		cut := pooledLiteralPattern.MatchString(line)
-		if !cut {
+		if poolStart < 0 && pooledLiteralPattern.MatchString(line) {
+			poolStart = index
+		}
+		if bodyStart < 0 {
 			for _, signature := range signatures {
 				if line == signature+" {" {
-					cut = true
+					bodyStart = index
 					break
 				}
 			}
 		}
-		if cut {
-			end = index
+		if poolStart >= 0 && bodyStart >= 0 {
 			break
 		}
 	}
-	if end < 0 {
+	if bodyStart < 0 {
 		t.Fatalf("the reference output has no function definition:\n%s", generated)
 	}
-	return strings.Join(lines[:end], "\n") + "\n"
+	return poolStart, bodyStart
 }
 
 // referenceDeclarations runs the reference generator and returns its declaration

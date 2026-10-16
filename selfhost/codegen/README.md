@@ -8,10 +8,12 @@ being built one at a time:
 - the declaration emitter - the nine sections the reference generator emits
   before any function body; and
 - the core expression emitter - integer, floating-point, and boolean literals,
-  identifiers, unary expressions, and binary expressions.
+  string literals, identifiers, unary expressions, and binary expressions; and
+- the string literal pool - the `static const ktn_string` objects the emitted code
+  refers to.
 
-Statement and function-body emission, the remaining expression kinds, the pooled
-string literals, and the C entry point do not exist yet.
+Statement and function-body emission, the remaining expression kinds, and the C
+entry point do not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -27,6 +29,7 @@ here.
 - `selfhost/codegen/errors.ktn` — the failure type every generator stage reports.
 - `selfhost/codegen/declarations.ktn` — the declaration emitter.
 - `selfhost/codegen/expressions.ktn` — the core expression emitter.
+- `selfhost/codegen/literals.ktn` — the string literal pool.
 - `selfhost/codegen.ktn` — the helper probe driver: it reads directives from
   `input.txt` and prints one result line per directive.
 - `selfhost/declarations.ktn` — the declaration driver: it reads two modules,
@@ -35,8 +38,9 @@ here.
   the Kitten front end, and prints the rendering of every expression in their
   function bodies.
 - `cmd/kitten/codegen_differential_test.go`,
-  `cmd/kitten/declarations_differential_test.go`, and
-  `cmd/kitten/expressions_differential_test.go` — the differential harnesses.
+  `cmd/kitten/declarations_differential_test.go`,
+  `cmd/kitten/expressions_differential_test.go`, and
+  `cmd/kitten/literals_differential_test.go` — the differential harnesses.
 
 ## Building and running
 
@@ -266,6 +270,7 @@ handles with no more than a recursive walk and parentheses:
 | integer literal | the source spelling, for example `42` |
 | floating-point literal | the source spelling, for example `10.25` |
 | boolean literal | `true` or `false` |
+| string literal | `(&ktn_literal_<n>)`, the pooled object's address |
 | identifier | `ktn_var_<name>` |
 | unary `-` `!` `++` `--` | `(<op><operand>)` for a prefix, `(<operand><op>)` for a postfix |
 | binary `+` `-` `*` `/` `%` `<` `<=` `>` `>=` `==` `!=` `&&` `\|\|` | `(<left> <op> <right>)` |
@@ -276,26 +281,27 @@ becomes `ktn_rt_string_equal(left, right)`, and `!=` becomes
 `!ktn_rt_string_equal(left, right)`. The left operand's resolved type decides
 that, which is the only semantic fact the emitter reads.
 
-The other nine expression kinds — string literals, assignments, calls, member
-access, struct and variant literals, array and map creation, and indexing — are
-not implemented yet, and each is reported as such rather than rendered as
-something plausible:
+The other eight expression kinds — assignments, calls, member access, struct and
+variant literals, array and map creation, and indexing — are not implemented yet,
+and each is reported as such rather than rendered as something plausible:
 
 ```
 fail <line> <column> <kind> <kind> expressions are not implemented yet
 ```
 
-A string literal is in that group because it needs the pooled literal table,
-which a later phase emits; the emitter never emits a literal as a C string of its
-own.
+A string literal is pooled rather than emitted as a C string of its own: its bytes
+are escaped once, an equal literal shares the object, and the reference is the
+object's address. The pool is described below.
 
 ### API
 
 - `emit_expression(context, expression) -> ExpressionResult`, where the context
-  is the semantic model and the index of the module the expression belongs to. The
-  module's id, which the model carries, is what names are mangled by; the index
-  selects the module's annotations. Both are needed, and neither is derivable from
-  the other.
+  is the semantic model, the index of the module the expression belongs to, and the
+  literal pool its string literals are interned in. The module's id, which the
+  model carries, is what names are mangled by; the index selects the module's
+  annotations. Both are needed, and neither is derivable from the other. The pool
+  is part of the context rather than a return value because a literal is interned
+  where it is rendered, which is what gives the pool its order.
 - `ExpressionResult` is `Ok { text }` or `Failed { error }`. A failure is
   propagated from the expression that contains it, exactly as the reference
   reports a child's error from its parent, so a caller can never see a partly
@@ -332,8 +338,72 @@ expr <line> <column> <kind> <rendering>
 fail <line> <column> <kind> <message>
 ```
 
+then the marker
+
+```
+=== literal pool ===
+```
+
+and then the pooled string literal declarations those renderings produced. The
+pool comes last because it is only complete once every expression has been
+rendered, even though in a generated file the declarations precede the bodies.
+
 The walk exists only to reach expressions; it emits no C for a statement and
 implements no part of the statement emitter.
+
+A first line of `#pool <n>` in `input.txt` sizes the pool to `n` entries rather
+than the derived bound, which is how a pool known to be too small is supplied.
+
+## String literal pool
+
+`selfhost/codegen/literals.ktn` holds the string literals a translation unit uses.
+It reproduces the reference's pool:
+
+- **Collection order.** A literal is interned where it is rendered, so the entries
+  are in first-use order. The order is the reference's rendering order, which for
+  every construct is also source order except a struct or variant literal: the
+  reference renders those values in field declaration order, not source order, and
+  so does the emitter's walk. A literal written last in such a literal can
+  therefore be pooled first, which
+  `TestKittenLiteralsOrderFollowsFieldDeclaration` checks directly.
+- **Deduplication.** The key is the literal's C spelling, exactly as in the
+  reference, so two literals that share a spelling share one object whatever
+  expression they appear in.
+- **Ownership.** The pool names the objects `ktn_literal_<n>`, one-based, using the
+  `literal_name` helper from `names.ktn`, and expression emission refers to one as
+  `(&ktn_literal_<n>)`. Nothing else may name a pooled object.
+- **Placement.** `literal_pool_text` returns the declarations, each line exactly
+  the reference's, with one blank line after them, and the empty string for a
+  program with no literals. In a generated file they belong after the constructors
+  and before the function bodies, which is where the reference writes them.
+
+### API
+
+- `new_literal_pool(capacity)`, `literal_count(pool)`, and
+  `literal_symbol(pool, escaped, length) -> LiteralResult`, which interns a literal
+  and returns its one-based index or an explicit failure. `literal_ok`,
+  `literal_index`, and `literal_error` read the result.
+- `literal_pool_lines(pool)` is the number of lines the declarations occupy, so a
+  caller that writes them into an output of its own can size it exactly;
+  `literal_pool_text(pool)` does that itself and returns the text.
+- `LiteralEntry` is the escaped spelling and the decoded byte length of one entry;
+  `LiteralPool` is the entries, their count, the capacity, and the lookup map.
+
+### Capacity
+
+The pool is bounded, and the caller sizes it. A sound bound is the number of
+expression nodes in the modules being generated - `literal_capacity` in the
+expression driver sums each module's `expression_count` - because every literal is
+an expression node, so the bound cannot be too small. A literal that does not fit
+is reported at the literal, with the capacity named, and the entries that did fit
+are the reference's entries in order; the caller must abandon generation, since a
+pool that cannot hold every literal would refer to objects that were never
+declared.
+
+Two failure modes cannot arise in this design and are not tested: a missing entry,
+because resolving a literal interns it, and an overflow of the declarations'
+output, because the output is sized from the pool and holds exactly the lines
+written.
 
 ## Output accumulation
 
@@ -408,7 +478,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 612 string literals whose escaping and byte length match the reference
+- 617 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -456,33 +526,64 @@ missing implementation can never look like a rendering.
 
 Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
 
-- 222 of 552 expected lines of the 14 targeted programs compared byte for byte,
+- 218 of 552 expected lines of the 14 targeted programs compared byte for byte,
   covering every literal kind, both booleans, every unary and binary operator,
   precedence, associativity, redundant parentheses, nesting, and mixed operand
   types. The lines that are not compared are the subexpressions of a compared
   expression, which the compared whole already validates.
-- 570 of 1220 expected lines of 34 corpus programs compared byte for byte, over
-  the checker corpus, which also exercises all nine unimplemented kinds and
-  compares each of their messages.
+- 455 of 1220 expected lines of 34 corpus programs compared byte for byte, over
+  the checker corpus, which also exercises all eight unimplemented kinds and
+  compares each of their messages, and whose **71 pooled entries** are compared
+  as well.
 - 20 floating-point spellings compared, with the boundary forms the language
   cannot express (`1.`, `.5`, `1e5`) checked at the lexer.
 - Every unary and binary operator present in the targeted corpus, read from the
   lexer's tokens.
 - The nested-expression measurements in the section above.
 
+`cmd/kitten/literals_differential_test.go` compares the pool itself. The pool
+appears in the reference's own output between the declaration sections and the
+first function body, and the harness extracts exactly those lines, so the
+comparison is a byte-for-byte comparison of the declarations rather than of a
+reconstruction. Each case also compares the expression lines that produced the
+pool, so a pooled symbol cannot be right while the expression referring to it is
+wrong.
+
+Running `go test -count=1 -v -run TestKittenLiterals ./cmd/kitten/` reports:
+
+- 15 programs whose pools match byte for byte, over **36 pooled entries**: one
+  literal, empty strings, multiple distinct strings, a literal repeated across
+  expressions, escaped quotes and backslashes, newlines and tabs, literals inside
+  nested expressions, literals in the rendered parts of unimplemented kinds,
+  struct and variant literal values in field declaration order, non-ASCII text,
+  two modules, and a literal shared across modules.
+- A focused deduplication check: two distinct literals used four times give two
+  entries, and the two symbols are the ones the expressions refer to.
+- The ordering rule above, checked directly.
+- The pool's capacity: an exact capacity and a roomier one reproduce the
+  reference's pool, one entry fewer reports the literal that did not fit and keeps
+  the entries that did, in the reference's order.
+- A literal the lexer rejects is reported as a lexical error with no pool.
+- A program with no literals produces no pool.
+- A 400-byte literal with escapes is pooled whole, with the decoded byte length.
+- Interning measurements: 100, 200, and 400 literals cost 5 ms, 8 ms, and 18 ms,
+  which is linear in the number of literals.
+
 ## What is deliberately not here
 
-- **Function bodies, expressions, statements, and the entry point.**
-  `selfhost/codegen/expressions.ktn` renders six expression kinds and
+- **Function bodies, statements, and the entry point.**
+  `selfhost/codegen/expressions.ktn` renders seven expression kinds,
+  `selfhost/codegen/literals.ktn` pools string literals, and
   `selfhost/codegen/declarations.ktn` renders the declaration sections; nothing
-  emits a statement, a function body, the pooled string literals, or the C entry
-  point, so no complete translation unit is produced by Kitten.
-- **The remaining expression kinds.** String literals, assignments, calls, member
-  access, struct and variant literals, array and map creation, and indexing are
-  reported as not implemented rather than rendered. A string literal needs the
-  pooled literal table; a call needs the runtime ABI names and the callee's
-  signature; indexing and assignment need the runtime accessors that keep the
-  target evaluated once.
+  emits a statement, a function body, or the C entry point, so no complete
+  translation unit is produced by Kitten. The pool is also not yet spliced into
+  the declaration output: `literal_pool_text` returns it, and the phase that emits
+  bodies will place it where the reference does.
+- **The remaining expression kinds.** Assignments, calls, member access, struct
+  and variant literals, array and map creation, and indexing are reported as not
+  implemented rather than rendered. A call needs the runtime ABI names and the
+  callee's signature; indexing and assignment need the runtime accessors that keep
+  the target evaluated once.
 - **Entry-point validation.** The reference checks that the root module declares a
   zero-parameter, void-returning `main` before it emits anything, so it rejects
   some programs whose declarations are otherwise complete. That rule belongs with
@@ -500,5 +601,5 @@ Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
 - **Command-line arguments, standard error, and a chosen exit status.**
 
 Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
-helper, declaration, and core-expression layers are written in Kitten; the loader,
-the rest of the emitter, and the production pipeline are Go.
+helper, declaration, expression, and literal-pool layers are written in Kitten; the
+loader, the rest of the emitter, and the production pipeline are Go.
