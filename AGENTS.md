@@ -111,8 +111,12 @@ when a statement needs one. Phase 4D.6 added the translation unit emitter under
 `selfhost/codegen/unit.ktn`, driven by `selfhost/unit.ktn`: the entry point rule, the
 C entry point, and the assembly of the declaration sections, the literal pool, the
 bodies, and the entry point into one complete translation unit, checked against the
-reference's whole output byte for byte. A module loader and the eight remaining
-expression kinds are still to come.
+reference's whole output byte for byte. Phase 4D.7 added calls: user-defined
+functions, cross-module calls, and the built-ins `print`, `length`, `has`,
+`substring`, and `read_file`, so a generated program can now produce output, which
+the differential harness compiles, runs under GCC and Clang, and compares against the
+reference program's output. A module loader and the seven remaining expression kinds
+are still to come.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
@@ -147,7 +151,9 @@ authorization.
    checked against the reference's pooled declarations; Phase 4D.5 added the
    statement and function-body emitter, checked against the reference's own
    definitions; Phase 4D.6 added the entry point rule and the complete translation
-   unit assembly, checked against the reference's whole output).
+   unit assembly, checked against the reference's whole output; Phase 4D.7 added
+   function calls and built-ins, with generated programs compiled, run, and compared
+   against the reference's).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap.
 4. Explore an LLVM IR or native assembly/object-code backend.
 5. Grow a broader standard library and ecosystem for CLI, GUI, and game

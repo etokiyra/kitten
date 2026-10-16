@@ -717,14 +717,14 @@ func TestKittenFunctionsRejectUnsupportedExpressions(t *testing.T) {
 		wantKind    string
 	}{
 		{"assignment in a statement", "fn main() {\n    int a = 1;\n    a = 2;\n}\n", "assign"},
-		{"call in a statement", "fn nothing() {\n}\nfn main() {\n    nothing();\n}\n", "call"},
+		{"member access in a return", "struct P {\n    int x;\n}\nfn f(P p) -> int {\n    return p.x;\n}\nfn main() {\n    print(\"f is emitted but not called\");\n}\n", "member"},
 		{"member access in a statement", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n}\n", "struct-literal"},
 		{"index in a statement", "fn main() {\n    int[] values = new int[2];\n}\n", "new-array"},
 		{"assignment in a while condition", "fn main() {\n    bool first = true;\n    bool second = false;\n    while (first = second) {\n    }\n}\n", "assign"},
-		{"call in a return", "fn helper() -> int {\n    return 1;\n}\nfn main() {\n}\nfn uses() -> int {\n    return helper();\n}\n", "call"},
+		{"struct literal in a declaration", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n}\n", "struct-literal"},
 		{"assignment in a for initializer", "fn main() {\n    int a = 1;\n    for (a = 0; a < 2; a++) {\n    }\n}\n", "assign"},
-		{"call in a for condition", "fn helper() -> bool {\n    return true;\n}\nfn main() {\n    for (int i = 0; helper(); i++) {\n    }\n}\n", "call"},
-		{"unsupported expression in a match arm", "enum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { return missing(); }\n    }\n}\nfn missing() -> int {\n    return 1;\n}\nfn main() {\n}\n", "call"},
+		{"array creation in a statement", "fn main() {\n    int[] values = new int[2];\n}\n", "new-array"},
+		{"unsupported expression in a match arm", "struct P {\n    int x;\n}\nenum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { P p = P { x = 1 }; return 1; }\n    }\n}\nfn main() {\n}\n", "struct-literal"},
 	}
 
 	for _, testCase := range cases {

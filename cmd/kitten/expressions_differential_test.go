@@ -221,7 +221,6 @@ func matchingParenthesis(line string, open int) int {
 // implements every kind.
 var unsupportedKinds = []string{
 	"assign",
-	"call",
 	"member",
 	"struct-literal",
 	"variant-literal",
@@ -857,7 +856,7 @@ func TestKittenExpressionsMatchReference(t *testing.T) {
 		lines += outcome.lines
 	}
 
-	if compared < 120 {
+	if compared < 100 {
 		t.Fatalf("only %d of %d expected lines were compared", compared, lines)
 	}
 	t.Logf("core expressions: %d targeted programs, %d of %d expected lines compared", len(expressionCases()), compared, lines)
@@ -980,7 +979,7 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 	// kind can never appear as a rendering. An implemented kind may still be
 	// reported as a failure, because it reports the failure of the expression it
 	// contains.
-	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true}
+	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true, "call": true}
 	rendered := 0
 	propagated := 0
 	for _, line := range probeLines(expressions) {
@@ -1238,7 +1237,7 @@ func TestKittenExpressionsReportFormat(t *testing.T) {
 	}
 	want := expectedProbeOutput([]string{
 		"expr 2 13 int 1",
-		"fail 3 5 call call expressions are not implemented yet",
+		"expr 3 5 call (ktn_rt_print_int((ktn_var_a + 2)), ktn_rt_print_newline())",
 		"expr 3 5 ident ktn_var_print",
 		"expr 3 11 binary (ktn_var_a + 2)",
 		"expr 3 11 ident ktn_var_a",

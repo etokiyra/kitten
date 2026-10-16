@@ -64,6 +64,30 @@ public fn string_equal_function() -> string { return "ktn_rt_string_equal"; }
 // reference.
 public fn fail_function() -> string { return "ktn_rt_fail"; }
 
+// The print helpers write one value of a primitive type. A generated print call
+// becomes a comma expression of these, separated by the space helper and
+// terminated by the newline helper, which is why print has no single runtime
+// function.
+public fn print_int_function() -> string { return "ktn_rt_print_int"; }
+public fn print_float_function() -> string { return "ktn_rt_print_float"; }
+public fn print_bool_function() -> string { return "ktn_rt_print_bool"; }
+public fn print_string_function() -> string { return "ktn_rt_print_string"; }
+public fn print_space_function() -> string { return "ktn_rt_print_space"; }
+public fn print_newline_function() -> string { return "ktn_rt_print_newline"; }
+
+// The length helpers read the length a container or a string stores in its own
+// header, so the type of the argument decides which one is called. A string
+// carries its byte length alongside its bytes.
+public fn array_length_function() -> string { return "ktn_rt_array_length"; }
+public fn map_length_function() -> string { return "ktn_rt_map_length"; }
+public fn string_length_function() -> string { return "ktn_rt_string_length"; }
+
+// substring_function, map_has_function, and read_file_function are the remaining
+// built-in operations, each of which is one runtime call.
+public fn substring_function() -> string { return "ktn_rt_substring"; }
+public fn map_has_function() -> string { return "ktn_rt_map_has"; }
+public fn read_file_function() -> string { return "ktn_rt_read_file"; }
+
 // module_prefix returns the C name prefix for a module. The root module (id 0)
 // has no prefix, so single-module programs generate the same names as before.
 // Imported modules use "<id>_"; because a Kitten identifier cannot begin with a

@@ -401,6 +401,22 @@ fn missing() -> int {
 fn main() {
 }
 `,
+	}, {
+		description: "an unsupported expression in an assignment",
+		root: `fn main() {
+    int a = 1;
+    a = 2;
+}
+`,
+	}, {
+		description: "an unsupported expression in a struct literal",
+		root: `struct Point {
+    int x;
+}
+fn main() {
+    Point point = Point { x = 1 };
+}
+`,
 	}}
 }
 
@@ -774,7 +790,7 @@ func TestKittenUnitCompileAndRun(t *testing.T) {
 
 	compiled := 0
 	for _, testCase := range runnableUnitCases() {
-		modules, checked, _ := prepareUnitExpectingSuccess(t, testCase.description, testCase.root)
+		modules, checked, _ := prepareUnitExpectingSuccess(t, testCase.description, testCase.root, "")
 		if modules == nil {
 			continue
 		}
@@ -807,44 +823,16 @@ func TestKittenUnitCompileAndRun(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(directory, runtime.HeaderFileName), []byte(runtime.HeaderSource()), 0o644); err != nil {
 				t.Fatalf("writing the runtime header: %v", err)
 			}
-			arguments := append([]string{}, compiler[1:]...)
-			arguments = append(arguments, "-std=c11", "-Wall", "-Wextra")
-			arguments = append(arguments, compileFlags...)
-			arguments = append(arguments, "-o", "program", "program.c", runtime.SourceFileName)
-			arguments = append(arguments, linkFlags...)
-			build := exec.Command(compiler[0], arguments...)
-			build.Dir = directory
-			var diagnostics bytes.Buffer
-			build.Stdout = &diagnostics
-			build.Stderr = &diagnostics
-			if err := build.Run(); err != nil {
-				t.Errorf("%s: compiling unit %d with %s: %v\n%s", testCase.description, index, filepath.Base(compiler[0]), err, diagnostics.String())
+			result, err := buildAndRunProgram(t, compiler, compileFlags, linkFlags, directory, text, index)
+			if err != nil {
+				t.Errorf("%s: %v", testCase.description, err)
 				break
 			}
-			if output := strings.TrimSpace(diagnostics.String()); output != "" {
-				t.Errorf("%s: compiling unit %d with %s produced diagnostics:\n%s", testCase.description, index, filepath.Base(compiler[0]), output)
+			if result.stdout != "" || result.stderr != "" || result.status != 0 {
+				t.Errorf("%s: unit %d wrote %q and %q and exited %d", testCase.description, index, result.stdout, result.stderr, result.status)
 				break
 			}
-
-			run := exec.Command(filepath.Join(directory, "program"))
-			var stdout, stderr bytes.Buffer
-			run.Stdout = &stdout
-			run.Stderr = &stderr
-			status := 0
-			if err := run.Run(); err != nil {
-				var exit *exec.ExitError
-				if errors.As(err, &exit) {
-					status = exit.ExitCode()
-				} else {
-					t.Errorf("%s: running unit %d: %v", testCase.description, index, err)
-					break
-				}
-			}
-			if stdout.Len() != 0 || stderr.Len() != 0 || status != 0 {
-				t.Errorf("%s: unit %d wrote %q and %q and exited %d", testCase.description, index, stdout.String(), stderr.String(), status)
-				break
-			}
-			outputs = append(outputs, stdout.String())
+			outputs = append(outputs, result.stdout)
 		}
 		if len(outputs) != 2 {
 			continue
@@ -863,10 +851,10 @@ func TestKittenUnitCompileAndRun(t *testing.T) {
 }
 
 // prepareUnitExpectingSuccess prepares a program that the reference must generate.
-func prepareUnitExpectingSuccess(t *testing.T, description, root string) ([]*parser.Module, *checker.Result, string) {
+func prepareUnitExpectingSuccess(t *testing.T, description, root, imported string) ([]*parser.Module, *checker.Result, string) {
 	t.Helper()
 
-	modules, checked, generated, ok := prepareUnit(t, description, root, "")
+	modules, checked, generated, ok := prepareUnit(t, description, root, imported)
 	if !ok {
 		return nil, nil, ""
 	}
@@ -940,7 +928,7 @@ func TestKittenUnitScaling(t *testing.T) {
 	lines := 0
 	for _, count := range []int{20, 40, 80} {
 		root := programWithFunctions(count)
-		modules, checked, _ := prepareUnitExpectingSuccess(t, fmt.Sprintf("%d functions", count), root)
+		modules, checked, _ := prepareUnitExpectingSuccess(t, fmt.Sprintf("%d functions", count), root, "")
 		if modules == nil {
 			continue
 		}
@@ -987,4 +975,64 @@ func TestKittenUnitScaling(t *testing.T) {
 	if last > first*100 {
 		t.Errorf("a four-fold larger program cost %v against %v, which is a different order of cost", last, first)
 	}
+}
+
+// programResult is what a generated program wrote and the status it exited with.
+type programResult struct {
+	stdout string
+	stderr string
+	status int
+}
+
+// buildAndRunProgram compiles one generated unit in its own directory against the
+// runtime, with the project's flags, links it, runs it with that directory as its
+// working directory, and returns what it wrote and its exit status.
+//
+// Any fixture files the program reads must already have been written into the
+// directory, so that a program reading a file is tested against a controlled input
+// rather than against whatever happens to be beside the working directory.
+func buildAndRunProgram(t *testing.T, compiler, compileFlags, linkFlags []string, directory, text string, index int) (programResult, error) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(directory, "program.c"), []byte(text), 0o644); err != nil {
+		return programResult{}, fmt.Errorf("writing program.c: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, runtime.SourceFileName), []byte(runtime.Source()), 0o644); err != nil {
+		return programResult{}, fmt.Errorf("writing the runtime: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, runtime.HeaderFileName), []byte(runtime.HeaderSource()), 0o644); err != nil {
+		return programResult{}, fmt.Errorf("writing the runtime header: %v", err)
+	}
+
+	arguments := append([]string{}, compiler[1:]...)
+	arguments = append(arguments, "-std=c11", "-Wall", "-Wextra")
+	arguments = append(arguments, compileFlags...)
+	arguments = append(arguments, "-o", "program", "program.c", runtime.SourceFileName)
+	arguments = append(arguments, linkFlags...)
+	build := exec.Command(compiler[0], arguments...)
+	build.Dir = directory
+	var diagnostics bytes.Buffer
+	build.Stdout = &diagnostics
+	build.Stderr = &diagnostics
+	if err := build.Run(); err != nil {
+		return programResult{}, fmt.Errorf("compiling unit %d with %s: %v\n%s", index, filepath.Base(compiler[0]), err, diagnostics.String())
+	}
+	if output := strings.TrimSpace(diagnostics.String()); output != "" {
+		return programResult{}, fmt.Errorf("compiling unit %d with %s produced diagnostics:\n%s", index, filepath.Base(compiler[0]), output)
+	}
+
+	run := exec.Command(filepath.Join(directory, "program"))
+	run.Dir = directory
+	var stdout, stderr bytes.Buffer
+	run.Stdout = &stdout
+	run.Stderr = &stderr
+	status := 0
+	if err := run.Run(); err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			return programResult{}, fmt.Errorf("running unit %d: %v", index, err)
+		}
+		status = exit.ExitCode()
+	}
+	return programResult{stdout: stdout.String(), stderr: stderr.String(), status: status}, nil
 }

@@ -21,6 +21,7 @@
 // reported as not implemented rather than rendered as something plausible.
 
 import "../checker/model.ktn";
+import "../checker/state.ktn";
 import "../lexer/tokens.ktn";
 import "../parser/ast.ktn";
 import "errors.ktn";
@@ -145,7 +146,9 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
             return string_literal(context, token);
         }
         Assign(node_id, operator, target, value) { return not_implemented(expression); }
-        Call(node_id, open_paren, callee, arguments, argument_count) { return not_implemented(expression); }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            return call_expression(context, callee, arguments, argument_count);
+        }
         Member(node_id, dot, receiver, member) { return not_implemented(expression); }
         StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return not_implemented(expression); }
         VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return not_implemented(expression); }
@@ -175,6 +178,299 @@ fn string_literal(ExpressionContext context, Token token) -> ExpressionResult {
             };
         }
     }
+}
+
+// --- Calls -------------------------------------------------------------------
+
+// HelperResult is a runtime helper's name, or the reason none applies.
+union HelperResult {
+    Ok { string text; }
+    Failed { GenerateError error; }
+}
+
+// call_expression renders a call to a user-defined function or to a built-in.
+//
+// The built-ins are not ordinary calls: print becomes a comma expression of
+// runtime helpers, length chooses its helper from the argument's type, and the
+// others are one runtime call with their arguments in order. Anything else is a
+// call to the function the checker resolved for the callee, named by the module
+// that declared it.
+fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    BuiltinKind builtin = callee_builtin_kind(context, callee);
+    if (builtin == BuiltinKind.Print) {
+        return print_expression(context, arguments, argument_count);
+    }
+    if (builtin == BuiltinKind.Length) {
+        return length_expression(context, callee, arguments, argument_count);
+    }
+    if (builtin == BuiltinKind.Substring) {
+        return builtin_call_expression(context, callee, substring_function(), "substring", arguments, argument_count, 3);
+    }
+    if (builtin == BuiltinKind.MapHas) {
+        return builtin_call_expression(context, callee, map_has_function(), "has", arguments, argument_count, 2);
+    }
+    if (builtin == BuiltinKind.ReadFile) {
+        return builtin_call_expression(context, callee, read_file_function(), "read_file", arguments, argument_count, 1);
+    }
+    return user_call_expression(context, callee, arguments, argument_count);
+}
+
+// callee_builtin_kind reports which built-in a callee resolves to, or NotBuiltin
+// when it is a user function or was not resolved. The checker records the resolved
+// function on the callee's symbol, so this reads the model rather than the name.
+fn callee_builtin_kind(ExpressionContext context, Expr callee) -> BuiltinKind {
+    match (expression_info(module_model(context.model, context.module_index), expr_node_id(callee)).symbol) {
+        Absent {
+            return BuiltinKind.NotBuiltin;
+        }
+        Present(symbol) {
+            match (symbol.function) {
+                Absent {
+                    return BuiltinKind.NotBuiltin;
+                }
+                Present(function) {
+                    return function.builtin;
+                }
+            }
+        }
+    }
+}
+
+// callee_function returns the user function a call's callee resolved to, or absent
+// when the callee is a built-in or was not resolved.
+fn callee_function(ExpressionContext context, Expr callee) -> OptionalFunction {
+    match (expression_info(module_model(context.model, context.module_index), expr_node_id(callee)).symbol) {
+        Absent {
+            return OptionalFunction.Absent;
+        }
+        Present(symbol) {
+            match (symbol.function) {
+                Absent {
+                    return OptionalFunction.Absent;
+                }
+                Present(function) {
+                    if (function.builtin != BuiltinKind.NotBuiltin) {
+                        return OptionalFunction.Absent;
+                    }
+                    return OptionalFunction.Present { function = function };
+                }
+            }
+        }
+    }
+}
+
+// print_expression expands a print call into a comma expression that writes each
+// argument, separated by single spaces and terminated by a newline. A comma
+// expression has type void, matching print's return type, so it can appear wherever
+// the checker allowed the call.
+//
+// Each argument's helper is chosen from the argument's recorded type before the
+// argument is rendered, so an argument print cannot write is reported at the
+// argument, as the reference reports it.
+fn print_expression(ExpressionContext context, Expr[] arguments, int argument_count) -> ExpressionResult {
+    string parts = "";
+    int index = 0;
+    while (index < argument_count) {
+        Expr argument = arguments[index];
+        match (expression_info(module_model(context.model, context.module_index), expr_node_id(argument)).type) {
+            Absent {
+                return missing_expression_type(argument);
+            }
+            Present(argument_type) {
+                match (print_helper(argument_type)) {
+                    Failed(error) {
+                        return ExpressionResult.Failed { error = error };
+                    }
+                    Ok(helper) {
+                        match (emit_expression(context, argument)) {
+                            Failed(error) {
+                                return ExpressionResult.Failed { error = error };
+                            }
+                            Ok(rendered) {
+                                // Arguments are separated by the space helper, so
+                                // only the first one has no separator before it.
+                                if (index > 0) {
+                                    parts += ", " + print_space_function() + "()";
+                                    parts += ", " + helper + "(" + rendered + ")";
+                                } else {
+                                    parts += helper + "(" + rendered + ")";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        index++;
+    }
+    if (argument_count > 0) {
+        parts += ", " + print_newline_function() + "()";
+    } else {
+        parts += print_newline_function() + "()";
+    }
+    return ExpressionResult.Ok { text = "(" + parts + ")" };
+}
+
+// print_helper returns the runtime function that prints a value of the given type.
+// The checker only allows int, float, bool, and string.
+fn print_helper(Type value) -> HelperResult {
+    if (value.kind == TypeKind.Int) {
+        return HelperResult.Ok { text = print_int_function() };
+    }
+    if (value.kind == TypeKind.Float) {
+        return HelperResult.Ok { text = print_float_function() };
+    }
+    if (value.kind == TypeKind.Bool) {
+        return HelperResult.Ok { text = print_bool_function() };
+    }
+    if (value.kind == TypeKind.String) {
+        return HelperResult.Ok { text = print_string_function() };
+    }
+    return HelperResult.Failed {
+        error = generate_error(0, 0, "print does not support values of type " + type_string(value))
+    };
+}
+
+// length_expression renders a length call. The argument's type decides which
+// runtime helper reads the length, and the argument is rendered afterwards, as the
+// reference orders it.
+fn length_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    if (argument_count < 1) {
+        return wrong_builtin_arity(callee, "length", argument_count);
+    }
+    Expr argument = arguments[0];
+    match (expression_info(module_model(context.model, context.module_index), expr_node_id(argument)).type) {
+        Absent {
+            return missing_expression_type(argument);
+        }
+        Present(argument_type) {
+            string function = array_length_function();
+            if (is_map(argument_type)) {
+                function = map_length_function();
+            } else if (argument_type.kind == TypeKind.String) {
+                function = string_length_function();
+            }
+            match (emit_expression(context, argument)) {
+                Failed(error) {
+                    return ExpressionResult.Failed { error = error };
+                }
+                Ok(rendered) {
+                    return ExpressionResult.Ok { text = function + "(" + rendered + ")" };
+                }
+            }
+        }
+    }
+}
+
+// builtin_call_expression renders a built-in whose arguments become the arguments of
+// one runtime call, in order.
+//
+// required is the number of arguments the checker accepts for that built-in; a call
+// with fewer cannot come from a checked program, and is reported rather than
+// indexed past the end of the argument array.
+fn builtin_call_expression(ExpressionContext context, Expr callee, string function, string name, Expr[] arguments, int argument_count, int required) -> ExpressionResult {
+    if (argument_count < required) {
+        return wrong_builtin_arity(callee, name, argument_count);
+    }
+    string text = "";
+    int index = 0;
+    while (index < required) {
+        match (emit_expression(context, arguments[index])) {
+            Failed(error) {
+                return ExpressionResult.Failed { error = error };
+            }
+            Ok(rendered) {
+                if (index > 0) {
+                    text += ", ";
+                }
+                text += rendered;
+            }
+        }
+        index++;
+    }
+    return ExpressionResult.Ok { text = function + "(" + text + ")" };
+}
+
+// user_call_expression renders a call to a user-defined function.
+//
+// The reference requires the callee to be an identifier, which the checker
+// guarantees, then renders the arguments in order and resolves the callee. A callee
+// the model does not resolve is reported rather than named after the source text.
+fn user_call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    match (callee) {
+        Identifier(node_id, token) {
+            string arguments_text = "";
+            int index = 0;
+            while (index < argument_count) {
+                match (emit_expression(context, arguments[index])) {
+                    Failed(error) {
+                        return ExpressionResult.Failed { error = error };
+                    }
+                    Ok(rendered) {
+                        if (index > 0) {
+                            arguments_text += ", ";
+                        }
+                        arguments_text += rendered;
+                    }
+                }
+                index++;
+            }
+            match (callee_function(context, callee)) {
+                Absent {
+                    Position at = position_of_token(token);
+                    return ExpressionResult.Failed {
+                        error = generate_error(at.line, at.column, "function " + quoted(token.text) + " was not resolved")
+                    };
+                }
+                Present(function) {
+                    return ExpressionResult.Ok {
+                        text = function_name(token.text, function.module) + "(" + arguments_text + ")"
+                    };
+                }
+            }
+        }
+        Integer(node_id, token) { return unsupported_call_target(callee); }
+        Float(node_id, token) { return unsupported_call_target(callee); }
+        String(node_id, token) { return unsupported_call_target(callee); }
+        Boolean(node_id, token, value) { return unsupported_call_target(callee); }
+        Unary(node_id, operator, operand, postfix) { return unsupported_call_target(callee); }
+        Binary(node_id, operator, left, right) { return unsupported_call_target(callee); }
+        Assign(node_id, operator, target, value) { return unsupported_call_target(callee); }
+        Call(node_id, open_paren, inner_callee, inner_arguments, inner_count) { return unsupported_call_target(callee); }
+        Member(node_id, dot, receiver, member) { return unsupported_call_target(callee); }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return unsupported_call_target(callee); }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return unsupported_call_target(callee); }
+        NewArray(node_id, at, element, length) { return unsupported_call_target(callee); }
+        NewMap(node_id, at, map_type) { return unsupported_call_target(callee); }
+        Index(node_id, bracket, target, index) { return unsupported_call_target(callee); }
+    }
+}
+
+// unsupported_call_target reports a callee that is not an identifier. The checker
+// rejects such a call, so this cannot occur for a checked program.
+fn unsupported_call_target(Expr callee) -> ExpressionResult {
+    Position at = expr_position(callee);
+    return ExpressionResult.Failed {
+        error = generate_error(at.line, at.column, "unsupported call target")
+    };
+}
+
+// wrong_builtin_arity reports a built-in call with fewer arguments than the checker
+// accepts. The checker enforces each built-in's arity, so this cannot occur.
+fn wrong_builtin_arity(Expr callee, string name, int argument_count) -> ExpressionResult {
+    Position at = expr_position(callee);
+    return ExpressionResult.Failed {
+        error = generate_error(at.line, at.column, "the built-in " + name + " call has " + decimal(argument_count) + " argument(s), which the checker did not accept")
+    };
+}
+
+// missing_expression_type reports an expression the checker did not annotate, which
+// cannot occur for a tree it accepted.
+fn missing_expression_type(Expr expression) -> ExpressionResult {
+    Position at = expr_position(expression);
+    return ExpressionResult.Failed {
+        error = generate_error(at.line, at.column, "expression has no recorded type")
+    };
 }
 
 // unary_expression renders a prefix or postfix unary operation. Kitten and C

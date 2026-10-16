@@ -2488,8 +2488,8 @@ run advances.
 
 `selfhost/codegen/expressions.ktn` renders the expressions the reference generator
 handles with a recursive walk and parentheses: integer, floating-point, boolean, and
-string literals; identifiers; unary `-`, `!`, `++`, and `--`; and binary `+`, `-`,
-`*`, `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`. Every unary and
+string literals; identifiers; unary `-`, `!`, `++`, and `--`; binary `+`, `-`, `*`,
+`/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`; and calls. Every unary and
 binary operation is parenthesized, so the generated C never depends on C's
 precedence matching Kitten's. A string literal renders as a reference to its pooled
 object, described in Section 28.8.
@@ -2513,9 +2513,23 @@ what names are mangled by. A result is the rendering or a failure, and a failure
 propagated from the expression that contains it, exactly as the reference reports a
 child's error from its parent, so a partly rendered expression is never returned.
 
+**Calls** are resolved through the checker's annotations rather than from source
+text: the callee's symbol names the function it resolved to, and its built-in field
+distinguishes a built-in from a user function. A user call becomes
+`<mangled name>(<arguments>)`, with the name mangled by the module that declared the
+resolved function. The built-ins are expanded: `print` becomes a comma expression of
+the runtime helpers for each argument's type, separated by the space helper and
+terminated by the newline helper, which has type void and is `print`'s own type;
+`length` becomes the array, map, or string length helper chosen by the argument's
+type; and `has`, `substring`, and `read_file` are one runtime call each. Arguments
+are rendered left to right and the first failure among them stops the call, so a call
+is never emitted with a hole where an argument failed. The built-ins whose argument
+is a container can be emitted but not yet reached end to end, because constructing a
+container needs `new`.
+
 An expression kind outside this subset is reported as not implemented, never
-rendered as something plausible: assignments, calls, member access, struct and
-variant literals, array and map creation, and indexing.
+rendered as something plausible: assignments, member access, struct and variant
+literals, array and map creation, and indexing.
 
 An expression is a fragment, not a line, so it is returned as a string rather than
 written through the output accumulator of Section 28.5. Rendering a node
@@ -2664,7 +2678,9 @@ harness compares whole definitions: the pool and the bodies the probe rendered
 against the same two regions of the reference's own output, byte for byte. The unit
 harness compares the complete translation unit, one comparison per program covering
 the header, the declaration sections, the pool, the bodies, and the entry point at
-once. A program whose body needs an expression kind this section does not implement
+once. The call harness compares whole units for programs whose expressions are calls
+and, because such a program can now print, compiles, links, and runs both generated
+programs and compares what they write, their standard error, and their exit status. A program whose body needs an expression kind this section does not implement
 is required to report that kind by name, and a program the entry point rule rejects
 is compared through its error, so neither is ever counted as a unit comparison.
 
@@ -2675,11 +2691,12 @@ is compared through its error, so neither is ever counted as a unit comparison.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **The remaining expression kinds.** Assignments, calls, member access, struct
-  and variant literals, array and map creation, and indexing are reported as not
+- **The remaining expression kinds.** Assignments, member access, struct and
+  variant literals, array and map creation, and indexing are reported as not
   implemented rather than rendered, and a statement that needs one produces no
-  bodies. They need the runtime ABI names, the callee's signature, or the accessors
-  that keep an assignment target evaluated once.
+  bodies. They need the accessors that keep an assignment target evaluated once, or
+  the constructors and allocation whose signatures the declaration emitter already
+  emits.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
 - A generated program cannot yet print, call, or assign, so comparing observable

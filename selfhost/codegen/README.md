@@ -8,14 +8,16 @@ being built one at a time:
 - the declaration emitter - the nine sections the reference generator emits
   before any function body; and
 - the core expression emitter - integer, floating-point, and boolean literals,
-  string literals, identifiers, unary expressions, and binary expressions; and
+  string literals, identifiers, unary expressions, binary expressions, and calls to
+  user functions and built-ins; and
 - the string literal pool - the `static const ktn_string` objects the emitted code
   refers to; and
 - the statement and function emitter - the bodies of the generated functions; and
 - the translation unit emitter - the entry point rule, the C entry point, and the
   assembly of the whole unit.
 
-The remaining expression kinds and a module loader do not exist yet.
+The remaining expression kinds, a module loader, and a pipeline that writes and
+builds the output do not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -134,7 +136,11 @@ An unrecognized directive prints `unknown <directive>`.
   generated constructors call. `string_concat_function()` and
   `string_equal_function()` are the runtime helpers a string `+`, `==`, or `!=`
   becomes. `fail_function()` is the runtime failure a match statement's defensive
-  arm calls. The remaining runtime names arrive with the emission that calls them.
+  arm calls, `print_*_function()` are the helpers a `print` call expands into
+  (integer, float, bool, string, space, and newline), `array_length_function()`,
+  `map_length_function()`, and `string_length_function()` are the `length` helpers
+  the argument's type chooses between, and `substring_function()`,
+  `map_has_function()`, and `read_file_function()` are the remaining built-ins.
 
 `output.ktn`:
 
@@ -289,6 +295,8 @@ handles with no more than a recursive walk and parentheses:
 | identifier | `ktn_var_<name>` |
 | unary `-` `!` `++` `--` | `(<op><operand>)` for a prefix, `(<operand><op>)` for a postfix |
 | binary `+` `-` `*` `/` `%` `<` `<=` `>` `>=` `==` `!=` `&&` `\|\|` | `(<left> <op> <right>)` |
+| call to a function | `<ktn_fn_name>(<argument>, ...)`, named by the module that declared it |
+| call to a built-in | `print`, `length`, `has`, and `substring` are expanded; `read_file` is one runtime call |
 
 Three binary operators are special on strings, because a Kitten string is a
 length-carrying pointer: `+` becomes `ktn_rt_string_concat(left, right)`, `==`
@@ -296,9 +304,37 @@ becomes `ktn_rt_string_equal(left, right)`, and `!=` becomes
 `!ktn_rt_string_equal(left, right)`. The left operand's resolved type decides
 that, which is the only semantic fact the emitter reads.
 
-The other eight expression kinds — assignments, calls, member access, struct and
-variant literals, array and map creation, and indexing — are not implemented yet,
-and each is reported as such rather than rendered as something plausible:
+### Calls
+
+A call is resolved through the checker's own annotations: the callee's symbol names
+the function it resolved to, and its `builtin` field distinguishes a built-in from a
+user function. Nothing is looked up by source text, and a callee the model does not
+resolve is reported rather than named after what it was written as.
+
+| Call | Rendering |
+| --- | --- |
+| a user function | `<mangled name>(<arguments>)`, with the name taken from the callee and mangled by the module the resolved function was declared in |
+| `print(a, b)` | `(ktn_rt_print_<t>(a), ktn_rt_print_space(), ktn_rt_print_<u>(b), ktn_rt_print_newline())` |
+| `length(x)` | `ktn_rt_array_length`, `ktn_rt_map_length`, or `ktn_rt_string_length`, chosen by the argument's type |
+| `has(map, key)` | `ktn_rt_map_has(map, key)` |
+| `substring(s, start, end)` | `ktn_rt_substring(s, start, end)` |
+| `read_file(path)` | `ktn_rt_read_file(path)` |
+
+Arguments are rendered left to right, and the first failure among them stops the
+call: a call is never emitted with a hole where an argument failed. `print` chooses
+each argument's helper from the argument's recorded type *before* rendering it,
+which is the order the reference uses and the reason an argument `print` cannot
+write is reported at that argument. A comma expression has type `void`, which is
+`print`'s own type, so it can appear wherever the checker allowed the call.
+
+The built-ins whose argument is a container — `length` over an array or a map, and
+`has` — can be emitted but not yet reached end to end, because constructing a
+container needs `new`, which is not implemented yet. Their emission is exercised
+through function bodies that take the container as a parameter.
+
+The other seven expression kinds — assignments, member access, struct and variant
+literals, array and map creation, and indexing — are not implemented yet, and each
+is reported as such rather than rendered as something plausible:
 
 ```
 fail <line> <column> <kind> <kind> expressions are not implemented yet
@@ -701,15 +737,17 @@ missing implementation can never look like a rendering.
 
 Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
 
-- 218 of 552 expected lines of the 14 targeted programs compared byte for byte,
+- 110 of 552 expected lines of the 14 targeted programs compared byte for byte,
   covering every literal kind, both booleans, every unary and binary operator,
   precedence, associativity, redundant parentheses, nesting, and mixed operand
   types. The lines that are not compared are the subexpressions of a compared
   expression, which the compared whole already validates.
-- 455 of 1220 expected lines of 34 corpus programs compared byte for byte, over
-  the checker corpus, which also exercises all eight unimplemented kinds and
-  compares each of their messages, and whose **71 pooled entries** are compared
-  as well.
+- 390 of 1220 expected lines of 34 corpus programs compared byte for byte, over
+  the checker corpus, which also exercises every unimplemented kind and compares
+  each of their messages, and whose **71 pooled entries** are compared as well.
+  These line counts fall when a kind starts rendering: a call used to be compared as
+  a failure message and is now compared as a rendering where the reference's output
+  exposes one, and as part of a whole unit by the unit harness.
 - 20 floating-point spellings compared, with the boundary forms the language
   cannot express (`1.`, `.5`, `1e5`) checked at the lexer.
 - Every unary and binary operator present in the targeted corpus, read from the
@@ -764,9 +802,9 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/kitten/` reports:
   initializer that is an expression, a union with a string payload, `match` inside
   loops, string literals in nested statements that keep the pool's order, and a
   second module.
-- 7 corpus programs over 57 lines and 7 functions compared byte for byte, and 27
+- 12 corpus programs over 112 lines and 16 functions compared byte for byte, and 22
   programs reported as needing an unimplemented expression kind by name; the
-  remaining valid corpus programs use calls, which this phase does not implement.
+  remaining valid corpus programs need one of those kinds.
 - Match temporaries numbered in emission order across a unit, checked directly.
 - 9 programs whose statement uses an unimplemented expression are rejected with
   that kind's failure and produce no definitions, and 6 malformed or invalid
@@ -785,7 +823,7 @@ driver's shape including the file, which only the entry point rule sets.
 
 Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
 
-- **13 whole units identical over 499 lines** in the targeted corpus: a minimal
+- **15 whole units identical over 558 lines** in the targeted corpus: a minimal
   `main`; a `main` that runs a loop, a string concatenation, and an `if`; several
   functions in declaration order; nested blocks and control flow; loops of every
   shape; `match` over enums and unions; structs, enums, and unions with
@@ -793,10 +831,10 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
   and repeated literals; the pool's order when strings appear in different
   functions; strings inside nested statements; and two modules, one of which
   declares its own `main`.
-- **7 whole corpus units identical over 127 lines**, plus **57 corpus programs whose
-  entry point failure is reported identically**, 27 programs reported as needing an
+- **12 whole corpus units identical over 236 lines**, plus **57 corpus programs whose
+  entry point failure is reported identically**, 22 programs reported as needing an
   unimplemented expression kind by name, and 1757 check errors reported identically.
-  The remaining corpus programs use calls, which this phase does not implement.
+  The remaining corpus programs need the kinds listed at the end of this file.
 - **4 targeted and 57 corpus entry point rejections**, covering a missing `main`,
   parameters, a return value, and an imported module that declares `main` but is not
   the root.
@@ -814,14 +852,44 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
   `main` performs, which allocates through the collector - rather than printed
   values, and it claims nothing about them.
 
+`cmd/kitten/calls_differential_test.go` compares whole translation units for programs
+whose expressions are calls, and, because a program can now print, compiles, links,
+and runs both generated programs and compares what they write.
+
+Running `go test -count=1 -v -run TestKittenCalls ./cmd/kitten/` reports:
+
+- **11 whole units identical over 364 lines**: `print` with every primitive type and
+  with several at once; user calls with zero, one, and several arguments; calls in
+  an expression statement, a local initializer, a condition, a loop condition, a
+  return, a match arm, and an argument position; nested calls; void and value
+  returning calls; `length` over a string, an array parameter, and a map parameter;
+  `substring`, `has`, and `read_file`; cross-module calls including a private helper
+  called from its own module; and the literal-pool order that call arguments produce.
+- 4 programs the checker rejects, reported identically: `print` with no arguments, a
+  variable called as a function, a call with the wrong number of arguments, and a
+  call with a mistyped argument.
+- 3 programs whose call argument needs an unimplemented kind, each reported by name
+  with no unit produced.
+- 10 corruptions of a correct unit — a wrong callee name, a dropped argument,
+  reordered arguments, omitted parentheses, a wrong print helper, a missing space
+  helper, a wrong length helper, a reordered literal pool, and a dropped call
+  statement — each rejected by the comparison the tests use, with an identical unit
+  accepted.
+- **10 programs compiled, linked, and run**, 9 of them against an expected output
+  and the tenth against the reference program's own output, because the C standard
+  leaves argument evaluation order unspecified. Every comparison also requires the
+  two programs to agree on stdout, stderr, and exit status.
+- Deterministic generation across repeated runs and across a different program in
+  between, and nested calls of depth 25, 50, and 100 costing 3, 4, and 6 ms.
+
 ## What is deliberately not here
 
-- **The remaining expression kinds.** Assignments, calls, member access, struct and
-  variant literals, array and map creation, and indexing are reported as not
-  implemented rather than rendered, and a program whose bodies need one produces no
-  translation unit. A call needs the runtime ABI names and the callee's signature;
-  indexing and assignment need the runtime accessors that keep the target evaluated
-  once.
+- **The remaining expression kinds.** Assignments, member access, struct and variant
+  literals, array and map creation, and indexing are reported as not implemented
+  rather than rendered, and a program whose bodies need one produces no translation
+  unit. Indexing and assignment need the runtime accessors that keep the target
+  evaluated once; constructing a struct, union, array, or map needs the constructors
+  and allocation the declaration emitter already emits signatures for.
 - **A module loader.** The drivers read two fixed paths, as the checker's driver
   does. Nothing discovers imports in Kitten, so a multi-module program reaches the
   emitters only through a caller that supplies the module set. The reference's own
@@ -829,10 +897,10 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
 - **Writing the unit anywhere but standard output.** The unit driver prints the C;
   the self-hosted runtime offers no file writing, no command-line arguments, and no
   program-selected exit status.
-- **Observable behavior from the supported subset.** A generated program cannot
-  print, call, or assign yet, so the execution tests verify compilation, linking,
-  execution, exit status, and the absence of a runtime failure rather than printed
-  values.
+- **Programs that assign or construct values.** A generated program can now print
+  and call, so its output is compared with the reference program's, but it cannot
+  yet assign to a variable or construct a struct, union, array, or map, which is what
+  most programs need before they are worth running.
 
 Kitten is not self-hosting, and this phase does not make it so: the backend now
 emits complete translation units for the programs its expression emitter supports,
