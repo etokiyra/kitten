@@ -2352,10 +2352,10 @@ cross-module cases, every fixture, and the self-hosted sources.
 Section 19 describes the compilation model, and Section 27 describes the
 Kitten-written checker that resolves a program. This section describes the
 Kitten-written code generator: the layer that turns resolved names and types into
-C text and the bounded accumulation it writes into, the emitter of the declaration
-sections, and the emitter of the core expressions. Function bodies, statements,
-the remaining expression kinds, the pooled string literals, and the C entry point
-are deferred.
+C text and the bounded accumulation it writes into, the declaration emitter, the
+expression emitter, the string literal pool, the statement and function-body
+emitter, and the translation unit assembly. The assignment expression and a
+Kitten-written module loader are deferred.
 
 ### 28.1 Location and role
 
@@ -2489,10 +2489,11 @@ run advances.
 `selfhost/codegen/expressions.ktn` renders the expressions the reference generator
 handles with a recursive walk and parentheses: integer, floating-point, boolean, and
 string literals; identifiers; unary `-`, `!`, `++`, and `--`; binary `+`, `-`, `*`,
-`/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`; and calls. Every unary and
-binary operation is parenthesized, so the generated C never depends on C's
-precedence matching Kitten's. A string literal renders as a reference to its pooled
-object, described in Section 28.8.
+`/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`; calls; member access and
+qualified variant references; struct and variant literals; array and map creation; and
+indexing. Every unary and binary operation is parenthesized, so the generated C never
+depends on C's precedence matching Kitten's. A string literal renders as a reference to
+its pooled object, described in Section 28.8.
 
 A literal is emitted as its source spelling, exactly as the reference emits it, so
 no rounding, no exponent form, and no change of precision can be introduced by
@@ -2524,12 +2525,23 @@ terminated by the newline helper, which has type void and is `print`'s own type;
 type; and `has`, `substring`, and `read_file` are one runtime call each. Arguments
 are rendered left to right and the first failure among them stops the call, so a call
 is never emitted with a hole where an argument failed. The built-ins whose argument
-is a container can be emitted but not yet reached end to end, because constructing a
-container needs `new`.
+is a container choose their length or membership helper from the argument's type, and
+their argument can be constructed in the same expression because `new` is rendered.
 
-An expression kind outside this subset is reported as not implemented, never
-rendered as something plausible: assignments, member access, struct and variant
-literals, array and map creation, and indexing.
+**Member access** renders as `<receiver>->ktn_f_<field>`, unless the checker recorded
+the member as a qualified variant reference, in which case an enum case renders as its
+tag constant and a payload-less union variant renders as a call to its constructor.
+**Struct and variant literals** render as calls to the generated constructors, with
+their values reordered into field declaration order, which is also the order their
+string literals are pooled in. **Array creation** renders as a runtime allocation
+whose element size is the element type's C size, and **map creation** as an empty map
+whose values are stored inline at the value type's size. **Indexing** renders as a
+runtime accessor: a string index yields a byte value, and an array or map index
+dereferences the accessor's pointer, which is a C l-value, so a target and index are
+evaluated once whether the index is read or written.
+
+Assignment is the only expression kind reported as not implemented, never rendered as
+something plausible.
 
 An expression is a fragment, not a line, so it is returned as a string rather than
 written through the output accumulator of Section 28.5. Rendering a node
@@ -2646,7 +2658,7 @@ render every expression twice and intern every literal twice.
 
 ### 28.11 Differential testing
 
-Three differential tests in `cmd/kitten` compare the Kitten-written generator with
+The differential tests in `cmd/kitten` compare the Kitten-written generator with
 the reference. The helper test compares values the reference produced rather than a
 copy of its logic: for every literal of the corpus the harness reads the pooled
 declaration out of the reference's own output and compares both the escaped text
@@ -2682,7 +2694,11 @@ once. The call harness compares whole units for programs whose expressions are c
 and, because such a program can now print, compiles, links, and runs both generated
 programs and compares what they write, their standard error, and their exit status. A program whose body needs an expression kind this section does not implement
 is required to report that kind by name, and a program the entry point rule rejects
-is compared through its error, so neither is ever counted as a unit comparison.
+is compared through its error, so neither is ever counted as a unit comparison. The
+fixture harness hands every top-level fixture under `tests/` to the Kitten backend:
+each fixture the backend can generate must match the reference's unit and produce its
+expected output when compiled and run, and each fixture it cannot must report the
+unimplemented assignment expression as the only reason.
 
 `selfhost/codegen/README.md` records the corpora and the results.
 
@@ -2691,17 +2707,15 @@ is compared through its error, so neither is ever counted as a unit comparison.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **The remaining expression kinds.** Assignments, member access, struct and
-  variant literals, array and map creation, and indexing are reported as not
-  implemented rather than rendered, and a statement that needs one produces no
-  bodies. They need the accessors that keep an assignment target evaluated once, or
-  the constructors and allocation whose signatures the declaration emitter already
-  emits.
+- **The remaining expression kind.** Assignment is reported as not implemented
+  rather than rendered, and a statement that needs one produces no bodies. It needs
+  the accessors that keep an assignment target evaluated once, including the string
+  append and map set helpers.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
-- A generated program cannot yet print, call, or assign, so comparing observable
-  behavior is limited to compilation, linking, execution, exit status, and the
-  absence of a runtime failure.
+- A generated program cannot yet assign to a variable, so comparing observable
+  behavior is limited to the output its statements can produce by printing, calling,
+  and constructing values.
 - File writing, command-line arguments, standard error, and a program-selected exit
   status (Section 16), none of which the self-hosted runtime offers.
 

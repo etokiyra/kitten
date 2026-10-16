@@ -135,24 +135,29 @@ reference's own pooled declarations. Phase 4D.5 added the statement and function
 emitter under `selfhost/codegen/statements.ktn`, driven by `selfhost/functions.ktn`:
 blocks, local declarations, expression statements, `if`/`else`, `while`, `for`,
 `return`, and `match`, checked against the reference's own function definitions byte
-for byte. Assignments, calls, member access, struct and variant literals,
-allocation, and indexing are still reported as not implemented rather than rendered
-when a statement needs one. Phase 4D.6 added the translation unit emitter under
-`selfhost/codegen/unit.ktn`, driven by `selfhost/unit.ktn`: the entry point rule, the
-C entry point, and the assembly of the declaration sections, the literal pool, the
+for byte. At that point assignments, calls, member access, struct and variant
+literals, allocation, and indexing were still reported as not implemented rather than
+rendered when a statement needed one. Phase 4D.6 added the translation unit emitter
+under `selfhost/codegen/unit.ktn`, driven by `selfhost/unit.ktn`: the entry point rule,
+the C entry point, and the assembly of the declaration sections, the literal pool, the
 bodies, and the entry point into one complete translation unit, checked against the
 reference's whole output byte for byte. Phase 4D.7 added calls: user-defined
 functions, cross-module calls, and the built-ins `print`, `length`, `has`,
 `substring`, and `read_file`, so a generated program can now produce output, which
 the differential harness compiles, runs under GCC and Clang, and compares against the
-reference program's output. A module loader and the seven remaining expression kinds
-are still to come.
+reference program's output. Phase 4D.8 added member access and qualified variant
+references, struct and variant literals, array and map creation, and indexing under
+`selfhost/codegen/expressions.ktn`, so a program that constructs and inspects values
+is now emitted byte for byte, and four of the nine fixtures under `tests/` compile,
+run, and match their expected output through the Kitten backend, with the remaining
+five reporting the assignment expression as their only unimplemented kind. A module
+loader and the assignment expression are still to come.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
 which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, and no entry point or
-module loader yet) are documented in SPEC.md
+positions, no command-line arguments or chosen exit status, and no module loader
+yet) are documented in SPEC.md
 Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
 `selfhost/checker/README.md`, and `selfhost/codegen/README.md`.
 
@@ -183,7 +188,9 @@ authorization.
    definitions; Phase 4D.6 added the entry point rule and the complete translation
    unit assembly, checked against the reference's whole output; Phase 4D.7 added
    function calls and built-ins, with generated programs compiled, run, and compared
-   against the reference's).
+   against the reference's; Phase 4D.8 added member access, qualified variant
+   references, struct and variant literals, array and map creation, and indexing,
+   with four of the nine fixtures now compiled and run through the Kitten backend).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

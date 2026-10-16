@@ -88,6 +88,17 @@ public fn substring_function() -> string { return "ktn_rt_substring"; }
 public fn map_has_function() -> string { return "ktn_rt_map_has"; }
 public fn read_file_function() -> string { return "ktn_rt_read_file"; }
 
+// string_at_function reads one byte of a string, array_new_function and
+// array_at_function create an array and access one bounds-checked element, and
+// map_new_function and map_at_function create a map and access one value. They are
+// the runtime helpers the indexing and creation expressions become; each name is
+// the one the runtime package exports.
+public fn string_at_function() -> string { return "ktn_rt_string_at"; }
+public fn array_new_function() -> string { return "ktn_rt_array_new"; }
+public fn array_at_function() -> string { return "ktn_rt_array_at"; }
+public fn map_new_function() -> string { return "ktn_rt_map_new"; }
+public fn map_at_function() -> string { return "ktn_rt_map_at"; }
+
 // module_prefix returns the C name prefix for a module. The root module (id 0)
 // has no prefix, so single-module programs generate the same names as before.
 // Imported modules use "<id>_"; because a Kitten identifier cannot begin with a

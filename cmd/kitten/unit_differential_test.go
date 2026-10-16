@@ -371,7 +371,7 @@ fn helper() -> int {
 `,
 		rejected: "no entry point",
 	}, {
-		description: "an unsupported expression in a local declaration",
+		description: "an array creation in a local declaration",
 		root: `fn main() {
     int[] values = new int[2];
 }
@@ -402,19 +402,103 @@ fn main() {
 }
 `,
 	}, {
-		description: "an unsupported expression in an assignment",
+		description: "an assignment expression",
 		root: `fn main() {
     int a = 1;
     a = 2;
 }
 `,
 	}, {
-		description: "an unsupported expression in a struct literal",
+		description: "an assignment to an array element",
+		root: `fn main() {
+    int[] values = new int[2];
+    values[0] = 1;
+}
+`,
+	}, {
+		description: "an assignment to a struct field",
 		root: `struct Point {
     int x;
 }
 fn main() {
     Point point = Point { x = 1 };
+    point.x = 2;
+}
+`,
+	}, {
+		description: "a struct literal in a local declaration",
+		root: `struct Point {
+    int x;
+}
+fn main() {
+    Point point = Point { x = 1 };
+}
+`,
+	}, {
+		description: "member access, indexing, and variant references",
+		root: `struct Point {
+    int x;
+    int y;
+}
+enum Color { Red }
+union Shape {
+    Circle { int radius; }
+    Nothing
+}
+fn measure(Shape shape) -> int {
+    match (shape) {
+        Circle(radius) { return radius; }
+        Nothing { return 0; }
+    }
+}
+fn main() {
+    Point point = Point { x = 1, y = 2 };
+    int[] values = new int[2];
+    map[string]int counts = new map[string]int;
+    print(point.x);
+    print(values[0]);
+    print(counts["a"]);
+    print(Color.Red == Color.Red);
+    print(measure(Shape.Nothing));
+}
+`,
+	}, {
+		description: "array and map creation",
+		root: `struct Point {
+    int x;
+}
+fn main() {
+    int[] values = new int[3];
+    int[][] grid = new int[][2];
+    map[string]int counts = new map[string]int;
+    map[string]Point points = new map[string]Point;
+}
+`,
+	}, {
+		description: "nested literals and recursive variants",
+		root: `union Expression {
+    IntegerLiteral { int value; }
+    Add { Expression left; Expression right; }
+    Missing
+}
+struct Box {
+    Expression value;
+}
+fn evaluate(Expression expression) -> int {
+    match (expression) {
+        IntegerLiteral(value) { return value; }
+        Add(left, right) { return evaluate(left) + evaluate(right); }
+        Missing { return 0; }
+    }
+}
+fn total(Box box) -> int {
+    return evaluate(box.value);
+}
+fn main() {
+    print(total(Box { value = Expression.Add {
+        left = Expression.IntegerLiteral { value = 2 },
+        right = Expression.Missing
+    } }));
 }
 `,
 	}}
@@ -625,7 +709,11 @@ func TestKittenUnitCorpus(t *testing.T) {
 	if total < 1800 {
 		t.Fatalf("the corpus looks too small: %d inputs", total)
 	}
-	if units < 5 || unitLines < 50 || entryPointFailures < 20 || unsupported < 20 || checkErrors < 1000 {
+	// With six more expression kinds implemented, more corpus programs produce a
+	// whole unit and fewer report an unimplemented kind. The floor on their total
+	// preserves the old coverage, and the floor on the unsupported count keeps the
+	// unimplemented-kind path - now assignment only - exercised.
+	if units < 5 || unitLines < 50 || entryPointFailures < 20 || unsupported < 1 || units+unsupported < 30 || checkErrors < 1000 {
 		t.Fatalf("the corpus is not covered: %d units over %d lines, %d entry point failures, %d unsupported, %d check errors, %d skipped, of %d inputs",
 			units, unitLines, entryPointFailures, unsupported, checkErrors, skipped, total)
 	}

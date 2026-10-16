@@ -692,7 +692,11 @@ func TestKittenFunctionsCorpus(t *testing.T) {
 	if total < 1800 {
 		t.Fatalf("the corpus looks too small: %d inputs", total)
 	}
-	if comparedPrograms < 5 || comparedLines < 40 || unsupported < 20 || checkErrors < 1000 {
+	// With six more expression kinds implemented, more corpus programs compare
+	// and fewer report an unimplemented kind. The floor on their total preserves
+	// the old coverage, and the floor on the unsupported count keeps the
+	// unimplemented-kind path - now assignment only - exercised.
+	if comparedPrograms < 5 || comparedLines < 40 || unsupported < 1 || comparedPrograms+unsupported < 30 || checkErrors < 1000 {
 		t.Fatalf("the corpus is not covered: %d compared programs over %d lines and %d functions, %d unsupported, %d check errors, %d skipped, of %d inputs",
 			comparedPrograms, comparedLines, comparedFunctions, unsupported, checkErrors, skipped, total)
 	}
@@ -717,14 +721,14 @@ func TestKittenFunctionsRejectUnsupportedExpressions(t *testing.T) {
 		wantKind    string
 	}{
 		{"assignment in a statement", "fn main() {\n    int a = 1;\n    a = 2;\n}\n", "assign"},
-		{"member access in a return", "struct P {\n    int x;\n}\nfn f(P p) -> int {\n    return p.x;\n}\nfn main() {\n    print(\"f is emitted but not called\");\n}\n", "member"},
-		{"member access in a statement", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n}\n", "struct-literal"},
-		{"index in a statement", "fn main() {\n    int[] values = new int[2];\n}\n", "new-array"},
+		{"assignment to a struct field", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n    p.x = 2;\n}\n", "assign"},
+		{"assignment to an index element", "fn main() {\n    int[] values = new int[2];\n    values[0] = 1;\n}\n", "assign"},
+		{"compound assignment", "fn main() {\n    int a = 1;\n    a += 2;\n}\n", "assign"},
 		{"assignment in a while condition", "fn main() {\n    bool first = true;\n    bool second = false;\n    while (first = second) {\n    }\n}\n", "assign"},
-		{"struct literal in a declaration", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n}\n", "struct-literal"},
+		{"assignment in a return", "fn value() -> int {\n    int a = 1;\n    return a = 2;\n}\nfn main() {\n}\n", "assign"},
 		{"assignment in a for initializer", "fn main() {\n    int a = 1;\n    for (a = 0; a < 2; a++) {\n    }\n}\n", "assign"},
-		{"array creation in a statement", "fn main() {\n    int[] values = new int[2];\n}\n", "new-array"},
-		{"unsupported expression in a match arm", "struct P {\n    int x;\n}\nenum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { P p = P { x = 1 }; return 1; }\n    }\n}\nfn main() {\n}\n", "struct-literal"},
+		{"assignment as a call argument", "fn take(int value) -> int {\n    return value;\n}\nfn main() {\n    int a = 1;\n    print(take(a = 2));\n}\n", "assign"},
+		{"assignment in a match arm", "enum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { int a = 1; a = 2; }\n    }\n    return 0;\n}\nfn main() {\n}\n", "assign"},
 	}
 
 	for _, testCase := range cases {

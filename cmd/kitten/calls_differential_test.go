@@ -249,7 +249,32 @@ fn main() {
 `,
 		unsupported: "assign",
 	}, {
-		description: "a call whose argument is a struct field",
+		description: "a call whose argument is an assignment to an index",
+		root: `fn take(int value) -> int {
+    return value;
+}
+fn main() {
+    int[] values = new int[2];
+    print(take(values[0] = 1));
+}
+`,
+		unsupported: "assign",
+	}, {
+		description: "a call whose argument is an assignment to a struct field",
+		root: `struct Point {
+    int x;
+}
+fn take(int value) -> int {
+    return value;
+}
+fn main() {
+    Point point = Point { x = 1 };
+    print(take(point.x = 2));
+}
+`,
+		unsupported: "assign",
+	}, {
+		description: "a local struct literal",
 		root: `struct Point {
     int x;
 }
@@ -260,9 +285,8 @@ fn main() {
     Point point = Point { x = 1 };
 }
 `,
-		unsupported: "struct-literal",
 	}, {
-		description: "a call whose argument is an index",
+		description: "an index argument",
 		root: `fn take(int value) -> int {
     return value;
 }
@@ -273,7 +297,6 @@ fn main() {
     print("first is emitted but not called");
 }
 `,
-		unsupported: "index",
 	}, {
 		description: "a call to a callee that is not a function",
 		root: `fn main() {

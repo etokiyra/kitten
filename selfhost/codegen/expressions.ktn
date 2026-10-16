@@ -1,11 +1,14 @@
 // expressions.ktn - render Kitten expressions as C expressions.
 //
 // It reproduces the expression emitter of the reference generator
-// (codegen/emit.go) for the subset it implements: integer, floating-point, and
-// boolean literals, identifiers, unary expressions, and binary expressions. It
-// mirrors the reference exactly, including the parentheses the reference adds
-// around every unary and binary operation, so that its output is byte for byte
-// the reference's for the same expression.
+// (codegen/emit.go): integer, floating-point, and boolean literals, string
+// literals, identifiers, unary expressions, binary expressions, function calls,
+// member access and qualified variant references, struct and variant literals,
+// array and map creation, and indexing. It mirrors the reference exactly,
+// including the parentheses the reference adds around every unary and binary
+// operation, so that its output is byte for byte the reference's for the same
+// expression. Assignment is the one expression kind it still reports as not
+// implemented.
 //
 // An expression is a fragment, not a line: it is built as a string that a caller
 // places inside a declaration or a larger expression. It therefore does not go
@@ -110,10 +113,10 @@ fn not_implemented(Expr expression) -> ExpressionResult {
 
 // emit_expression renders one expression as a C expression.
 //
-// The supported kinds are the three literal kinds, identifiers, unary
-// expressions, and binary expressions. Every other kind is reported as not
-// implemented, including a string literal, which needs the pooled literal table
-// that a later phase emits.
+// Every kind is rendered except an assignment, which is reported as not
+// implemented rather than rendered as something plausible. A string literal is
+// pooled rather than emitted as a C string of its own: its bytes are escaped once,
+// an equal literal shares the object, and the reference is the object's address.
 public fn emit_expression(ExpressionContext context, Expr expression) -> ExpressionResult {
     match (expression) {
         Integer(node_id, token) {
@@ -149,12 +152,24 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
         Call(node_id, open_paren, callee, arguments, argument_count) {
             return call_expression(context, callee, arguments, argument_count);
         }
-        Member(node_id, dot, receiver, member) { return not_implemented(expression); }
-        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return not_implemented(expression); }
-        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return not_implemented(expression); }
-        NewArray(node_id, at, element, length) { return not_implemented(expression); }
-        NewMap(node_id, at, map_type) { return not_implemented(expression); }
-        Index(node_id, bracket, target, index) { return not_implemented(expression); }
+        Member(node_id, dot, receiver, member) {
+            return member_expression(context, node_id, receiver, member);
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            return struct_literal_expression(context, type_ref, open_brace, fields, field_count);
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            return variant_literal_expression(context, type_ref, variant, open_brace, fields, field_count);
+        }
+        NewArray(node_id, at, element, length) {
+            return new_array_expression(context, at, element, length);
+        }
+        NewMap(node_id, at, map_type) {
+            return new_map_expression(context, at, map_type);
+        }
+        Index(node_id, bracket, target, index) {
+            return index_expression(context, node_id, bracket, target, index);
+        }
     }
 }
 
@@ -176,6 +191,338 @@ fn string_literal(ExpressionContext context, Token token) -> ExpressionResult {
             return ExpressionResult.Failed {
                 error = generate_error(at.line, at.column, error.message)
             };
+        }
+    }
+}
+
+// --- Member access and variant references ------------------------------------
+
+// member_expression renders a struct field access, or a qualified variant
+// reference ("Enum.Case" or "Union.Variant") when the checker recorded one.
+//
+// The reference tests the checker's variant annotation first, so a qualified
+// variant reference never renders its receiver; only a field access does. The
+// receiver's position, which is the member expression's own position, is where a
+// missing type annotation is reported.
+fn member_expression(ExpressionContext context, int node_id, Expr receiver, Token member) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (expression_info(module, node_id).variant) {
+        Present(variant) {
+            match (expression_info(module, node_id).type) {
+                Absent {
+                    return missing_expression_type(receiver);
+                }
+                Present(named_type) {
+                    return variant_reference(named_type, variant);
+                }
+            }
+        }
+        Absent { }
+    }
+    match (emit_expression(context, receiver)) {
+        Failed(error) {
+            return ExpressionResult.Failed { error = error };
+        }
+        Ok(rendered) {
+            return ExpressionResult.Ok { text = "(" + rendered + ")->" + field_name(member.text) };
+        }
+    }
+}
+
+// variant_reference renders a payload-less variant used as a value: an enum case
+// is a tag constant, and a payload-less union variant is a constructor call.
+fn variant_reference(Type named_type, Variant variant) -> ExpressionResult {
+    if (is_union(named_type)) {
+        return ExpressionResult.Ok {
+            text = variant_constructor_name(named_type, variant.name) + "()"
+        };
+    }
+    return ExpressionResult.Ok { text = enum_case_name(named_type, variant.name) };
+}
+
+// type_ref_name returns the name a type reference was written with. A literal's
+// type reference is always a named type, so the composite cases return the empty
+// string and are only reachable for a tree the parser did not produce.
+fn type_ref_name(TypeRef reference) -> string {
+    match (reference) {
+        Named(node_id, name) { return name.text; }
+        Array(node_id, element) { return ""; }
+        Map(node_id, keyword, key, value) { return ""; }
+    }
+}
+
+// field_init_value returns the value a literal gives a field, or Absent when the
+// literal does not initialize that field. The checker rejects a duplicate field,
+// so the first match is the only match.
+fn field_init_value(FieldInit[] fields, int field_count, string name) -> OptionalExpr {
+    int index = 0;
+    while (index < field_count) {
+        if (fields[index].name.text == name) {
+            return OptionalExpr.Present { expression = fields[index].value };
+        }
+        index++;
+    }
+    return OptionalExpr.Absent;
+}
+
+// not_checked_struct reports a struct literal whose type the checker did not
+// record. The checker records a type for every literal it accepts, so this cannot
+// occur for a checked program.
+fn not_checked_struct(TypeRef type_ref) -> ExpressionResult {
+    Position at = type_position(type_ref);
+    return ExpressionResult.Failed {
+        error = generate_error(at.line, at.column, "struct " + quoted(type_ref_name(type_ref)) + " was not checked")
+    };
+}
+
+// struct_literal_expression renders "Struct { field = value, ... }" as a call to
+// the struct's constructor, with values reordered into field declaration order.
+//
+// Values are located through the literal's fields, so a literal written in a
+// different order than the declaration still renders in declaration order, which
+// is also the order the reference interns its string literals in.
+fn struct_literal_expression(ExpressionContext context, TypeRef type_ref, Token open_brace, FieldInit[] fields, int field_count) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (type_ref_type(module, type_ref_node_id(type_ref))) {
+        Absent {
+            return not_checked_struct(type_ref);
+        }
+        Present(struct_type) {
+            if (!is_struct(struct_type)) {
+                return not_checked_struct(type_ref);
+            }
+            StructInfo info = struct_info_of(struct_type);
+            string arguments = "";
+            int index = 0;
+            while (index < info.field_count) {
+                StructField field = info.fields[index];
+                match (field_init_value(fields, field_count, field.name)) {
+                    Absent {
+                        Position at = position_of_token(open_brace);
+                        return ExpressionResult.Failed {
+                            error = generate_error(at.line, at.column, "struct literal for " + struct_type.name + " is missing field " + quoted(field.name))
+                        };
+                    }
+                    Present(value) {
+                        match (emit_expression(context, value)) {
+                            Failed(error) {
+                                return ExpressionResult.Failed { error = error };
+                            }
+                            Ok(rendered) {
+                                if (index > 0) {
+                                    arguments += ", ";
+                                }
+                                arguments += rendered;
+                            }
+                        }
+                    }
+                }
+                index++;
+            }
+            return ExpressionResult.Ok {
+                text = constructor_name(struct_type.name, struct_type.module) + "(" + arguments + ")"
+            };
+        }
+    }
+}
+
+// variant_literal_expression renders "Union.Variant { field = value, ... }" as a
+// call to the variant's constructor, with values reordered into field declaration
+// order.
+fn variant_literal_expression(ExpressionContext context, TypeRef type_ref, Token variant_token, Token open_brace, FieldInit[] fields, int field_count) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (type_ref_type(module, type_ref_node_id(type_ref))) {
+        Absent {
+            Position at = type_position(type_ref);
+            return ExpressionResult.Failed {
+                error = generate_error(at.line, at.column, "unresolved type " + quoted(type_ref_name(type_ref)))
+            };
+        }
+        Present(union_type) {
+            if (!is_union(union_type)) {
+                Position at = type_position(type_ref);
+                return ExpressionResult.Failed {
+                    error = generate_error(at.line, at.column, type_string(union_type) + " is not a union type")
+                };
+            }
+            if (!has(union_type.variant_index, variant_token.text)) {
+                Position at = type_position(type_ref);
+                return ExpressionResult.Failed {
+                    error = generate_error(at.line, at.column, "union " + union_type.name + " has no variant " + quoted(variant_token.text))
+                };
+            }
+            Variant variant = union_type.variant_index[variant_token.text];
+            string arguments = "";
+            int index = 0;
+            while (index < variant.field_count) {
+                StructField field = variant.fields[index];
+                match (field_init_value(fields, field_count, field.name)) {
+                    Absent {
+                        Position at = position_of_token(open_brace);
+                        return ExpressionResult.Failed {
+                            error = generate_error(at.line, at.column, "variant literal for " + union_type.name + "." + variant.name + " is missing field " + quoted(field.name))
+                        };
+                    }
+                    Present(value) {
+                        match (emit_expression(context, value)) {
+                            Failed(error) {
+                                return ExpressionResult.Failed { error = error };
+                            }
+                            Ok(rendered) {
+                                if (index > 0) {
+                                    arguments += ", ";
+                                }
+                                arguments += rendered;
+                            }
+                        }
+                    }
+                }
+                index++;
+            }
+            return ExpressionResult.Ok {
+                text = variant_constructor_name(union_type, variant.name) + "(" + arguments + ")"
+            };
+        }
+    }
+}
+
+// --- Array, map, and index expressions ---------------------------------------
+
+// new_array_expression renders "new Element[length]" as a runtime allocation. The
+// allocation is zero-initialized by the collector, and the element size is the one
+// the type maps to in C.
+fn new_array_expression(ExpressionContext context, Token at, TypeRef element_ref, Expr length) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (type_ref_type(module, type_ref_node_id(element_ref))) {
+        Absent {
+            Position error_at = type_position(element_ref);
+            return ExpressionResult.Failed {
+                error = generate_error(error_at.line, error_at.column, "unresolved type " + quoted(type_ref_name(element_ref)))
+            };
+        }
+        Present(element_type) {
+            match (c_type(element_type)) {
+                Failed(message) {
+                    Position error_at = position_of_token(at);
+                    return ExpressionResult.Failed {
+                        error = generate_error(error_at.line, error_at.column, message)
+                    };
+                }
+                Ok(element_text) {
+                    match (emit_expression(context, length)) {
+                        Failed(error) {
+                            return ExpressionResult.Failed { error = error };
+                        }
+                        Ok(rendered) {
+                            return ExpressionResult.Ok {
+                                text = array_new_function() + "(" + rendered + ", sizeof(" + element_text + "))"
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// new_map_expression renders "new map[Key]Value" as a runtime allocation of an
+// empty map whose values are stored inline at the value type's size.
+fn new_map_expression(ExpressionContext context, Token at, TypeRef map_ref) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (type_ref_type(module, type_ref_node_id(map_ref))) {
+        Absent {
+            Position error_at = type_position(map_ref);
+            return ExpressionResult.Failed {
+                error = generate_error(error_at.line, error_at.column, "unresolved type " + quoted(type_ref_name(map_ref)))
+            };
+        }
+        Present(map_type_value) {
+            if (!is_map(map_type_value)) {
+                Position error_at = position_of_token(at);
+                return ExpressionResult.Failed {
+                    error = generate_error(error_at.line, error_at.column, type_string(map_type_value) + " is not a map type")
+                };
+            }
+            match (c_type(value_of(map_type_value))) {
+                Failed(message) {
+                    Position error_at = position_of_token(at);
+                    return ExpressionResult.Failed {
+                        error = generate_error(error_at.line, error_at.column, message)
+                    };
+                }
+                Ok(value_text) {
+                    return ExpressionResult.Ok {
+                        text = map_new_function() + "(sizeof(" + value_text + "))"
+                    };
+                }
+            }
+        }
+    }
+}
+
+// index_expression renders "target[index]".
+//
+// For an array, the runtime accessor performs the bounds check and returns a
+// pointer to the element. For a map, it returns a pointer to the value and fails
+// when the key is absent. In both cases the result is a C l-value, so compound
+// assignment and increment can evaluate the target and index exactly once. A
+// string index yields an int byte value directly and is not an l-value.
+//
+// The reference reads the target's type, the result's type, and the result's C
+// type before either operand is rendered, so a mistyped node is reported before a
+// string literal inside it would be interned; this mirrors that order.
+fn index_expression(ExpressionContext context, int node_id, Token bracket, Expr target, Expr index) -> ExpressionResult {
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (expression_info(module, expr_node_id(target)).type) {
+        Absent {
+            return missing_expression_type(target);
+        }
+        Present(target_type) {
+            match (expression_info(module, node_id).type) {
+                Absent {
+                    // The reference reports the index expression's own missing
+                    // type at its position, which is the target's position.
+                    return missing_expression_type(target);
+                }
+                Present(result_type) {
+                    match (c_type(result_type)) {
+                        Failed(message) {
+                            Position error_at = position_of_token(bracket);
+                            return ExpressionResult.Failed {
+                                error = generate_error(error_at.line, error_at.column, message)
+                            };
+                        }
+                        Ok(result_text) {
+                            match (emit_expression(context, target)) {
+                                Failed(error) {
+                                    return ExpressionResult.Failed { error = error };
+                                }
+                                Ok(target_text) {
+                                    match (emit_expression(context, index)) {
+                                        Failed(error) {
+                                            return ExpressionResult.Failed { error = error };
+                                        }
+                                        Ok(index_text) {
+                                            if (target_type.kind == TypeKind.String) {
+                                                return ExpressionResult.Ok {
+                                                    text = string_at_function() + "(" + target_text + ", " + index_text + ")"
+                                                };
+                                            }
+                                            string accessor = array_at_function();
+                                            if (is_map(target_type)) {
+                                                accessor = map_at_function();
+                                            }
+                                            return ExpressionResult.Ok {
+                                                text = "(*(" + "(" + result_text + " *)" + accessor + "(" + target_text + ", " + index_text + ")))"
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

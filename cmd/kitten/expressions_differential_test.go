@@ -218,15 +218,9 @@ func matchingParenthesis(line string, open int) int {
 // unsupportedKinds lists the expression kinds this phase does not implement, in a
 // stable order, with the failure message the emitter must report for each. The
 // messages are this generator's own; the reference has no counterpart, because it
-// implements every kind.
+// implements every kind. Assignment is the only kind left.
 var unsupportedKinds = []string{
 	"assign",
-	"member",
-	"struct-literal",
-	"variant-literal",
-	"new-array",
-	"new-map",
-	"index",
 }
 
 // unsupportedMessage is the failure the probe must report for a kind.
@@ -828,6 +822,125 @@ fn main() {
     return value + 1;
 }
 `,
+	}, {
+		description: "member access and qualified variant references",
+		root: `struct Point {
+    int x;
+    int y;
+}
+enum Color { Red, Green }
+union Shape {
+    Circle { int radius; }
+    Nothing
+}
+fn measure(Shape shape) -> int {
+    match (shape) {
+        Circle(radius) { return radius; }
+        Nothing { return 0; }
+    }
+}
+fn main() {
+    Point point = Point { x = 1, y = 2 };
+    print(point.x);
+    print(point.y);
+    Color color = Color.Red;
+    print(color == Color.Red);
+    print(color != Color.Green);
+    print(measure(Shape.Nothing));
+}
+`,
+	}, {
+		description: "index over arrays, maps, and strings",
+		root: `fn main() {
+    int[] values = new int[3];
+    print(values[0]);
+    print(values[2]);
+    map[string]int counts = new map[string]int;
+    print(counts["a"]);
+    print("kitten"[0]);
+    print("kitten"[5]);
+    int[][] grid = new int[][2];
+    print(grid[0][0]);
+    print(grid[1][1]);
+}
+`,
+	}, {
+		description: "member of an index of a member",
+		root: `struct Point {
+    int x;
+    int y;
+}
+struct Row {
+    Point[] cells;
+}
+fn main() {
+    Row[] rows = new Row[1];
+    print(rows[0].cells[0].x);
+    print(rows[0].cells[1].y);
+}
+`,
+	}, {
+		description: "a struct literal containing a variant literal",
+		root: `union Value {
+    Number { int amount; }
+    Empty
+}
+struct Box {
+    Value value;
+}
+fn amount_of(Box box) -> int {
+    match (box.value) {
+        Number(amount) { return amount; }
+        Empty { return 0; }
+    }
+}
+fn main() {
+    print(amount_of(Box { value = Value.Number { amount = 7 } }));
+    print(amount_of(Box { value = Value.Empty }));
+}
+`,
+	}, {
+		description: "a new array of structs and a new map with struct values",
+		root: `struct Point {
+    int x;
+    int y;
+}
+fn main() {
+    print(length(new Point[2]));
+    print(length(new map[string]Point));
+    print(new int[3][1]);
+    print(length(new int[][2]));
+    print(length(new map[string]int[]));
+    map[string]Point points = new map[string]Point;
+    print(points["a"].x);
+}
+`,
+	}, {
+		description: "recursive union variants",
+		root: `union Expression {
+    IntegerLiteral { int value; }
+    Name { string name; }
+    Add { Expression left; Expression right; }
+    Missing
+}
+fn evaluate(Expression expression) -> int {
+    match (expression) {
+        IntegerLiteral(value) { return value; }
+        Name(name) { return 0; }
+        Add(left, right) { return evaluate(left) + evaluate(right); }
+        Missing { return 0; }
+    }
+}
+fn main() {
+    print(evaluate(Expression.Add {
+        left = Expression.IntegerLiteral { value = 2 },
+        right = Expression.Add {
+            left = Expression.IntegerLiteral { value = 3 },
+            right = Expression.Missing
+        }
+    }));
+}
+`,
 	}}
 }
 
@@ -860,6 +973,34 @@ func TestKittenExpressionsMatchReference(t *testing.T) {
 		t.Fatalf("only %d of %d expected lines were compared", compared, lines)
 	}
 	t.Logf("core expressions: %d targeted programs, %d of %d expected lines compared", len(expressionCases()), compared, lines)
+}
+
+// TestKittenExpressionsEveryKind checks that the targeted corpus really renders
+// every expression kind this phase adds, so one of them cannot silently regress to
+// a failure while the corpus comparison still passes for other reasons. A kind is
+// counted only when the probe reports it as a rendering, never as a propagated
+// failure.
+func TestKittenExpressionsEveryKind(t *testing.T) {
+	requireToolchain(t)
+
+	executable := buildKittenExpressions(t)
+	directory := t.TempDir()
+
+	rendered := make(map[string]bool)
+	for _, testCase := range expressionCases() {
+		expressions, _ := runProbe(t, executable, directory, testCase.root, testCase.imported)
+		for _, line := range probeLines(expressions) {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 && fields[0] == "expr" {
+				rendered[fields[3]] = true
+			}
+		}
+	}
+	for _, kind := range []string{"member", "struct-literal", "variant-literal", "new-array", "new-map", "index"} {
+		if !rendered[kind] {
+			t.Errorf("the %s kind was never rendered by the targeted corpus", kind)
+		}
+	}
 }
 
 // TestKittenExpressionsEveryOperator checks that the targeted corpus really prints
@@ -923,6 +1064,7 @@ fn main() {
     counts["a"] = 1;
     values[0] = 2;
     print(helper(i));
+    print(helper(i = 3));
     print(s);
     print(p.x);
     print(values[0]);
@@ -979,7 +1121,7 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 	// kind can never appear as a rendering. An implemented kind may still be
 	// reported as a failure, because it reports the failure of the expression it
 	// contains.
-	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true, "call": true}
+	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true, "call": true, "member": true, "struct-literal": true, "variant-literal": true, "new-array": true, "new-map": true, "index": true}
 	rendered := 0
 	propagated := 0
 	for _, line := range probeLines(expressions) {
