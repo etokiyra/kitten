@@ -283,6 +283,13 @@ func (c *checker) builtinFunctions() map[string]*Function {
 			Variadic:     true,
 			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
 		},
+		"eprint": {
+			Name:         "eprint",
+			ReturnType:   VoidType,
+			Builtin:      BuiltinEprint,
+			Variadic:     true,
+			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
+		},
 		"length": {
 			Name:       "length",
 			ReturnType: IntType,

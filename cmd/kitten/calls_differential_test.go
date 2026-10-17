@@ -52,6 +52,17 @@ func callCases() []callCase {
 }
 `,
 	}, {
+		description: "eprint with every primitive argument type",
+		root: `fn main() {
+    eprint(1);
+    eprint(2.5);
+    eprint(true);
+    eprint("text");
+    eprint(1, 2.5, true, "text");
+    eprint("");
+}
+`,
+	}, {
 		description: "argv built-in",
 		root: `fn main() {
     print(length(argv()));

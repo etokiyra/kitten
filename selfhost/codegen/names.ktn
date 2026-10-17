@@ -82,6 +82,16 @@ public fn print_string_function() -> string { return "ktn_rt_print_string"; }
 public fn print_space_function() -> string { return "ktn_rt_print_space"; }
 public fn print_newline_function() -> string { return "ktn_rt_print_newline"; }
 
+// The eprint helpers write to standard error with the same formatting as print.
+// The newline helper flushes stdout first, so earlier print output stays ahead of
+// the diagnostic, and then flushes stderr.
+public fn eprint_int_function() -> string { return "ktn_rt_eprint_int"; }
+public fn eprint_float_function() -> string { return "ktn_rt_eprint_float"; }
+public fn eprint_bool_function() -> string { return "ktn_rt_eprint_bool"; }
+public fn eprint_string_function() -> string { return "ktn_rt_eprint_string"; }
+public fn eprint_space_function() -> string { return "ktn_rt_eprint_space"; }
+public fn eprint_newline_function() -> string { return "ktn_rt_eprint_newline"; }
+
 // The length helpers read the length a container or a string stores in its own
 // header, so the type of the argument decides which one is called. A string
 // carries its byte length alongside its bytes.

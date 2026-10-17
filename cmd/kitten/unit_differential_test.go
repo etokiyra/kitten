@@ -147,6 +147,13 @@ func unitCases() []unitCase {
 }
 `,
 	}, {
+		description: "eprint in a whole unit",
+		root: `fn main() {
+    eprint(1, 2.5, true, "text");
+    eprint("");
+}
+`,
+	}, {
 		description: "a main whose body does something",
 		root: `fn main() {
     int index = 0;

@@ -289,4 +289,19 @@ void ktn_rt_print_string(const ktn_string *value);
 void ktn_rt_print_space(void);
 void ktn_rt_print_newline(void);
 
+/*
+ * Built-in eprint helpers. Each writes a single value to standard error, using
+ * the same formatting as the print helper for that type. Callers separate
+ * arguments with ktn_rt_eprint_space and terminate the line with
+ * ktn_rt_eprint_newline. The newline helper flushes standard output before
+ * writing the newline, so earlier print output appears first on a shared
+ * terminal, and then flushes standard error.
+ */
+void ktn_rt_eprint_int(int64_t value);
+void ktn_rt_eprint_float(double value);
+void ktn_rt_eprint_bool(bool value);
+void ktn_rt_eprint_string(const ktn_string *value);
+void ktn_rt_eprint_space(void);
+void ktn_rt_eprint_newline(void);
+
 #endif /* KITTEN_RUNTIME_H */

@@ -42,6 +42,9 @@ const (
 	// BuiltinPrint is the variadic print function.
 	BuiltinPrint
 
+	// BuiltinEprint is the variadic standard-error writer.
+	BuiltinEprint
+
 	// BuiltinLength returns the length of an array.
 	BuiltinLength
 

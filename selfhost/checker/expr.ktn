@@ -617,6 +617,9 @@ fn check_call(Checker checker, Token open_paren, Expr callee, Expr[] arguments, 
     if (function.builtin == BuiltinKind.Print) {
         return check_variadic_call(checker, open_paren, arguments, argument_count, function, scope);
     }
+    if (function.builtin == BuiltinKind.Eprint) {
+        return check_variadic_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
     if (function.builtin == BuiltinKind.Length) {
         return check_length_call(checker, open_paren, arguments, argument_count, function, scope);
     }

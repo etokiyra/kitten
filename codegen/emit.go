@@ -506,6 +506,8 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 	switch g.builtinKind(expression.Callee) {
 	case checker.BuiltinPrint:
 		return g.printExpression(expression)
+	case checker.BuiltinEprint:
+		return g.eprintExpression(expression)
 	case checker.BuiltinLength:
 		argumentType, err := g.expressionType(expression.Arguments[0])
 		if err != nil {
@@ -840,5 +842,50 @@ func printHelper(kittenType *checker.Type) (string, error) {
 		return runtime.PrintStringFunction, nil
 	default:
 		return "", fmt.Errorf("print does not support values of type %s", kittenType)
+	}
+}
+
+// eprintExpression expands an eprint call into a comma expression that writes
+// each argument to standard error, separated by single spaces and terminated by
+// a flushing newline.
+func (g *generator) eprintExpression(expression *parser.CallExpr) (string, error) {
+	parts := make([]string, 0, 2*len(expression.Arguments)+1)
+	for index, argument := range expression.Arguments {
+		argumentType, err := g.expressionType(argument)
+		if err != nil {
+			return "", err
+		}
+		helper, err := eprintHelper(argumentType)
+		if err != nil {
+			position := argument.Pos()
+			return "", &Error{Line: position.Line, Column: position.Column, Message: err.Error()}
+		}
+		rendered, err := g.expression(argument)
+		if err != nil {
+			return "", err
+		}
+		if index > 0 {
+			parts = append(parts, runtime.EprintSpaceFunction+"()")
+		}
+		parts = append(parts, helper+"("+rendered+")")
+	}
+	parts = append(parts, runtime.EprintNewlineFunction+"()")
+	return "(" + strings.Join(parts, ", ") + ")", nil
+}
+
+// eprintHelper returns the runtime function that writes a value to standard
+// error. The checker only allows int, float, bool, and string.
+func eprintHelper(kittenType *checker.Type) (string, error) {
+	switch kittenType {
+	case checker.IntType:
+		return runtime.EprintIntFunction, nil
+	case checker.FloatType:
+		return runtime.EprintFloatFunction, nil
+	case checker.BoolType:
+		return runtime.EprintBoolFunction, nil
+	case checker.StringType:
+		return runtime.EprintStringFunction, nil
+	default:
+		return "", fmt.Errorf("eprint does not support values of type %s", kittenType)
 	}
 }

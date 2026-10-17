@@ -347,13 +347,14 @@ It is also the only way a self-hosting claim means anything.
 | --- | --- |
 | Lexer | 772 inputs |
 | Parser + AST | 262 inputs |
-| Checker + semantic model | 1,864 inputs, byte-identical |
+| Checker + semantic model | 1,866 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 78 whole units, 3,017 lines |
+| Entry point and translation-unit assembly | 80 whole units, 3,060 lines |
 | Module loader | 20 targeted trees, 14 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
-| Generated programs executed | 29 program runs under GCC and Clang, outputs compared |
+| `eprint()` runtime | stdout and stderr captured separately through both pipelines |
+| Generated programs executed | 31 program runs under GCC and Clang, outputs compared |
 
 </details>
 
@@ -366,7 +367,10 @@ The Kitten-written module loader matches the Go loader over its corpus for an ab
 root path, and `tests/modules/` runs through the fully Kitten-written loader, lexer,
 parser, checker, and generator. Phase 5.1 added the `argv()` built-in end to end in
 both pipelines, with the generated C entry point capturing the process argument
-vector before user `main` runs. Two loader limits remain: a missing or unreadable file
+vector before user `main` runs. Phase 5.2 added `eprint(...)`, which writes
+diagnostics to standard error with the same formatting as `print`; the runtime
+fixture captures stdout and stderr separately through both pipelines. Two loader
+limits remain: a missing or unreadable file
 is still fatal because SPEC.md defers recoverable file input, and a relative root needs
 a working-directory primitive. Those are the 4E.2 decision and the driver phase, not
 open generator questions.

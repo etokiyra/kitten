@@ -780,6 +780,17 @@ func expressionCases() []expressionCase {
 }
 `,
 	}, {
+		description: "eprint calls with every printable type",
+		root: `fn main() {
+    eprint(1);
+    eprint(2.5);
+    eprint(true);
+    eprint("text");
+    eprint(1, 2.5, true, "text");
+    eprint("");
+}
+`,
+	}, {
 		description: "expressions around control flow",
 		root: `fn main() {
     int i = 0;

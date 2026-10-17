@@ -594,10 +594,10 @@ outcome here.
 - Concurrency.
 - The precise behavior of the garbage collector and runtime, and the concrete
   Boehm GC configuration.
-- A way for a Kitten program to write to standard error and to choose its
-  process exit status. `argv()` is now available (Section 18.8), so a program can
-  read its arguments, but it cannot yet report a diagnostic on standard error or
-  select a non-fatal exit status (Section 25.4).
+- A way for a Kitten program to choose its process exit status. `argv()` and
+  `eprint(...)` are now available (Section 18.8), so a program can read its
+  arguments and report a diagnostic on standard error, but it cannot yet select a
+  non-fatal exit status (Section 25.4).
 
 **Parser clarifications deferred**
 
@@ -978,10 +978,10 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Six functions are provided by the language: `print`, `length`, `argv`, `has`,
-`substring`, and `read_file`. All are represented in the semantic environment
-rather than special-cased in expression checking. A user-defined top-level
-declaration with the same name shadows the built-in.
+Seven functions are provided by the language: `print`, `eprint`, `length`,
+`argv`, `has`, `substring`, and `read_file`. All are represented in the semantic
+environment rather than special-cased in expression checking. A user-defined
+top-level declaration with the same name shadows the built-in.
 
 **`print`**
 
@@ -990,6 +990,25 @@ declaration with the same name shadows the built-in.
   array, enum, union, or map value, is an error.
 - Its return type is `void`, so a call to `print` cannot be used as a value.
 - The output format is defined in Section 13 and the runtime in Section 19.4.
+
+**`eprint`**
+
+- It accepts **one or more** arguments, with exactly the same allowed types,
+  separators, formatting, and trailing-newline rule as `print`: every argument
+  must be `int`, `float`, `bool`, or `string`, values are separated by single
+  spaces, and the line ends with a newline.
+- It writes to **standard error**, not standard output. Diagnostics therefore
+  never share a stream with generated program output or generated C.
+- Its return type is `void`, so a call to `eprint` cannot be used as a value.
+- Calling it with no arguments, or with a struct, array, enum, union, or map
+  value, is an error with the same rule and wording as `print`.
+- **Flushing and ordering.** Each `eprint` line flushes standard output before
+  writing its terminating newline, then writes the newline and flushes standard
+  error. This makes output written by earlier `print` calls appear before the
+  diagnostic when both streams share a terminal. `print` itself remains buffered
+  and is flushed at normal process exit, when its buffer fills, or before a fatal
+  runtime error. The streams are independent: standard output carries only
+  `print` output and standard error carries only `eprint` output.
 
 **`length`**
 
@@ -1146,7 +1165,7 @@ is **deferred**.
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
-  `ktn_rt_read_file`, and the built-in print helpers.
+  `ktn_rt_read_file`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1244,7 +1263,7 @@ targets the host platform; cross-compilation and Windows are **not** supported.
    and there are no string/number conversions or code-point operations.
 4. The runtime provides GC initialization, struct allocation, string
    concatenation/append/equality/length/indexing/ranges, dynamic arrays, maps,
-   the process argument vector, and print helpers.
+   the process argument vector, and print and eprint helpers.
 5. The entry point must be a zero-parameter, void-returning `main`; the generated
    C entry point captures `argc`/`argv` for `argv()` before calling it.
 6. Default `build` output is the source base name in the current directory.
@@ -2063,12 +2082,11 @@ uninitialized token is observed, and no slot is written twice.
 - **Embedded NUL bytes.** A Kitten string cannot contain a NUL byte
   (Section 20.1), so a source file containing one is truncated at that byte by
   `read_file`; the reference lexer would continue past it.
-- **No standard error or chosen exit status.** The runtime exposes no way for a
-  program to write to standard error or to select a nonzero exit status; the only
-  nonzero exit is a fatal runtime error. The lexer driver still reads the fixed
-  relative path `input.txt` and reports a lexical error on standard output,
-  although the language now provides `argv()` (Section 18.8). Standard error and
-  exit status are **deferred** (Section 16).
+- **No chosen exit status.** The runtime exposes no way for a program to select a
+  nonzero exit status; the only nonzero exit is a fatal runtime error. The lexer
+  driver still reads the fixed relative path `input.txt` and reports a lexical
+  error on standard output, although the language now provides `argv()` and
+  `eprint(...)` (Section 18.8). Exit status is **deferred** (Section 16).
 
 None of these differences changes the language: they are properties of this
 experimental implementation, and the reference lexer remains authoritative.
@@ -2533,12 +2551,12 @@ child's error from its parent, so a partly rendered expression is never returned
 text: the callee's symbol names the function it resolved to, and its built-in field
 distinguishes a built-in from a user function. A user call becomes
 `<mangled name>(<arguments>)`, with the name mangled by the module that declared the
-resolved function. The built-ins are expanded: `print` becomes a comma expression of
-the runtime helpers for each argument's type, separated by the space helper and
-terminated by the newline helper, which has type void and is `print`'s own type;
-`length` becomes the array, map, or string length helper chosen by the argument's
-type; and `has`, `substring`, `read_file`, and `argv` are one runtime call each.
-Arguments
+resolved function. The built-ins are expanded: `print` and `eprint` become comma
+expressions of the runtime helpers for each argument's type, separated by the
+space helper and terminated by the newline helper, which has type void and is the
+built-in's own type; `length` becomes the array, map, or string length helper
+chosen by the argument's type; and `has`, `substring`, `read_file`, and `argv` are
+one runtime call each. Arguments
 are rendered left to right and the first failure among them stops the call, so a call
 is never emitted with a hole where an argument failed. The built-ins whose argument
 is a container choose their length or membership helper from the argument's type, and

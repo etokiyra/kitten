@@ -2,11 +2,11 @@
 
 > **ADOPTED in principle; implementation is staged.**
 >
-> The human approved the eight decisions below. Phase 5.1 (`argv`) is implemented;
-> `eprint`, `exit`, `try_read_file`, the loader read-error parity, the driver, and
-> the fixpoint remain future phases.
+> The human approved the eight decisions below. Phases 5.1 (`argv`) and 5.2
+> (`eprint`) are implemented; `exit`, `try_read_file`, the loader read-error
+> parity, the driver, and the fixpoint remain future phases.
 >
-> Status: adopted, Phase 5.0 proposal; Phase 5.1 done. Date: 2026-10-18.
+> Status: adopted, Phase 5.0 proposal; Phase 5.2 done. Date: 2026-10-18.
 >
 > **Adopted decisions**
 >

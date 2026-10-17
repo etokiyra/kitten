@@ -471,6 +471,8 @@ func (c *checker) checkCall(expression *parser.CallExpr, scope *Scope) (*Type, e
 	switch function.Builtin {
 	case BuiltinPrint:
 		return c.checkVariadicCall(expression, function, scope)
+	case BuiltinEprint:
+		return c.checkVariadicCall(expression, function, scope)
 	case BuiltinLength:
 		return c.checkLengthCall(expression, function, scope)
 	case BuiltinMapHas:

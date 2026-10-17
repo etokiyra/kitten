@@ -709,6 +709,9 @@ fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int
     if (builtin == BuiltinKind.Print) {
         return print_expression(context, arguments, argument_count);
     }
+    if (builtin == BuiltinKind.Eprint) {
+        return eprint_expression(context, arguments, argument_count);
+    }
     if (builtin == BuiltinKind.Length) {
         return length_expression(context, callee, arguments, argument_count);
     }
@@ -840,6 +843,72 @@ fn print_helper(Type value) -> HelperResult {
     }
     return HelperResult.Failed {
         error = generate_error(0, 0, "print does not support values of type " + type_string(value))
+    };
+}
+
+// eprint_expression expands an eprint call into a comma expression that writes
+// each argument to standard error, separated by single spaces and terminated by
+// a flushing newline. The shape is identical to print_expression with the eprint
+// helpers.
+fn eprint_expression(ExpressionContext context, Expr[] arguments, int argument_count) -> ExpressionResult {
+    string parts = "";
+    int index = 0;
+    while (index < argument_count) {
+        Expr argument = arguments[index];
+        match (expression_info(module_model(context.model, context.module_index), expr_node_id(argument)).type) {
+            Absent {
+                return missing_expression_type(argument);
+            }
+            Present(argument_type) {
+                match (eprint_helper(argument_type)) {
+                    Failed(error) {
+                        return ExpressionResult.Failed { error = error };
+                    }
+                    Ok(helper) {
+                        match (emit_expression(context, argument)) {
+                            Failed(error) {
+                                return ExpressionResult.Failed { error = error };
+                            }
+                            Ok(rendered) {
+                                if (index > 0) {
+                                    parts += ", " + eprint_space_function() + "()";
+                                    parts += ", " + helper + "(" + rendered + ")";
+                                } else {
+                                    parts += helper + "(" + rendered + ")";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        index++;
+    }
+    if (argument_count > 0) {
+        parts += ", " + eprint_newline_function() + "()";
+    } else {
+        parts += eprint_newline_function() + "()";
+    }
+    return ExpressionResult.Ok { text = "(" + parts + ")" };
+}
+
+// eprint_helper returns the runtime function that writes a value of the given
+// type to standard error.
+fn eprint_helper(Type value) -> HelperResult {
+    if (value.kind == TypeKind.Int) {
+        return HelperResult.Ok { text = eprint_int_function() };
+    }
+    if (value.kind == TypeKind.Float) {
+        return HelperResult.Ok { text = eprint_float_function() };
+    }
+    if (value.kind == TypeKind.Bool) {
+        return HelperResult.Ok { text = eprint_bool_function() };
+    }
+    if (value.kind == TypeKind.String) {
+        return HelperResult.Ok { text = eprint_string_function() };
+    }
+    return HelperResult.Failed {
+        error = generate_error(0, 0, "eprint does not support values of type " + type_string(value))
     };
 }
 

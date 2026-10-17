@@ -261,6 +261,7 @@ public struct Symbol {
 public enum BuiltinKind {
     NotBuiltin,
     Print,
+    Eprint,
     Length,
     ReadFile,
     Argv,
@@ -500,6 +501,18 @@ public fn builtin_functions() -> map[string]Function {
         return_type = primitive_type(TypeKind.Void, "void"),
         module = 0,
         builtin = BuiltinKind.Print,
+        variadic = true,
+        allowed_types = allowed_print_types(),
+        allowed_count = 4
+    };
+    builtins["eprint"] = Function {
+        name = "eprint",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = primitive_type(TypeKind.Void, "void"),
+        module = 0,
+        builtin = BuiltinKind.Eprint,
         variadic = true,
         allowed_types = allowed_print_types(),
         allowed_count = 4

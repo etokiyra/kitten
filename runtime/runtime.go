@@ -97,6 +97,19 @@ const (
 	// PrintNewlineFunction terminates a printed line.
 	PrintSpaceFunction   = "ktn_rt_print_space"
 	PrintNewlineFunction = "ktn_rt_print_newline"
+
+	// EprintIntFunction, EprintFloatFunction, EprintBoolFunction, and
+	// EprintStringFunction write one value of the corresponding primitive type to
+	// standard error.
+	EprintIntFunction    = "ktn_rt_eprint_int"
+	EprintFloatFunction  = "ktn_rt_eprint_float"
+	EprintBoolFunction   = "ktn_rt_eprint_bool"
+	EprintStringFunction = "ktn_rt_eprint_string"
+
+	// EprintSpaceFunction writes a single space to standard error, and
+	// EprintNewlineFunction terminates a diagnostic line and flushes both streams.
+	EprintSpaceFunction   = "ktn_rt_eprint_space"
+	EprintNewlineFunction = "ktn_rt_eprint_newline"
 )
 
 // HeaderSource returns the C declarations shared with generated code.

@@ -167,15 +167,50 @@ a SPEC decision for recoverable file input and a working-directory primitive. Ph
 point now takes `argc`/`argv`, saves them with `ktn_rt_set_args`, and user code sees
 the vector through `ktn_rt_argv`. The phase also added a runtime test with zero, one,
 and several arguments, including an empty argument and one containing spaces. Phase
-5.2 (`eprint`) is next; `exit`, `try_read_file`, loader read-error parity, the driver,
-and the fixpoint remain future phases.
+5.2 added `eprint(...)` end to end: the runtime's `ktn_rt_eprint_*` helpers mirror
+the print helpers, the newline helper flushes stdout before the diagnostic and then
+flushes stderr, and the runtime fixture captures stdout and stderr separately through
+both pipelines. Phase 5.3 (`exit`) is next; `try_read_file`, loader read-error
+parity, the driver, and the fixpoint remain future phases.
+
+### Adding a built-in
+
+A built-in is not registered in one place. Every item below must change together,
+or the Go and Kitten pipelines stop agreeing:
+
+1. **SPEC.md** — Section 18.8 for the signature, argument rules, output, and errors;
+   Section 16 when a deferred capability is removed; Section 19.3 for runtime ABI
+   names; Section 28 for the Kitten generator's expansion.
+2. **Go checker** — `checker/symbols.go` (`BuiltinKind`), `checker/checker.go`
+   (`builtinFunctions`, including signature/return type), and `checker/expr.go`
+   (`checkCall`) for any argument rule that is not the generic exact-arity path.
+3. **Kitten checker** — `selfhost/checker/state.ktn` (`BuiltinKind`,
+   `builtin_functions`, and any signature helper), plus
+   `selfhost/checker/expr.ktn` (`check_call`).
+4. **Semantic-model naming** — `selfhost/checker/semantics.ktn`
+   (`builtin_kind_name`) and the Go mirror in
+   `cmd/kitten/semantics_differential_test.go` (`builtinKindName`).
+5. **Runtime names** — `runtime/runtime.go` for the Go generator's constants and
+   `selfhost/codegen/names.ktn` for the Kitten generator's helpers.
+6. **Runtime implementation** — `runtime/csrc/kitten_runtime.h` and
+   `runtime/csrc/kitten_runtime.c`, kept under the MIT runtime notice. State
+   flushing and failure behavior explicitly.
+7. **Go generator** — `codegen/emit.go` (call dispatch and any expansion helper);
+   add or use a runtime name constant rather than a literal C name.
+8. **Kitten generator** — `selfhost/codegen/expressions.ktn` (call dispatch and
+   expansion) and `selfhost/codegen/names.ktn`.
+9. **Harnesses and fixtures** — checker corpus valid and invalid uses, expression
+   corpus, call/unit whole-unit cases, a runtime fixture when behavior is
+   observable, and `selfhost/codegen/README.md` counts.
+10. **Documentation** — `README.md`, `AGENTS.md`, and the relevant
+    `selfhost/*/README.md`; update measured counts, never invent them.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, generator, and
 loader, which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, an absolute-root
-Kitten loader with fatal missing-file reads, and no production driver integration)
-are documented in SPEC.md
+positions, no program-selected exit status, an absolute-root Kitten loader with
+fatal missing-file reads, and no production driver integration) are documented in
+SPEC.md
 Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
 `selfhost/checker/README.md`, `selfhost/codegen/README.md`, and
 `selfhost/loader/README.md`.
@@ -216,7 +251,9 @@ authorization.
    same order, ids, paths, and diagnostics as Go over the loader corpus, and a
    fully Kitten-written path through `tests/modules/`. Missing-file diagnostics and
    relative roots are deferred to 4E.2, which needs a SPEC decision; Phase 5.1
-   added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point).
+   added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point;
+   Phase 5.2 added `eprint(...)`, the flushing stderr helpers, and separate-stream
+   runtime coverage).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

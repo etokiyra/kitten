@@ -506,3 +506,33 @@ void ktn_rt_print_space(void) {
 void ktn_rt_print_newline(void) {
     fputc('\n', stdout);
 }
+
+void ktn_rt_eprint_int(int64_t value) {
+    fprintf(stderr, "%lld", (long long)value);
+}
+
+void ktn_rt_eprint_float(double value) {
+    fprintf(stderr, "%g", value);
+}
+
+void ktn_rt_eprint_bool(bool value) {
+    fputs(value ? "true" : "false", stderr);
+}
+
+void ktn_rt_eprint_string(const ktn_string *value) {
+    const ktn_string *checked = ktn_rt_string_value(value);
+    if (checked->length > 0) {
+        fwrite(checked->data, 1, (size_t)checked->length, stderr);
+    }
+}
+
+void ktn_rt_eprint_space(void) {
+    fputc(' ', stderr);
+}
+
+void ktn_rt_eprint_newline(void) {
+    /* Keep output written by earlier print calls ahead of this diagnostic. */
+    fflush(stdout);
+    fputc('\n', stderr);
+    fflush(stderr);
+}
