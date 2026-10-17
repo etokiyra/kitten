@@ -148,10 +148,13 @@ the differential harness compiles, runs under GCC and Clang, and compares agains
 reference program's output. Phase 4D.8 added member access and qualified variant
 references, struct and variant literals, array and map creation, and indexing under
 `selfhost/codegen/expressions.ktn`, so a program that constructs and inspects values
-is now emitted byte for byte, and four of the nine fixtures under `tests/` compile,
-run, and match their expected output through the Kitten backend, with the remaining
-five reporting the assignment expression as their only unimplemented kind. A module
-loader and the assignment expression are still to come.
+is now emitted byte for byte. Phase 4D.9 added the assignment expression, the last
+unimplemented expression kind: plain assignment to every l-value form, map-entry
+insertion, compound `+=` and `-=`, `++`/`--`, and string append, with the string and
+map runtime helpers named in `names.ktn`. Every expression kind is now emitted, all
+nine top-level fixtures under `tests/` compile, run, and match their expected output
+through the Kitten backend under GCC and Clang, and the only remaining self-hosted
+generator frontier is a Kitten-written module loader.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, and generator,
@@ -189,8 +192,10 @@ authorization.
    unit assembly, checked against the reference's whole output; Phase 4D.7 added
    function calls and built-ins, with generated programs compiled, run, and compared
    against the reference's; Phase 4D.8 added member access, qualified variant
-   references, struct and variant literals, array and map creation, and indexing,
-   with four of the nine fixtures now compiled and run through the Kitten backend).
+   references, struct and variant literals, array and map creation, and indexing;
+   Phase 4D.9 added assignment, map-entry insertion, compound assignment,
+   increment/decrement, and string append, so every expression kind is emitted and
+   all nine top-level fixtures now compile and run through the Kitten backend).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

@@ -4,11 +4,10 @@
 // (codegen/emit.go): integer, floating-point, and boolean literals, string
 // literals, identifiers, unary expressions, binary expressions, function calls,
 // member access and qualified variant references, struct and variant literals,
-// array and map creation, and indexing. It mirrors the reference exactly,
-// including the parentheses the reference adds around every unary and binary
-// operation, so that its output is byte for byte the reference's for the same
-// expression. Assignment is the one expression kind it still reports as not
-// implemented.
+// array and map creation, indexing, and assignment. It mirrors the reference
+// exactly, including the parentheses the reference adds around every unary and
+// binary operation, so that its output is byte for byte the reference's for the
+// same expression.
 //
 // An expression is a fragment, not a line: it is built as a string that a caller
 // places inside a declaration or a larger expression. It therefore does not go
@@ -20,8 +19,7 @@
 // operations, and nothing else is looked up. An identifier needs no lookup
 // because the checker rejects a name that is not a local variable or parameter in
 // expression position, so the reference mangles every identifier as a variable
-// and so does this emitter. An expression kind outside the supported subset is
-// reported as not implemented rather than rendered as something plausible.
+// and so does this emitter.
 
 import "../checker/model.ktn";
 import "../checker/state.ktn";
@@ -101,22 +99,11 @@ public fn expression_kind_name(Expr expression) -> string {
     }
 }
 
-// not_implemented reports an expression kind this emitter does not render yet. It
-// is never a default: each unsupported kind names itself, so a caller cannot
-// mistake a missing implementation for a rendered expression.
-fn not_implemented(Expr expression) -> ExpressionResult {
-    Position at = expr_position(expression);
-    return ExpressionResult.Failed {
-        error = generate_error(at.line, at.column, expression_kind_name(expression) + " expressions are not implemented yet")
-    };
-}
-
 // emit_expression renders one expression as a C expression.
 //
-// Every kind is rendered except an assignment, which is reported as not
-// implemented rather than rendered as something plausible. A string literal is
-// pooled rather than emitted as a C string of its own: its bytes are escaped once,
-// an equal literal shares the object, and the reference is the object's address.
+// Every kind is rendered. A string literal is pooled rather than emitted as a C
+// string of its own: its bytes are escaped once, an equal literal shares the
+// object, and the reference is the object's address.
 public fn emit_expression(ExpressionContext context, Expr expression) -> ExpressionResult {
     match (expression) {
         Integer(node_id, token) {
@@ -148,7 +135,9 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
         String(node_id, token) {
             return string_literal(context, token);
         }
-        Assign(node_id, operator, target, value) { return not_implemented(expression); }
+        Assign(node_id, operator, target, value) {
+            return assign_expression(context, operator, target, value);
+        }
         Call(node_id, open_paren, callee, arguments, argument_count) {
             return call_expression(context, callee, arguments, argument_count);
         }
@@ -193,6 +182,179 @@ fn string_literal(ExpressionContext context, Token token) -> ExpressionResult {
             };
         }
     }
+}
+
+// --- Assignment --------------------------------------------------------------
+
+// IndexTarget is an index expression's target and index.
+struct IndexTarget {
+    Expr target;
+    Expr index;
+}
+
+// IndexTargetParts is an index expression's target and index. Assignment uses it
+// to recognize the one target form whose plain assignment is a map insertion,
+// without matching every expression kind at the call site.
+union IndexTargetParts {
+    Absent
+    Present { IndexTarget parts; }
+}
+
+// index_target_parts returns an index expression's target and index, or Absent
+// when the expression is not an index.
+fn index_target_parts(Expr expression) -> IndexTargetParts {
+    match (expression) {
+        Index(node_id, bracket, target, index) {
+            return IndexTargetParts.Present {
+                parts = IndexTarget { target = target, index = index }
+            };
+        }
+        Integer(node_id, token) { return IndexTargetParts.Absent; }
+        Float(node_id, token) { return IndexTargetParts.Absent; }
+        Boolean(node_id, token, value) { return IndexTargetParts.Absent; }
+        String(node_id, token) { return IndexTargetParts.Absent; }
+        Identifier(node_id, token) { return IndexTargetParts.Absent; }
+        Unary(node_id, operator, operand, postfix) { return IndexTargetParts.Absent; }
+        Binary(node_id, operator, left, right) { return IndexTargetParts.Absent; }
+        Assign(node_id, operator, target, value) { return IndexTargetParts.Absent; }
+        Call(node_id, open_paren, callee, arguments, argument_count) { return IndexTargetParts.Absent; }
+        Member(node_id, dot, receiver, member) { return IndexTargetParts.Absent; }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { return IndexTargetParts.Absent; }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { return IndexTargetParts.Absent; }
+        NewArray(node_id, at, element, length) { return IndexTargetParts.Absent; }
+        NewMap(node_id, at, map_type) { return IndexTargetParts.Absent; }
+    }
+}
+
+// MapAssignment is a plain map-entry assignment, or the report that the target is
+// not a map index and the ordinary assignment path applies.
+union MapAssignment {
+    NotMap
+    Handled { ExpressionResult result; }
+}
+
+// map_entry_assignment renders a plain assignment whose target is a map entry as
+// the runtime insertion that creates or updates it. It must not go through the
+// reading accessor, which fails when the key is absent.
+//
+// The map, key, and value are rendered in that order, after the value type and C
+// type are read, exactly as the reference orders them. The runtime copies the
+// value bytes, so the value is passed by address through a compound literal.
+fn map_entry_assignment(ExpressionContext context, Token operator, Expr target, Expr value) -> MapAssignment {
+    match (index_target_parts(target)) {
+        Absent {
+            return MapAssignment.NotMap;
+        }
+        Present(parts) {
+            ModuleModel module = module_model(context.model, context.module_index);
+            match (expression_info(module, expr_node_id(parts.target)).type) {
+                Absent {
+                    return MapAssignment.Handled {
+                        result = missing_expression_type(parts.target)
+                    };
+                }
+                Present(map_type) {
+                    if (!is_map(map_type)) {
+                        return MapAssignment.NotMap;
+                    }
+                    match (c_type(value_of(map_type))) {
+                        Failed(message) {
+                            Position at = position_of_token(operator);
+                            return MapAssignment.Handled {
+                                result = ExpressionResult.Failed {
+                                    error = generate_error(at.line, at.column, message)
+                                }
+                            };
+                        }
+                        Ok(value_text) {
+                            match (emit_expression(context, parts.target)) {
+                                Failed(error) {
+                                    return MapAssignment.Handled {
+                                        result = ExpressionResult.Failed { error = error }
+                                    };
+                                }
+                                Ok(map_text) {
+                                    match (emit_expression(context, parts.index)) {
+                                        Failed(error) {
+                                            return MapAssignment.Handled {
+                                                result = ExpressionResult.Failed { error = error }
+                                            };
+                                        }
+                                        Ok(key_text) {
+                                            match (emit_expression(context, value)) {
+                                                Failed(error) {
+                                                    return MapAssignment.Handled {
+                                                        result = ExpressionResult.Failed { error = error }
+                                                    };
+                                                }
+                                                Ok(value_expression) {
+                                                    return MapAssignment.Handled {
+                                                        result = ExpressionResult.Ok {
+                                                            text = map_set_function() + "(" + map_text + ", " + key_text + ", &(" + value_text + "){ " + value_expression + " })"
+                                                        }
+                                                    };
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// assign_expression renders an assignment. Kitten and C agree on "=", "+=", and
+// "-=", and both yield the assigned value.
+//
+// A plain assignment to a map entry inserts or updates it and is handled by the
+// map-specific path above. String "+=" has no C equivalent, so it is lowered to a
+// runtime append that receives the address of the target slot. Taking the address
+// evaluates the target once, so an index target such as "a[i] += value" evaluates
+// i once. Every other assignment keeps the reference's parenthesized C shape.
+fn assign_expression(ExpressionContext context, Token operator, Expr target, Expr value) -> ExpressionResult {
+    if (operator.text == "=") {
+        match (map_entry_assignment(context, operator, target, value)) {
+            Handled(result) {
+                return result;
+            }
+            NotMap { }
+        }
+    }
+
+    ExpressionResult rendered_target = emit_expression(context, target);
+    if (!expression_ok(rendered_target)) {
+        return rendered_target;
+    }
+    ExpressionResult rendered_value = emit_expression(context, value);
+    if (!expression_ok(rendered_value)) {
+        return rendered_value;
+    }
+    string target_text = expression_text(rendered_target);
+    string value_text_rendered = expression_text(rendered_value);
+
+    if (operator.text == "+=") {
+        ModuleModel module = module_model(context.model, context.module_index);
+        match (expression_info(module, expr_node_id(target)).type) {
+            Absent {
+                return missing_expression_type(target);
+            }
+            Present(target_type) {
+                if (target_type.kind == TypeKind.String) {
+                    return ExpressionResult.Ok {
+                        text = string_append_function() + "(&(" + target_text + "), " + value_text_rendered + ")"
+                    };
+                }
+            }
+        }
+    }
+
+    return ExpressionResult.Ok {
+        text = "(" + target_text + " " + operator.text + " " + value_text_rendered + ")"
+    };
 }
 
 // --- Member access and variant references ------------------------------------

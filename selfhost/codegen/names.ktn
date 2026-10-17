@@ -53,10 +53,12 @@ public fn init_function() -> string { return "ktn_rt_init"; }
 // string_concat_function and string_equal_function are the runtime helpers a
 // string "+", "==", or "!=" becomes. A Kitten string is a length-carrying
 // pointer, so "+" is a concatenation and "==" compares content rather than
-// pointers; both need the runtime. The remaining runtime names arrive with the
-// expressions that call them.
+// pointers; both need the runtime. string_append_function appends to the string
+// stored at the address a string "+=" target names, so the target is evaluated
+// once.
 public fn string_concat_function() -> string { return "ktn_rt_string_concat"; }
 public fn string_equal_function() -> string { return "ktn_rt_string_equal"; }
+public fn string_append_function() -> string { return "ktn_rt_string_append"; }
 
 // fail_function is the runtime helper that reports a fatal runtime error and
 // terminates. Generated match statements call it for a tag no arm covers, which
@@ -90,13 +92,15 @@ public fn read_file_function() -> string { return "ktn_rt_read_file"; }
 
 // string_at_function reads one byte of a string, array_new_function and
 // array_at_function create an array and access one bounds-checked element, and
-// map_new_function and map_at_function create a map and access one value. They are
-// the runtime helpers the indexing and creation expressions become; each name is
-// the one the runtime package exports.
+// map_new_function, map_set_function, and map_at_function create a map, insert or
+// update an entry, and access one value. They are the runtime helpers the indexing,
+// creation, and assignment expressions become; each name is the one the runtime
+// package exports.
 public fn string_at_function() -> string { return "ktn_rt_string_at"; }
 public fn array_new_function() -> string { return "ktn_rt_array_new"; }
 public fn array_at_function() -> string { return "ktn_rt_array_at"; }
 public fn map_new_function() -> string { return "ktn_rt_map_new"; }
+public fn map_set_function() -> string { return "ktn_rt_map_set"; }
 public fn map_at_function() -> string { return "ktn_rt_map_at"; }
 
 // module_prefix returns the C name prefix for a module. The root module (id 0)

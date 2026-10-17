@@ -14,12 +14,10 @@ package main
 // same shape, including the file the failure belongs to, which only the entry point
 // rule sets. Those cases are counted separately from the whole-file comparisons.
 //
-// The supported subset cannot produce observable output yet - print, calls, and
-// assignments are not implemented - so the execution test below compares what is
-// genuinely observable: both units compile under both compilers, link, run, and
-// exit with status 0 and no output, and the statements the generated main runs -
-// a loop and a string concatenation, which goes through the collector - complete
-// without a runtime failure. It claims nothing about printed values.
+// The execution test below compiles both units under both compilers, links them
+// against the runtime, runs them, and compares their printed output with what the
+// source implies. One case also checks that a compound assignment to an element
+// whose index is a call evaluates that call once.
 
 import (
 	"bytes"
@@ -377,7 +375,7 @@ fn helper() -> int {
 }
 `,
 	}, {
-		description: "an unsupported expression in a return",
+		description: "a call expression in a return",
 		root: `fn helper() -> int {
     return 1;
 }
@@ -388,7 +386,7 @@ fn main() {
 }
 `,
 	}, {
-		description: "an unsupported expression in a match arm",
+		description: "a call expression in a match arm",
 		root: `enum Kind { A }
 fn describe(Kind kind) -> int {
     match (kind) {
@@ -423,6 +421,79 @@ fn main() {
 fn main() {
     Point point = Point { x = 1 };
     point.x = 2;
+}
+`,
+	}, {
+		description: "assignments in sub-expressions and conditions",
+		root: `fn main() {
+    int first = 0;
+    int second = 0;
+    print(first = second = 3);
+    print(first + second);
+    bool more = true;
+    int step = 0;
+    while (more = step < 3) {
+        step++;
+    }
+    print(step);
+}
+`,
+	}, {
+		description: "compound assignment on fields and elements",
+		root: `struct Measures {
+    int count;
+    float scale;
+}
+fn main() {
+    int number = 10;
+    number += 5;
+    number -= 3;
+    float ratio = 1.5;
+    ratio += 0.5;
+    ratio -= 0.25;
+    Measures measures = Measures { count = 1, scale = 1.0 };
+    measures.count += 2;
+    measures.scale -= 0.25;
+    int[] numbers = new int[2];
+    numbers[0] = 1;
+    numbers[0] += 4;
+    numbers[0] -= 2;
+    float[] ratios = new float[2];
+    ratios[1] = 1.0;
+    ratios[1] += 0.5;
+    ratios[1] -= 0.25;
+}
+`,
+	}, {
+		description: "map entry assignment and string append",
+		root: `struct Point {
+    int x;
+}
+union Value {
+    Number { int amount; }
+    Empty
+}
+fn amount(Value value) -> int {
+    match (value) {
+        Number(number) { return number; }
+        Empty { return 0; }
+    }
+}
+fn main() {
+    map[string]int counts = new map[string]int;
+    counts["a"] = 1;
+    counts["a"] += 2;
+    map[string]string names = new map[string]string;
+    names["greeting"] = "hello";
+    names["greeting"] += " world";
+    map[string]Point points = new map[string]Point;
+    points["p"] = Point { x = 1 };
+    map[string]Value values = new map[string]Value;
+    values["v"] = Value.Empty;
+    values["v"] = Value.Number { amount = 3 };
+    string text = "a";
+    text += "b";
+    print(counts["a"], names["greeting"], points["p"].x, amount(values["v"]), text);
 }
 `,
 	}, {
@@ -516,7 +587,6 @@ func TestKittenUnitMatchesReference(t *testing.T) {
 	units := 0
 	unitLines := 0
 	rejected := 0
-	unsupported := 0
 	for _, testCase := range unitCases() {
 		modules, checked, generated, ok := prepareUnit(t, testCase.description, testCase.root, testCase.imported)
 		if !ok {
@@ -529,10 +599,8 @@ func TestKittenUnitMatchesReference(t *testing.T) {
 		}
 
 		// What the reference does with the program decides what is compared. A
-		// program the reference itself rejects is compared through its error. A
-		// program the reference generates but this emitter does not - because a body
-		// needs an expression kind it does not implement - must report that kind and
-		// is not counted as a unit comparison. Otherwise the whole unit is compared.
+		// program the reference itself rejects is compared through its error.
+		// Otherwise the whole unit is compared.
 		_, generationError := codegen.Generate(modules, checked)
 		if testCase.rejected != "" {
 			if generationError == nil {
@@ -561,11 +629,7 @@ func TestKittenUnitMatchesReference(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(got, "error ") {
-			if !strings.Contains(got, "not implemented yet") {
-				t.Errorf("%s: the program failed for a reason that is not an unimplemented expression kind:\n%s", testCase.description, got)
-				continue
-			}
-			unsupported++
+			t.Errorf("%s: the probe failed to generate a unit:\n%s", testCase.description, got)
 			continue
 		}
 		if difference := unitDifference(got, generated); difference != "" {
@@ -576,13 +640,13 @@ func TestKittenUnitMatchesReference(t *testing.T) {
 		unitLines += strings.Count(generated, "\n")
 	}
 
-	if units+rejected+unsupported != len(unitCases()) {
-		t.Fatalf("%d units, %d rejections, and %d unsupported for %d targeted programs", units, rejected, unsupported, len(unitCases()))
+	if units+rejected != len(unitCases()) {
+		t.Fatalf("%d units and %d rejections for %d targeted programs", units, rejected, len(unitCases()))
 	}
-	if units < 10 || rejected < 3 || unsupported < 3 {
-		t.Fatalf("the targeted corpus is not covered: %d units, %d rejections, %d unsupported", units, rejected, unsupported)
+	if units < 20 || rejected < 3 {
+		t.Fatalf("the targeted corpus is not covered: %d units, %d rejections", units, rejected)
 	}
-	t.Logf("translation units: %d whole units identical over %d lines, %d programs rejected identically, %d reported as needing an unimplemented kind", units, unitLines, rejected, unsupported)
+	t.Logf("translation units: %d whole units identical over %d lines, %d programs rejected identically", units, unitLines, rejected)
 }
 
 // prepareUnit prepares, checks, and generates a program with the reference, or
@@ -608,9 +672,9 @@ func prepareUnit(t *testing.T, description, root, imported string) ([]*parser.Mo
 
 // TestKittenUnitCorpus compares whole translation units over the checker corpus.
 // Every program the checker rejects must be reported with the checker's own error;
-// every program with an invalid entry point or an unimplemented expression must be
-// reported with the reference's failure for the same reason; and every other
-// program's unit must match the reference byte for byte.
+// every program with an invalid entry point must be reported with the reference's
+// failure for the same reason; and every other program's unit must match the
+// reference byte for byte.
 func TestKittenUnitCorpus(t *testing.T) {
 	requireToolchain(t)
 
@@ -620,7 +684,6 @@ func TestKittenUnitCorpus(t *testing.T) {
 	units := 0
 	unitLines := 0
 	entryPointFailures := 0
-	unsupported := 0
 	checkErrors := 0
 	skipped := 0
 
@@ -688,13 +751,7 @@ func TestKittenUnitCorpus(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(got, "error ") {
-			// The reference generates the program, so a failure from this emitter
-			// can only be an expression kind it does not implement.
-			if !strings.Contains(got, "not implemented yet") {
-				t.Errorf("%s: the program failed for a reason that is not an unimplemented expression kind:\n%s", testCase.name, got)
-				continue
-			}
-			unsupported++
+			t.Errorf("%s: the probe failed to generate a unit:\n%s", testCase.name, got)
 			continue
 		}
 		if difference := unitDifference(got, generated); difference != "" {
@@ -705,20 +762,16 @@ func TestKittenUnitCorpus(t *testing.T) {
 		unitLines += strings.Count(generated, "\n")
 	}
 
-	total := units + entryPointFailures + unsupported + checkErrors + skipped
+	total := units + entryPointFailures + checkErrors + skipped
 	if total < 1800 {
 		t.Fatalf("the corpus looks too small: %d inputs", total)
 	}
-	// With six more expression kinds implemented, more corpus programs produce a
-	// whole unit and fewer report an unimplemented kind. The floor on their total
-	// preserves the old coverage, and the floor on the unsupported count keeps the
-	// unimplemented-kind path - now assignment only - exercised.
-	if units < 5 || unitLines < 50 || entryPointFailures < 20 || unsupported < 1 || units+unsupported < 30 || checkErrors < 1000 {
-		t.Fatalf("the corpus is not covered: %d units over %d lines, %d entry point failures, %d unsupported, %d check errors, %d skipped, of %d inputs",
-			units, unitLines, entryPointFailures, unsupported, checkErrors, skipped, total)
+	if units < 30 || unitLines < 300 || entryPointFailures < 20 || checkErrors < 1000 {
+		t.Fatalf("the corpus is not covered: %d units over %d lines, %d entry point failures, %d check errors, %d skipped, of %d inputs",
+			units, unitLines, entryPointFailures, checkErrors, skipped, total)
 	}
-	t.Logf("translation unit corpus: %d inputs, %d whole units identical over %d lines, %d entry point failures identical, %d unsupported expressions, %d check errors identical, %d skipped",
-		total, units, unitLines, entryPointFailures, unsupported, checkErrors, skipped)
+	t.Logf("translation unit corpus: %d inputs, %d whole units identical over %d lines, %d entry point failures identical, %d check errors identical, %d skipped",
+		total, units, unitLines, entryPointFailures, checkErrors, skipped)
 }
 
 // entryPointError renders the reference's entry point failure for a program whose
@@ -807,6 +860,7 @@ fn main() {
 type runnableUnitCase struct {
 	description string
 	root        string
+	expected    string
 }
 
 func runnableUnitCases() []runnableUnitCase {
@@ -846,6 +900,33 @@ fn main() {
     index++;
 }
 `,
+	}, {
+		description: "assignments evaluate each target once and yield their values",
+		root: `fn index_of(int[] counter) -> int {
+    counter[0] += 1;
+    return counter[0] - 1;
+}
+fn main() {
+    int[] numbers = new int[2];
+    numbers[0] = 10;
+    numbers[0] += 5;
+    print(numbers[0]);
+    string[] words = new string[2];
+    words[0] = "a";
+    words[0] += "b";
+    print(words[0]);
+    int[] counter = new int[1];
+    int[] slots = new int[2];
+    slots[0] = 1;
+    slots[index_of(counter)] += 4;
+    print(counter[0], slots[0]);
+    map[string]int counts = new map[string]int;
+    counts["k"] = 1;
+    counts["k"] += 2;
+    print(counts["k"]);
+}
+`,
+		expected: "15\nab\n1 5\n3\n",
 	}}
 }
 
@@ -856,14 +937,10 @@ fn main() {
 // Both units are generated independently - one by the reference generator and one by
 // the Kitten-written one - and are required to be identical before either is
 // compiled, so the comparison is of two generated units rather than of one text
-// compiled twice. The supported subset cannot produce output: print, calls, and
-// assignments are not implemented, so stdout is empty for both. What this checks is
-// therefore which the task requires and what is genuinely available: both units
-// compile with the project's flags, link against the runtime, run, exit with status
-// 0, write nothing to either stream, and complete the statements their main runs -
-// including a string concatenation, which allocates through the collector - without
-// a runtime failure. It does not compare printed values, because the subset cannot
-// print.
+// compiled twice. Both units compile with the project's flags, link against the
+// runtime, run, exit with status 0, write nothing to stderr, and print exactly what
+// the source implies. The assignment case also checks that a compound assignment to
+// an element whose index is a call evaluates that call once.
 func TestKittenUnitCompileAndRun(t *testing.T) {
 	requireToolchain(t)
 
@@ -916,8 +993,8 @@ func TestKittenUnitCompileAndRun(t *testing.T) {
 				t.Errorf("%s: %v", testCase.description, err)
 				break
 			}
-			if result.stdout != "" || result.stderr != "" || result.status != 0 {
-				t.Errorf("%s: unit %d wrote %q and %q and exited %d", testCase.description, index, result.stdout, result.stderr, result.status)
+			if result.stdout != testCase.expected || result.stderr != "" || result.status != 0 {
+				t.Errorf("%s: unit %d printed %q (want %q), wrote %q to stderr, and exited %d", testCase.description, index, result.stdout, testCase.expected, result.stderr, result.status)
 				break
 			}
 			outputs = append(outputs, result.stdout)
@@ -935,7 +1012,7 @@ func TestKittenUnitCompileAndRun(t *testing.T) {
 	if compiled != len(runnableUnitCases()) {
 		t.Fatalf("%d of %d runnable programs were compiled and run", compiled, len(runnableUnitCases()))
 	}
-	t.Logf("execution: %d complete units compiled, linked, and run under %s with no output and status 0", compiled, filepath.Base(compiler[0]))
+	t.Logf("execution: %d complete units compiled, linked, and run under %s, matching their expected output and status 0", compiled, filepath.Base(compiler[0]))
 }
 
 // prepareUnitExpectingSuccess prepares a program that the reference must generate.

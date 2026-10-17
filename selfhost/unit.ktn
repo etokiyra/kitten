@@ -9,9 +9,9 @@
 // harness can compare it with the reference generator's output for the same program
 // in one comparison.
 //
-// A program the entry point rule rejects, or one whose bodies need an expression
-// kind the expression emitter does not implement, prints a single "error ..." line
-// instead and no C.
+// A program the entry point rule rejects, or one whose bodies contain an
+// expression the emitter cannot render, prints a single "error ..." line instead
+// and no C.
 //
 // This is test infrastructure, not a compiler CLI: the output goes to standard
 // output, the driver writes no file, and it sets no process exit status, because the

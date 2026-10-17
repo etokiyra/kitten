@@ -215,13 +215,12 @@ func matchingParenthesis(line string, open int) int {
 
 // --- Expected probe output ---------------------------------------------------
 
-// unsupportedKinds lists the expression kinds this phase does not implement, in a
-// stable order, with the failure message the emitter must report for each. The
-// messages are this generator's own; the reference has no counterpart, because it
-// implements every kind. Assignment is the only kind left.
-var unsupportedKinds = []string{
-	"assign",
-}
+// unsupportedKinds lists the expression kinds this generator does not implement,
+// in a stable order, with the failure message the emitter must report for each.
+// Every kind is implemented now, so the list is empty; the harness keeps the
+// mechanism so that a future unimplemented kind cannot silently look like a
+// rendering.
+var unsupportedKinds = []string{}
 
 // unsupportedMessage is the failure the probe must report for a kind.
 func unsupportedMessage(kind string) string {
@@ -941,6 +940,190 @@ fn main() {
     }));
 }
 `,
+	}, {
+		description: "assignment to locals, fields, elements, and nested targets",
+		root: `struct Inner {
+    int value;
+}
+struct Outer {
+    Inner inner;
+}
+struct Point {
+    int x;
+    int y;
+}
+struct Row {
+    Point[] cells;
+}
+fn main() {
+    int a = 1;
+    int b = 2;
+    print(a = 3);
+    print(b = a = 4);
+    print(a + b);
+    Outer outer = Outer { inner = Inner { value = 0 } };
+    print(outer.inner.value = 5);
+    print(outer.inner.value);
+    Point point = Point { x = 0, y = 0 };
+    print(point.x = 6);
+    print(point.y = point.x + 1);
+    int[] values = new int[3];
+    print(values[0] = 7);
+    print(values[1] = values[0] + 1);
+    values[2] = 9;
+    print(values[2]);
+    Row[] rows = new Row[1];
+    rows[0] = Row { cells = new Point[2] };
+    rows[0].cells[0] = Point { x = 10, y = 11 };
+    print(rows[0].cells[0].x = 12);
+    print(rows[0].cells[0].y);
+    print(rows[0].cells[0].x);
+}
+`,
+	}, {
+		description: "compound assignment on locals, fields, and elements",
+		root: `struct Measures {
+    int count;
+    float scale;
+}
+fn main() {
+    int number = 10;
+    print(number += 5);
+    print(number -= 3);
+    float ratio = 1.5;
+    print(ratio += 0.5);
+    print(ratio -= 0.25);
+    Measures measures = Measures { count = 1, scale = 1.0 };
+    print(measures.count += 2);
+    print(measures.count -= 1);
+    print(measures.scale += 0.5);
+    print(measures.scale -= 0.25);
+    int[] numbers = new int[2];
+    numbers[0] = 1;
+    print(numbers[0] += 4);
+    print(numbers[0] -= 2);
+    float[] ratios = new float[2];
+    ratios[1] = 1.0;
+    print(ratios[1] += 0.5);
+    print(ratios[1] -= 0.25);
+}
+`,
+	}, {
+		description: "increment and decrement in every position and target form",
+		root: `struct Counter {
+    int value;
+    float scale;
+}
+fn main() {
+    int number = 0;
+    print(++number);
+    print(--number);
+    print(number++);
+    print(number--);
+    float ratio = 0.5;
+    print(++ratio);
+    print(--ratio);
+    print(ratio++);
+    print(ratio--);
+    Counter counter = Counter { value = 0, scale = 0.5 };
+    print(++counter.value);
+    print(counter.value++);
+    print(--counter.value);
+    print(counter.value--);
+    print(++counter.scale);
+    print(counter.scale++);
+    print(--counter.scale);
+    print(counter.scale--);
+    int[] numbers = new int[2];
+    numbers[0] = 0;
+    print(++numbers[0]);
+    print(numbers[0]++);
+    print(--numbers[0]);
+    print(numbers[0]--);
+    float[] scales = new float[2];
+    scales[1] = 0.5;
+    print(++scales[1]);
+    print(scales[1]++);
+    print(--scales[1]);
+    print(scales[1]--);
+}
+`,
+	}, {
+		description: "string append to a local, a field, and an element",
+		root: `struct Tag {
+    string label;
+}
+fn main() {
+    string text = "a";
+    print(text += "b");
+    Tag tag = Tag { label = "c" };
+    print(tag.label += "d");
+    string[] parts = new string[2];
+    parts[0] = "e";
+    print(parts[0] += "f");
+    print(text);
+    print(tag.label);
+    print(parts[0]);
+}
+`,
+	}, {
+		description: "map entry assignment for every value shape",
+		root: `struct Point {
+    int x;
+}
+union Value {
+    Number { int amount; }
+    Empty
+}
+fn point_x(Point point) -> int {
+    return point.x;
+}
+fn amount(Value value) -> int {
+    match (value) {
+        Number(number) { return number; }
+        Empty { return 0; }
+    }
+}
+fn main() {
+    map[string]int counts = new map[string]int;
+    print(counts["a"] = 1);
+    print(counts["a"] = 2);
+    counts["b"] = 3;
+    print(counts["b"] += 4);
+    map[string]string names = new map[string]string;
+    print(names["greeting"] = "hello");
+    print(names["greeting"] += " world");
+    map[string]Point points = new map[string]Point;
+    points["p"] = Point { x = 1 };
+    print(point_x(points["p"] = Point { x = 2 }));
+    map[string]Value values = new map[string]Value;
+    values["v"] = Value.Empty;
+    print(amount(values["v"] = Value.Number { amount = 3 }));
+}
+`,
+	}, {
+		description: "assignment as a sub-expression and in conditions",
+		root: `fn main() {
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    print(a = b = c = 7);
+    print(a + b + c);
+    print((a = a + 1));
+    print(a += b);
+    print(a -= b);
+    bool more = true;
+    int counter = 0;
+    while (more = counter < 3) {
+        counter++;
+    }
+    print(counter);
+    bool flag = false;
+    if (flag = counter > 2) {
+        print(flag);
+    }
+}
+`,
 	}}
 }
 
@@ -996,7 +1179,7 @@ func TestKittenExpressionsEveryKind(t *testing.T) {
 			}
 		}
 	}
-	for _, kind := range []string{"member", "struct-literal", "variant-literal", "new-array", "new-map", "index"} {
+	for _, kind := range []string{"member", "struct-literal", "variant-literal", "new-array", "new-map", "index", "assign"} {
 		if !rendered[kind] {
 			t.Errorf("the %s kind was never rendered by the targeted corpus", kind)
 		}
@@ -1034,10 +1217,12 @@ func TestKittenExpressionsEveryOperator(t *testing.T) {
 	}
 }
 
-// --- Unsupported kinds -------------------------------------------------------
+// --- Every kind --------------------------------------------------------------
 
-// unsupportedSource exercises every kind this phase does not implement.
-func unsupportedSource() string {
+// allKindsSource exercises every expression kind, including assignment, in one
+// program. Every line the probe prints for it must be a rendering: no kind is
+// unimplemented now.
+func allKindsSource() string {
 	return `struct Point {
     int x;
 }
@@ -1083,85 +1268,43 @@ fn main() {
 `
 }
 
-// TestKittenExpressionsUnsupportedKinds checks that a kind this phase does not
-// implement is reported as not implemented, with the emitter's own kind and
-// message, rather than rendered as something plausible.
-func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
+// TestKittenExpressionsEveryKindRenders checks that a program using every kind
+// produces renderings only, with no failure at all, so an unimplemented kind
+// cannot hide behind another expression's report.
+func TestKittenExpressionsEveryKindRenders(t *testing.T) {
 	requireToolchain(t)
 
 	executable := buildKittenExpressions(t)
 	directory := t.TempDir()
 
-	got, err := runKittenExpressions(executable, directory, unsupportedSource(), "")
+	got, err := runKittenExpressions(executable, directory, allKindsSource(), "")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	expressions, pool := splitProbeOutput(t, got)
 
-	for _, kind := range unsupportedKinds {
-		message := unsupportedMessage(kind)
-		report := ""
-		for _, line := range probeLines(expressions) {
-			if strings.HasSuffix(line, message) {
-				report = line
-				break
-			}
-		}
-		if report == "" {
-			t.Errorf("the %s kind was not reported as not implemented:\n%s", kind, expressions)
-			continue
-		}
-		fields := strings.Fields(report)
-		if len(fields) < 5 || fields[0] != "fail" {
-			t.Errorf("the %s kind was reported as %q, want a fail report", kind, report)
-		}
-	}
-
-	// Every other line must be a kind that is implemented, rendered or not, so a
-	// kind can never appear as a rendering. An implemented kind may still be
-	// reported as a failure, because it reports the failure of the expression it
-	// contains.
-	implemented := map[string]bool{"int": true, "float": true, "bool": true, "string": true, "ident": true, "unary": true, "binary": true, "call": true, "member": true, "struct-literal": true, "variant-literal": true, "new-array": true, "new-map": true, "index": true}
-	rendered := 0
-	propagated := 0
+	renderedKinds := make(map[string]bool)
 	for _, line := range probeLines(expressions) {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			t.Errorf("malformed probe line: %q", line)
 			continue
 		}
-		if fields[0] != "expr" && fields[0] != "fail" {
+		if fields[0] != "expr" {
+			t.Errorf("an expression kind failed: %q", line)
 			continue
 		}
-		kind := fields[3]
-		if !implemented[kind] {
-			if fields[0] != "fail" {
-				t.Errorf("the unsupported kind %s was rendered: %q", kind, line)
-			}
-			continue
-		}
-		if fields[0] == "expr" {
-			if strings.HasSuffix(line, "not implemented yet") {
-				t.Errorf("a rendering carried the not-implemented message: %q", line)
-			}
-			rendered++
-			continue
-		}
-		if !strings.HasSuffix(line, "not implemented yet") {
-			t.Errorf("an implemented kind failed for a reason that is not an unimplemented kind: %q", line)
-			continue
-		}
-		propagated++
-	}
-	if rendered < 6 {
-		t.Errorf("only %d supported expressions were rendered", rendered)
-	}
-	if propagated == 0 {
-		t.Errorf("no supported expression reported a failure from the expression it contains")
+		renderedKinds[fields[3]] = true
 	}
 
-	// A string literal is implemented now: it renders as a reference to its pooled
-	// object, and the program's literal is interned.
+	for _, kind := range []string{"assign", "member", "struct-literal", "variant-literal", "new-array", "new-map", "index", "call"} {
+		if !renderedKinds[kind] {
+			t.Errorf("the %s kind was not rendered by the all-kinds program", kind)
+		}
+	}
+
+	// A string literal renders as a reference to its pooled object, and the
+	// program's literal is interned.
 	if !strings.Contains(expressions, "string (&ktn_literal_1)") {
 		t.Errorf("the string literal was not rendered as a pooled reference:\n%s", expressions)
 	}
@@ -1170,14 +1313,14 @@ func TestKittenExpressionsUnsupportedKinds(t *testing.T) {
 	}
 }
 
-// TestKittenExpressionsUnsupportedAgreesWithTheReference checks that the same
-// program is generated and checked by the reference without complaint, so that
-// "not implemented" is this generator's limit and not the language's.
-func TestKittenExpressionsUnsupportedAgreesWithTheReference(t *testing.T) {
+// TestKittenExpressionsAllKindsAgreeWithTheReference checks that the all-kinds
+// program is generated and checked by the reference without complaint, so a
+// failure would be this generator's rather than the language's.
+func TestKittenExpressionsAllKindsAgreeWithTheReference(t *testing.T) {
 	requireToolchain(t)
 
-	if _, _, _, ok := checkProgram(t, "unsupported kinds", unsupportedSource(), ""); !ok {
-		t.Fatalf("the reference rejected the program that exercises the unsupported kinds")
+	if _, _, _, ok := checkProgram(t, "all kinds", allKindsSource(), ""); !ok {
+		t.Fatalf("the reference rejected the program that exercises every kind")
 	}
 }
 

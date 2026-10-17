@@ -15,7 +15,8 @@ package main
 //
 // The nine top-level fixtures are single file. The modules/ fixture is a
 // module-loader case and is not part of this list, because the Kitten backend has
-// no module loader yet.
+// no module loader yet. Every top-level fixture is generated, compiled, and run;
+// there is no unimplemented expression kind left to block one.
 
 import (
 	"os"
@@ -48,7 +49,6 @@ func TestKittenFixturesThroughKittenBackend(t *testing.T) {
 	compileFlags, linkFlags := gcBuildFlags()
 
 	generatedFixtures := 0
-	blockedFixtures := 0
 	for _, name := range fixtureNames() {
 		sourcePath := filepath.Join("..", "..", "tests", name+".ktn")
 		source, err := os.ReadFile(sourcePath)
@@ -66,15 +66,8 @@ func TestKittenFixturesThroughKittenBackend(t *testing.T) {
 			continue
 		}
 
-		// A fixture the Kitten backend does not generate must be blocked on exactly
-		// one thing: the assignment expression, which is the only expression kind it
-		// still reports as unimplemented. Any other failure is a real disagreement.
 		if strings.HasPrefix(got, "error ") {
-			if !strings.Contains(got, "assign expressions are not implemented yet") {
-				t.Errorf("%s: the fixture failed for a reason other than the unimplemented assign kind:\n%s", name, got)
-				continue
-			}
-			blockedFixtures++
+			t.Errorf("%s: the fixture failed to generate:\n%s", name, got)
 			continue
 		}
 
@@ -118,15 +111,9 @@ func TestKittenFixturesThroughKittenBackend(t *testing.T) {
 		generatedFixtures++
 	}
 
-	// This phase's measured outcome: four of the nine fixtures need only the
-	// expression kinds it adds. The assertion pins that outcome, and the loop above
-	// proves each of the other five is blocked only on assign.
-	if generatedFixtures != 4 {
-		t.Fatalf("%d of %d fixtures were generated and run, want 4", generatedFixtures, len(fixtureNames()))
+	if generatedFixtures != len(fixtureNames()) {
+		t.Fatalf("%d of %d fixtures were generated and run, want all %d", generatedFixtures, len(fixtureNames()), len(fixtureNames()))
 	}
-	if generatedFixtures+blockedFixtures != len(fixtureNames()) {
-		t.Fatalf("%d generated and %d blocked for %d fixtures", generatedFixtures, blockedFixtures, len(fixtureNames()))
-	}
-	t.Logf("fixtures: %d of %d compile, run, and match their expected output through the Kitten backend under %s; %d report assign as the only unimplemented kind",
-		generatedFixtures, len(fixtureNames()), filepath.Base(compiler[0]), blockedFixtures)
+	t.Logf("fixtures: %d of %d compile, run, and match their expected output through the Kitten backend under %s",
+		generatedFixtures, len(fixtureNames()), filepath.Base(compiler[0]))
 }

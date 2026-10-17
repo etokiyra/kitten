@@ -14,10 +14,10 @@
 //	=== literal pool ===
 //
 // and then the pooled string literal declarations those expressions produced, in
-// the reference's own text. A node the expression emitter does not implement is
+// the reference's own text. A node the expression emitter cannot render is
 // reported as "fail" with the emitter's message, so a caller can see the
-// difference between a rendering and a missing implementation. A failed
-// preparation, check, or parse prints a single "error ..." line instead.
+// difference between a rendering and a failure. A failed preparation, check, or
+// parse prints a single "error ..." line instead.
 //
 // The walk exists only to reach expressions: it emits no C for a statement and
 // implements no part of the statement emitter. It visits declarations in module

@@ -349,17 +349,18 @@ It is also the only way a self-hosting claim means anything.
 | Parser + AST | 262 inputs |
 | Checker + semantic model | 1,862 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 56 whole units, 1,859 lines |
-| Generated programs executed | 16 programs compiled and run under GCC and Clang, outputs compared |
+| Entry point and translation-unit assembly | 76 whole units, 2,907 lines |
+| Generated programs executed | 22 programs compiled and run under GCC and Clang, outputs compared |
 
 </details>
 
-**What it cannot compile yet, and why that is a short list.** One expression kind is
-still unimplemented in the Kitten-written generator — `assign` — plus a Kitten-written
-module loader. Each is an exact, known port of a Go function that already exists; none
-of them is an open design question. Of the nine fixtures in `tests/`, four compile
-end-to-end through the Kitten-written backend today, and the other five report
-precisely that they need `assign`.
+**What it cannot compile yet, and why that is a short list.** The Kitten-written
+generator now emits every expression kind the language has, including assignment, map
+entry insertion, compound assignment, increment/decrement, and string append. All nine
+fixtures in `tests/` compile end-to-end through the Kitten-written backend, match the
+reference generator's C byte for byte, and produce their expected output. The only
+missing generator-side piece is a Kitten-written module loader: it is an exact, known
+port of a Go loader that already exists, not an open design question.
 
 The Go compiler remains the bootstrap and the only pipeline the CLI uses. Kitten is
 **not** self-hosting yet, and this README will not say it is until a Kitten-built compiler

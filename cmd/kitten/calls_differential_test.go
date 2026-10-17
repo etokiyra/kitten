@@ -38,10 +38,6 @@ type callCase struct {
 	// rejected, when set, is a fragment the reference's failure message must
 	// contain: the program is compared through its error rather than as a unit.
 	rejected string
-
-	// unsupported, when set, is an expression kind the Kitten emitter must report
-	// while the reference generates the program.
-	unsupported string
 }
 
 func callCases() []callCase {
@@ -235,7 +231,7 @@ fn main() {
 }
 `,
 	}, {
-		description: "a call whose argument is unsupported",
+		description: "a call whose argument is an assignment to a local",
 		root: `struct Point {
     int x;
 }
@@ -247,7 +243,6 @@ fn main() {
     print(take(a = 2));
 }
 `,
-		unsupported: "assign",
 	}, {
 		description: "a call whose argument is an assignment to an index",
 		root: `fn take(int value) -> int {
@@ -258,7 +253,6 @@ fn main() {
     print(take(values[0] = 1));
 }
 `,
-		unsupported: "assign",
 	}, {
 		description: "a call whose argument is an assignment to a struct field",
 		root: `struct Point {
@@ -272,7 +266,6 @@ fn main() {
     print(take(point.x = 2));
 }
 `,
-		unsupported: "assign",
 	}, {
 		description: "a local struct literal",
 		root: `struct Point {
@@ -340,7 +333,6 @@ func TestKittenCallsMatchReference(t *testing.T) {
 	units := 0
 	unitLines := 0
 	rejected := 0
-	unsupported := 0
 	for _, testCase := range callCases() {
 		got, err := runKittenUnit(executable, directory, testCase.root, testCase.imported)
 		if err != nil {
@@ -377,19 +369,6 @@ func TestKittenCallsMatchReference(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if testCase.unsupported != "" {
-			want := testCase.unsupported + " expressions are not implemented yet"
-			if !strings.HasPrefix(got, "error Generate ") || !strings.Contains(got, want) {
-				t.Errorf("%s: expected a failure naming %q, got:\n%s", testCase.description, want, got)
-				continue
-			}
-			if strings.Contains(got, "int main(void)") {
-				t.Errorf("%s: a rejected program produced a unit:\n%s", testCase.description, got)
-				continue
-			}
-			unsupported++
-			continue
-		}
 		if generationError := generationErrorOf(modules, checked); generationError != nil {
 			t.Errorf("%s: the reference rejected the program: %v", testCase.description, generationError)
 			continue
@@ -402,14 +381,14 @@ func TestKittenCallsMatchReference(t *testing.T) {
 		unitLines += strings.Count(generated, "\n")
 	}
 
-	if units+rejected+unsupported != len(callCases()) {
-		t.Fatalf("%d units, %d rejections, and %d unsupported for %d programs", units, rejected, unsupported, len(callCases()))
+	if units+rejected != len(callCases()) {
+		t.Fatalf("%d units and %d rejections for %d programs", units, rejected, len(callCases()))
 	}
-	if units < 8 || rejected < 3 || unsupported < 3 {
-		t.Fatalf("the call corpus is not covered: %d units, %d rejections, %d unsupported", units, rejected, unsupported)
+	if units < 13 || rejected < 3 {
+		t.Fatalf("the call corpus is not covered: %d units, %d rejections", units, rejected)
 	}
-	t.Logf("calls: %d whole units identical over %d lines, %d programs rejected identically, %d reported as needing an unimplemented kind",
-		units, unitLines, rejected, unsupported)
+	t.Logf("calls: %d whole units identical over %d lines, %d programs rejected identically",
+		units, unitLines, rejected)
 }
 
 // checkErrorOf returns the reference checker's error for a program.

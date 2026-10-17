@@ -604,15 +604,10 @@ func countDefinitions(bodies string) int {
 
 // --- Corpus ------------------------------------------------------------------
 
-// unimplementedSuffix is how the expression emitter's failures end, so that a
-// failure can be attributed to an expression kind this phase does not implement.
-const unimplementedSuffix = "expressions are not implemented yet"
-
 // TestKittenFunctionsCorpus runs the probe over the checker corpus. Every program
-// the checker rejects must be reported with the checker's own error; every program
-// this emitter cannot render must be reported with a failure naming an
-// unimplemented expression kind; and every other program's pool and definitions
-// must match the reference byte for byte.
+// the checker rejects must be reported with the checker's own error; every valid
+// program whose bodies the reference can generate must have its pool and
+// definitions match the reference byte for byte.
 func TestKittenFunctionsCorpus(t *testing.T) {
 	requireToolchain(t)
 
@@ -622,7 +617,6 @@ func TestKittenFunctionsCorpus(t *testing.T) {
 	comparedPrograms := 0
 	comparedLines := 0
 	comparedFunctions := 0
-	unsupported := 0
 	checkErrors := 0
 	skipped := 0
 
@@ -670,11 +664,7 @@ func TestKittenFunctionsCorpus(t *testing.T) {
 			continue
 		}
 		if strings.HasPrefix(got, "error ") {
-			if !strings.Contains(got, unimplementedSuffix) {
-				t.Errorf("%s: a body failed for a reason that is not an unimplemented expression kind:\n%s", testCase.name, got)
-				continue
-			}
-			unsupported++
+			t.Errorf("%s: the probe failed to generate a body:\n%s", testCase.name, got)
 			continue
 		}
 
@@ -688,28 +678,25 @@ func TestKittenFunctionsCorpus(t *testing.T) {
 		comparedFunctions += countDefinitions(bodies)
 	}
 
-	total := comparedPrograms + unsupported + checkErrors + skipped
+	total := comparedPrograms + checkErrors + skipped
 	if total < 1800 {
 		t.Fatalf("the corpus looks too small: %d inputs", total)
 	}
-	// With six more expression kinds implemented, more corpus programs compare
-	// and fewer report an unimplemented kind. The floor on their total preserves
-	// the old coverage, and the floor on the unsupported count keeps the
-	// unimplemented-kind path - now assignment only - exercised.
-	if comparedPrograms < 5 || comparedLines < 40 || unsupported < 1 || comparedPrograms+unsupported < 30 || checkErrors < 1000 {
-		t.Fatalf("the corpus is not covered: %d compared programs over %d lines and %d functions, %d unsupported, %d check errors, %d skipped, of %d inputs",
-			comparedPrograms, comparedLines, comparedFunctions, unsupported, checkErrors, skipped, total)
+	if comparedPrograms < 30 || comparedLines < 200 || comparedFunctions < 30 || checkErrors < 1000 {
+		t.Fatalf("the corpus is not covered: %d compared programs over %d lines and %d functions, %d check errors, %d skipped, of %d inputs",
+			comparedPrograms, comparedLines, comparedFunctions, checkErrors, skipped, total)
 	}
-	t.Logf("function corpus: %d inputs, %d programs identical over %d lines and %d functions, %d reported as needing an unimplemented kind, %d check errors identical, %d skipped",
-		total, comparedPrograms, comparedLines, comparedFunctions, unsupported, checkErrors, skipped)
+	t.Logf("function corpus: %d inputs, %d programs identical over %d lines and %d functions, %d check errors identical, %d skipped",
+		total, comparedPrograms, comparedLines, comparedFunctions, checkErrors, skipped)
 }
 
-// --- Negative cases ----------------------------------------------------------
+// --- Assignment cases --------------------------------------------------------
 
-// TestKittenFunctionsRejectUnsupportedExpressions checks that a statement whose
-// expression this phase cannot render is reported with that expression kind's
-// failure, at the expression, rather than producing a body with a hole in it.
-func TestKittenFunctionsRejectUnsupportedExpressions(t *testing.T) {
+// TestKittenFunctionsAssignmentsMatchReference renders assignments in every
+// statement position and compares the whole pool and body region with the
+// reference's. A body that contains an assignment is no longer rejected: it is
+// emitted and compared like every other body.
+func TestKittenFunctionsAssignmentsMatchReference(t *testing.T) {
 	requireToolchain(t)
 
 	executable := buildKittenFunctions(t)
@@ -718,27 +705,29 @@ func TestKittenFunctionsRejectUnsupportedExpressions(t *testing.T) {
 	cases := []struct {
 		description string
 		root        string
-		wantKind    string
 	}{
-		{"assignment in a statement", "fn main() {\n    int a = 1;\n    a = 2;\n}\n", "assign"},
-		{"assignment to a struct field", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n    p.x = 2;\n}\n", "assign"},
-		{"assignment to an index element", "fn main() {\n    int[] values = new int[2];\n    values[0] = 1;\n}\n", "assign"},
-		{"compound assignment", "fn main() {\n    int a = 1;\n    a += 2;\n}\n", "assign"},
-		{"assignment in a while condition", "fn main() {\n    bool first = true;\n    bool second = false;\n    while (first = second) {\n    }\n}\n", "assign"},
-		{"assignment in a return", "fn value() -> int {\n    int a = 1;\n    return a = 2;\n}\nfn main() {\n}\n", "assign"},
-		{"assignment in a for initializer", "fn main() {\n    int a = 1;\n    for (a = 0; a < 2; a++) {\n    }\n}\n", "assign"},
-		{"assignment as a call argument", "fn take(int value) -> int {\n    return value;\n}\nfn main() {\n    int a = 1;\n    print(take(a = 2));\n}\n", "assign"},
-		{"assignment in a match arm", "enum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { int a = 1; a = 2; }\n    }\n    return 0;\n}\nfn main() {\n}\n", "assign"},
+		{"assignment in a statement", "fn main() {\n    int a = 1;\n    a = 2;\n}\n"},
+		{"assignment to a struct field", "struct P {\n    int x;\n}\nfn main() {\n    P p = P { x = 1 };\n    p.x = 2;\n}\n"},
+		{"assignment to an index element", "fn main() {\n    int[] values = new int[2];\n    values[0] = 1;\n}\n"},
+		{"compound assignment", "fn main() {\n    int a = 1;\n    a += 2;\n}\n"},
+		{"assignment in a while condition", "fn main() {\n    bool first = true;\n    bool second = false;\n    while (first = second) {\n    }\n}\n"},
+		{"assignment in a return", "fn value() -> int {\n    int a = 1;\n    return a = 2;\n}\nfn main() {\n}\n"},
+		{"assignment in a for initializer", "fn main() {\n    int a = 1;\n    for (a = 0; a < 2; a++) {\n    }\n}\n"},
+		{"assignment as a call argument", "fn take(int value) -> int {\n    return value;\n}\nfn main() {\n    int a = 1;\n    print(take(a = 2));\n}\n"},
+		{"assignment in a match arm", "enum K { A }\nfn f(K k) -> int {\n    match (k) {\n        A { int a = 1; a = 2; }\n    }\n    return 0;\n}\nfn main() {\n}\n"},
+		{"map entry assignment", "fn main() {\n    map[string]int counts = new map[string]int;\n    counts[\"a\"] = 1;\n    counts[\"a\"] += 2;\n    print(counts[\"a\"]);\n}\n"},
+		{"string append", "fn main() {\n    string text = \"a\";\n    text += \"b\";\n    print(text);\n}\n"},
 	}
 
+	programs := 0
+	lines := 0
 	for _, testCase := range cases {
-		modules, err := referenceModules(testCase.root, "")
-		if err != nil {
-			t.Errorf("%s: %v", testCase.description, err)
+		modules, checked, generated, ok := prepareUnit(t, testCase.description, testCase.root, "")
+		if !ok {
 			continue
 		}
-		if _, checkError := checker.CheckModules(modules); checkError != nil {
-			t.Errorf("%s: the reference checker rejected the program: %v", testCase.description, checkError)
+		if generationError := generationErrorOf(modules, checked); generationError != nil {
+			t.Errorf("%s: the reference rejected the program: %v", testCase.description, generationError)
 			continue
 		}
 		got, err := runKittenFunctions(executable, directory, testCase.root, "")
@@ -746,16 +735,25 @@ func TestKittenFunctionsRejectUnsupportedExpressions(t *testing.T) {
 			t.Errorf("%s: %v", testCase.description, err)
 			continue
 		}
-		want := testCase.wantKind + " expressions are not implemented yet"
-		if !strings.HasPrefix(got, "error Generate ") || !strings.Contains(got, want) {
-			t.Errorf("%s: expected a failure naming %q, got:\n%s", testCase.description, want, got)
+		if strings.HasPrefix(got, "error ") {
+			t.Errorf("%s: the probe rejected a program with an assignment:\n%s", testCase.description, got)
 			continue
 		}
-		// The failure must name the expression's own position, not a statement's.
-		if strings.Contains(got, "=== functions ===") {
-			t.Errorf("%s: a rejected body produced definitions:\n%s", testCase.description, got)
+		pool, bodies := splitFunctionOutput(t, got)
+		wantPool := referenceLiteralPool(t, generated)
+		wantBodies := referenceFunctionDefinitions(t, generated)
+		if difference := functionDifference(pool, bodies, wantPool, wantBodies); difference != "" {
+			t.Errorf("%s: %s", testCase.description, difference)
+			continue
 		}
+		programs++
+		lines += strings.Count(pool, "\n") + strings.Count(bodies, "\n")
 	}
+
+	if programs != len(cases) {
+		t.Fatalf("%d of %d assignment programs were compared", programs, len(cases))
+	}
+	t.Logf("assignment bodies: %d programs over %d lines compared byte for byte", programs, lines)
 }
 
 // TestKittenFunctionsRejectInvalidPrograms checks that a program the front end

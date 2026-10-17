@@ -117,10 +117,10 @@ fn main() {
 }
 `,
 	}, {
-		description: "literals in an unimplemented kind's rendered parts",
+		description: "literals in nested expression kinds",
 		root: `fn main() {
     map[string]string names = new map[string]string;
-    names["key"] = "value";
+    print(names["key"] = "value");
     print(names["key"]);
 }
 `,

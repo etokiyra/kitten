@@ -2335,9 +2335,9 @@ cross-module cases, every fixture, and the self-hosted sources.
 
 - **Code generation.** The semantic result of Section 27.2.1 carries every fact
   the reference generator reads. The first layer of a Kitten-written generator —
-  naming, the C type mapping, escaping, and output accumulation — is described in
-  Section 28; the emitter that consumes this result does not exist yet. The
-  contract it may rely on is documented in `selfhost/checker/README.md`.
+  naming, the C type mapping, escaping, and output accumulation — and the emitters
+  that consume this result are described in Section 28. The contract they rely on is
+  documented in `selfhost/checker/README.md`.
 - A module loader written in Kitten: the driver checks the modules a caller
   supplies.
 - Command-line arguments, standard error, and a program-selected exit status
@@ -2354,8 +2354,8 @@ Kitten-written checker that resolves a program. This section describes the
 Kitten-written code generator: the layer that turns resolved names and types into
 C text and the bounded accumulation it writes into, the declaration emitter, the
 expression emitter, the string literal pool, the statement and function-body
-emitter, and the translation unit assembly. The assignment expression and a
-Kitten-written module loader are deferred.
+emitter, and the translation unit assembly. A Kitten-written module loader is
+deferred.
 
 ### 28.1 Location and role
 
@@ -2490,8 +2490,8 @@ run advances.
 handles with a recursive walk and parentheses: integer, floating-point, boolean, and
 string literals; identifiers; unary `-`, `!`, `++`, and `--`; binary `+`, `-`, `*`,
 `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, and `||`; calls; member access and
-qualified variant references; struct and variant literals; array and map creation; and
-indexing. Every unary and binary operation is parenthesized, so the generated C never
+qualified variant references; struct and variant literals; array and map creation;
+indexing; and assignment. Every unary and binary operation is parenthesized, so the generated C never
 depends on C's precedence matching Kitten's. A string literal renders as a reference to
 its pooled object, described in Section 28.8.
 
@@ -2540,8 +2540,13 @@ runtime accessor: a string index yields a byte value, and an array or map index
 dereferences the accessor's pointer, which is a C l-value, so a target and index are
 evaluated once whether the index is read or written.
 
-Assignment is the only expression kind reported as not implemented, never rendered as
-something plausible.
+**Assignment** renders a plain map-entry target through the runtime setter, which
+inserts or updates the entry and passes the value by address through a compound
+literal; every other plain assignment and every numeric compound assignment keeps
+the reference's parenthesized C form. A string `+=` becomes the runtime append applied
+to the address of the target, so an index target is evaluated once. Increment and
+decrement are ordinary unary expressions over the same l-value forms and need no
+separate path.
 
 An expression is a fragment, not a line, so it is returned as a string rather than
 written through the output accumulator of Section 28.5. Rendering a node
@@ -2602,19 +2607,18 @@ case ends with is the reference's, and so is the `default:` arm that fails throu
 the runtime, which the checker's exhaustiveness rule makes unreachable.
 
 A condition keeps the parentheses of a compound expression and gains them when it
-is a bare identifier or a literal, which is the reference's rule; the reference
-also parenthesizes a condition that is an assignment, which this mirrors although
-the expression emitter reports an assignment as not implemented before the rule can
-be reached.
+is a bare identifier or a literal, which is the reference's rule; a condition that is
+an assignment keeps an extra layer of parentheses, because C's `-Wparentheses` warns
+about an assignment used as a condition without them.
 
 A `match` evaluates its scrutinee once into a temporary named `ktn_match_<n>`,
 numbered across the whole unit in emission order, checks a union scrutinee for null
 before reading its tag, and turns each arm into a `case` that binds the variant's
 fields, casts each unused binding to void, emits the arm's statements, and breaks.
 
-A statement that needs an expression kind the expression emitter does not implement
-is reported with that kind's failure and produces no bodies, so an incomplete body
-can never be reported as rendered. The body section is not a translation unit: a
+A statement whose expression the expression emitter cannot render is reported with
+that expression's failure and produces no bodies, so an incomplete body can never be
+reported as rendered. The body section is not a translation unit: a
 unit is the declaration sections of Section 28.6, then the pool of Section 28.8,
 then these bodies, then the entry point, which is deferred.
 
@@ -2639,8 +2643,8 @@ followed by a blank line; and the C entry point, which calls the runtime
 initialization and then the root module's `ktn_fn_main` and returns 0.
 
 **The entry point rule** runs before anything is emitted, exactly as the reference
-runs it, so a program with both an invalid entry point and an unimplemented
-expression reports the entry point, and a rejected program produces no C. The rule
+runs it, so a program with both an invalid entry point and an expression the emitter
+cannot render reports the entry point, and a rejected program produces no C. The rule
 requires a zero-parameter, void-returning `main` in the root module, which is the
 module at index zero; an imported module's `main` is never an entry point, and the
 compiler never invents one. The failures are, with the root module's path as their
@@ -2679,9 +2683,9 @@ per expression node in emission order, and the harness walks the reference AST i
 that same order and pairs the two lists, so a wrong node, order, position, or kind
 cannot pass. A rendering is compared when the reference's own output contains it in
 an extractable position, which for this phase is a print argument: the balanced
-parenthesized text after a print helper's opening parenthesis, in emission order. A
-kind the phase does not implement is compared against the emitter's own failure
-message, never against a rendering.
+parenthesized text after a print helper's opening parenthesis, in emission order.
+Every expression kind is implemented, so the emitter's failure message no longer
+describes a remaining kind.
 
 The pool is compared as well: the reference writes the declarations between the
 declaration sections and the first function body, and the harness compares exactly
@@ -2692,13 +2696,11 @@ harness compares the complete translation unit, one comparison per program cover
 the header, the declaration sections, the pool, the bodies, and the entry point at
 once. The call harness compares whole units for programs whose expressions are calls
 and, because such a program can now print, compiles, links, and runs both generated
-programs and compares what they write, their standard error, and their exit status. A program whose body needs an expression kind this section does not implement
-is required to report that kind by name, and a program the entry point rule rejects
-is compared through its error, so neither is ever counted as a unit comparison. The
-fixture harness hands every top-level fixture under `tests/` to the Kitten backend:
-each fixture the backend can generate must match the reference's unit and produce its
-expected output when compiled and run, and each fixture it cannot must report the
-unimplemented assignment expression as the only reason.
+programs and compares what they write, their standard error, and their exit status. A
+program the entry point rule rejects is compared through its error, so it is never
+counted as a unit comparison. The fixture harness hands every top-level fixture under
+`tests/` to the Kitten backend: each fixture must match the reference's unit and
+produce its expected output when compiled and run.
 
 `selfhost/codegen/README.md` records the corpora and the results.
 
@@ -2707,22 +2709,15 @@ unimplemented assignment expression as the only reason.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **The remaining expression kind.** Assignment is reported as not implemented
-  rather than rendered, and a statement that needs one produces no bodies. It needs
-  the accessors that keep an assignment target evaluated once, including the string
-  append and map set helpers.
 - A module loader written in Kitten: a caller supplies the module set, as the
   checker's driver does (Section 22.4).
-- A generated program cannot yet assign to a variable, so comparing observable
-  behavior is limited to the output its statements can produce by printing, calling,
-  and constructing values.
 - File writing, command-line arguments, standard error, and a program-selected exit
   status (Section 16), none of which the self-hosted runtime offers.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
 helper, declaration, expression, literal-pool, statement, and unit layers are written
-in Kitten, and for the programs its expression emitter supports it now produces
-complete translation units; but the loader, the pipeline that writes and compiles the
-output, and the production compiler are Go, so the Go compiler must remain the
-bootstrap reference until the Kitten-written compiler can compile its own source
-through a Kitten-written pipeline and reproduce the same behavior.
+in Kitten, and every expression kind the language has is now emitted; but the loader,
+the pipeline that writes and compiles the output, and the production compiler are Go,
+so the Go compiler must remain the bootstrap reference until the Kitten-written
+compiler can compile its own source through a Kitten-written pipeline and reproduce
+the same behavior.

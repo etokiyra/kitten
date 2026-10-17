@@ -21,9 +21,9 @@
 // rendered exactly once, which is also what keeps the literal pool's order and the
 // match temporary numbering a single pass's.
 //
-// An expression the expression emitter does not implement yet is reported as a
-// failure at the statement that contains it, so a body that cannot be rendered in
-// full is never reported as rendered.
+// An expression the expression emitter cannot render is reported as a failure at
+// the statement that contains it, so a body that cannot be rendered in full is
+// never reported as rendered.
 
 import "../checker/model.ktn";
 import "../lexer/tokens.ktn";
@@ -536,12 +536,8 @@ fn condition_expression(StatementEmitter emitter, Expr expression) -> Expression
     }
 }
 
-// is_assignment reports whether an expression is an assignment.
-//
-// Assignments are not implemented by the expression emitter yet, so a condition
-// can never be one: the emitter reports the assignment as not implemented before
-// this is reached. The rule is kept because it belongs to the assignment
-// expression, which the next phase adds.
+// is_assignment reports whether an expression is an assignment, which a condition
+// keeps in an extra layer of parentheses.
 fn is_assignment(Expr expression) -> bool {
     match (expression) {
         Assign(node_id, operator, target, value) { return true; }
