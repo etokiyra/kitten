@@ -2216,11 +2216,13 @@ The sources are:
 - `selfhost/checker/checker.ktn` — the five passes and the public entry points.
 - `selfhost/check.ktn` — the driver.
 
-`selfhost/checker/README.md` describes how to build and run it. The driver checks
-the two modules it is given — `input.txt` as the root and `input2.txt` as an
-import — because cross-module checking needs a module context and the runtime
-exposes no way to discover files. A module loader remains Go's responsibility
-(Section 22.4).
+`selfhost/checker/README.md` describes how to build and run it. The checker driver
+still checks exactly the two modules it is given — `input.txt` as the root and
+`input2.txt` as an import — so that cross-module checking can be exercised without
+a loader. The Kitten-written loader under `selfhost/loader` discovers imports for an
+absolute root and feeds the checker directly through `selfhost/loadunit.ktn`; its
+two documented exclusions are a relative root and recoverable read failures
+(Sections 22.2, 22.4, and 22.9).
 
 ### 27.2 API
 
@@ -2338,8 +2340,6 @@ cross-module cases, every fixture, and the self-hosted sources.
   naming, the C type mapping, escaping, and output accumulation — and the emitters
   that consume this result are described in Section 28. The contract they rely on is
   documented in `selfhost/checker/README.md`.
-- A module loader written in Kitten: the driver checks the modules a caller
-  supplies.
 - Command-line arguments, standard error, and a program-selected exit status
   (Section 16).
 - Recovery from an error: the parser and the checker both report the first error
@@ -2354,8 +2354,9 @@ Kitten-written checker that resolves a program. This section describes the
 Kitten-written code generator: the layer that turns resolved names and types into
 C text and the bounded accumulation it writes into, the declaration emitter, the
 expression emitter, the string literal pool, the statement and function-body
-emitter, and the translation unit assembly. A Kitten-written module loader is
-deferred.
+emitter, and the translation unit assembly. The Kitten-written module loader under
+`selfhost/loader` supplies the module set for an absolute root path; its README
+records the exact parity and the two exclusions.
 
 ### 28.1 Location and role
 
@@ -2709,15 +2710,19 @@ produce its expected output when compiled and run.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- A module loader written in Kitten: a caller supplies the module set, as the
-  checker's driver does (Section 22.4).
+- **Recoverable file input and relative root paths.** The Kitten-written loader
+  requires an absolute root and calls `read_file`, so a missing or unreadable file
+  is fatal rather than a loader diagnostic. Recoverable I/O is deferred by Section
+  22.9, and the runtime has no working directory (Sections 22.2 and 22.4). This is
+  the 4E.2 gap.
 - File writing, command-line arguments, standard error, and a program-selected exit
   status (Section 16), none of which the self-hosted runtime offers.
 
-Kitten is not self-hosting. The lexer, the parser, the checker, and the generator's
-helper, declaration, expression, literal-pool, statement, and unit layers are written
-in Kitten, and every expression kind the language has is now emitted; but the loader,
-the pipeline that writes and compiles the output, and the production compiler are Go,
-so the Go compiler must remain the bootstrap reference until the Kitten-written
-compiler can compile its own source through a Kitten-written pipeline and reproduce
-the same behavior.
+Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,
+and the generator's helper, declaration, expression, literal-pool, statement, and
+unit layers are written in Kitten, and every expression kind the language has is now
+emitted; but the loader's missing-file behavior and relative roots still need a
+language decision, and production integration, the pipeline that writes and compiles
+the output, and the production compiler are Go. The Go compiler must therefore remain
+the bootstrap reference until the Kitten-written compiler can compile its own source
+through a Kitten-written pipeline and reproduce the same behavior.

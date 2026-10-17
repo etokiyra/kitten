@@ -153,16 +153,26 @@ unimplemented expression kind: plain assignment to every l-value form, map-entry
 insertion, compound `+=` and `-=`, `++`/`--`, and string append, with the string and
 map runtime helpers named in `names.ktn`. Every expression kind is now emitted, all
 nine top-level fixtures under `tests/` compile, run, and match their expected output
-through the Kitten backend under GCC and Clang, and the only remaining self-hosted
-generator frontier is a Kitten-written module loader.
+through the Kitten backend under GCC and Clang. Phase 4E.1 added the module loader
+under `selfhost/loader`, driven by `selfhost/load.ktn` and
+`selfhost/loadunit.ktn`: it loads an absolute root path into the same ordered module
+set as the Go loader, with the same canonical paths, ids, depth-first order, cycle
+and duplicate handling, outside-root diagnostic, and lex/parse diagnostics. All
+14 multi-file checker corpus programs, 20 targeted trees, and `tests/modules/` match
+the reference loader byte for byte, and `tests/modules/` runs end-to-end through the
+fully Kitten-written loader, lexer, parser, checker, and generator. Missing and
+unreadable files and relative root paths are out of scope; Phase 4E.2 is blocked on
+a SPEC decision for recoverable file input and a working-directory primitive.
 
 None of the self-hosted components is part of the production pipeline: `kitten
-build` and `kitten run` still use the Go lexer, parser, checker, and generator,
-which remain authoritative. Their deliberate differences (byte-oriented
-positions, no command-line arguments or chosen exit status, and no module loader
-yet) are documented in SPEC.md
+build` and `kitten run` still use the Go lexer, parser, checker, generator, and
+loader, which remain authoritative. Their deliberate differences (byte-oriented
+positions, no command-line arguments or chosen exit status, an absolute-root
+Kitten loader with fatal missing-file reads, and no production driver integration)
+are documented in SPEC.md
 Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
-`selfhost/checker/README.md`, and `selfhost/codegen/README.md`.
+`selfhost/checker/README.md`, `selfhost/codegen/README.md`, and
+`selfhost/loader/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -195,7 +205,11 @@ authorization.
    references, struct and variant literals, array and map creation, and indexing;
    Phase 4D.9 added assignment, map-entry insertion, compound assignment,
    increment/decrement, and string append, so every expression kind is emitted and
-   all nine top-level fixtures now compile and run through the Kitten backend).
+   all nine top-level fixtures now compile and run through the Kitten backend;
+   Phase 4E.1 added the Kitten-written module loader for absolute roots, with the
+   same order, ids, paths, and diagnostics as Go over the loader corpus, and a
+   fully Kitten-written path through `tests/modules/`. Missing-file diagnostics and
+   relative roots are deferred to 4E.2, which needs a SPEC decision).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

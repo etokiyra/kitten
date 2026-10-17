@@ -1,0 +1,226 @@
+// loader.ktn - load a Kitten program and the modules it imports.
+//
+// It mirrors loader/loader.go: canonical paths, depth-first pre-order module
+// order, ids equal to positions in that order, one module per canonical path,
+// cycles allowed, duplicate and diamond imports deduplicated, and the same
+// diagnostics for paths outside the root and for lexical or syntax errors in any
+// module. The parsed modules are the ones the Kitten-written checker and code
+// generator already consume.
+//
+// The root path must be absolute: the self-hosted runtime exposes no working
+// directory, so a relative root cannot be made absolute the way filepath.Abs
+// does. The reference loader also accepts relative roots; that difference is
+// documented in selfhost/loader/README.md and is not exercised here.
+//
+// A missing or unreadable file is fatal through the language's read_file built-in
+// (SPEC.md Section 22.2), not a value this loader can report. Recoverable file
+// input is deferred by Section 22.9, so missing imports are out of scope for this
+// phase and remain unmatched against the reference until 4E.2.
+
+import "../checker/state.ktn";
+import "../lexer/lexer.ktn";
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "../parser/parser.ktn";
+import "paths.ktn";
+
+// LoadError is a failure to load one module. Path is the module's canonical path
+// and, for a failure inside a source file, Line and Column give its position.
+public struct LoadError {
+    string path;
+    int line;
+    int column;
+    string message;
+}
+
+// LoadResult is the ordered module set or the one failure that stopped loading.
+public union LoadResult {
+    Success { Module[] modules; int module_count; }
+    Failure { LoadError error; }
+}
+
+// load_error builds a failure with the reference loader's fields.
+fn load_error(string path, int line, int column, string message) -> LoadError {
+    return LoadError { path = path, line = line, column = column, message = message };
+}
+
+// LoaderState is the state of one load: the resolution root, the ordered modules,
+// and the modules already loaded by canonical path.
+struct LoaderState {
+    string root_directory;
+    Module[] modules;
+    int module_count;
+    int module_capacity;
+    map[string]Module loaded;
+}
+
+// ParsedSource is a parsed module and the node counts the checker needs, or the
+// lexical or syntax failure that stopped it.
+union ParsedSource {
+    Ok { Program program; int expression_count; int type_ref_count; }
+    Failed { LoadError error; }
+}
+
+// LoadStep is one module load: the module, or the failure that stopped it.
+union LoadStep {
+    Ok { Module module; }
+    Failed { LoadError error; }
+}
+
+// canonical_path returns the canonical form of an absolute path: the reference
+// calls filepath.Abs and then filepath.Clean, and for an absolute path the
+// lexical clean is the same result.
+public fn canonical_path(string path) -> string {
+    return clean_path(path);
+}
+
+// new_loader_state returns empty loader state rooted at root_directory.
+fn new_loader_state(string root_directory) -> LoaderState {
+    return LoaderState {
+        root_directory = root_directory,
+        modules = new Module[8],
+        module_count = 0,
+        module_capacity = 8,
+        loaded = new map[string]Module
+    };
+}
+
+// append_module adds a module to the ordered list, growing the array by doubling
+// when it is full. Modules are struct references, so copying one preserves the
+// parsed program and its annotations.
+fn append_module(LoaderState state, Module module) {
+    if (state.module_count == state.module_capacity) {
+        int capacity = state.module_capacity * 2;
+        Module[] grown = new Module[capacity];
+        int index = 0;
+        while (index < state.module_count) {
+            grown[index] = state.modules[index];
+            index++;
+        }
+        state.modules = grown;
+        state.module_capacity = capacity;
+    }
+    state.modules[state.module_count] = module;
+    state.module_count++;
+}
+
+// lex_and_parse lexes and parses one module's source, wrapping a frontend failure
+// with the module's canonical path and the frontend's own position and message.
+fn lex_and_parse(string path, string source) -> ParsedSource {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            return ParsedSource.Failed { error = load_error(path, line, column, message) };
+        }
+        Success(tokens, count) {
+            match (parse(tokens, count)) {
+                Failure(error) {
+                    return ParsedSource.Failed {
+                        error = load_error(path, error.line, error.column, error.message)
+                    };
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return ParsedSource.Ok {
+                        program = program,
+                        expression_count = expression_count,
+                        type_ref_count = type_ref_count
+                    };
+                }
+            }
+        }
+    }
+}
+
+// load_module loads the module at the canonical absolute path path, assigns it id
+// when it is first seen, and then loads its imports in declaration order. It is a
+// no-op if the path was already loaded, which is what terminates cycles and
+// deduplicates duplicate and diamond imports.
+fn load_module(LoaderState state, string path, int id) -> LoadStep {
+    if (has(state.loaded, path)) {
+        return LoadStep.Ok { module = state.loaded[path] };
+    }
+    if (!within_directory(state.root_directory, path)) {
+        return LoadStep.Failed {
+            error = load_error(path, 0, 0, "import resolves outside the root directory " + state.root_directory)
+        };
+    }
+
+    // SPEC.md Section 22.2 makes a failed read fatal. A missing or unreadable
+    // file therefore terminates the program here rather than returning a
+    // LoadError; recoverable file input is deferred by Section 22.9.
+    string source = read_file(path);
+
+    match (lex_and_parse(path, source)) {
+        Failed(error) {
+            return LoadStep.Failed { error = error };
+        }
+        Ok(program, expression_count, type_ref_count) {
+            Module module = Module {
+                path = path,
+                id = id,
+                program = program,
+                expression_count = expression_count,
+                type_ref_count = type_ref_count
+            };
+
+            // Register the module before loading its imports, exactly as the
+            // reference does, so a cycle back to this module resolves to the
+            // module already in progress.
+            state.loaded[path] = module;
+            append_module(state, module);
+
+            string directory = parent_directory(path);
+            int index = 0;
+            while (index < program.declaration_count) {
+                match (program.declarations[index]) {
+                    Import(keyword, import_path) {
+                        string import_canonical = canonical_path(join_path(directory, import_path));
+                        match (load_module(state, import_canonical, state.module_count)) {
+                            Failed(error) {
+                                return LoadStep.Failed { error = error };
+                            }
+                            Ok(imported) {
+                            }
+                        }
+                    }
+                    Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                    }
+                    Struct(at, visibility, name, fields, field_count) {
+                    }
+                    Enum(at, visibility, name, cases, case_count) {
+                    }
+                    Union(at, visibility, name, variants, variant_count) {
+                    }
+                }
+                index++;
+            }
+
+            return LoadStep.Ok { module = module };
+        }
+    }
+}
+
+// load_program loads the module at the absolute root path together with the
+// modules it imports. The returned modules have the root first, then imported
+// modules in depth-first import order, with each module's id equal to its index.
+public fn load_program(string root_path) -> LoadResult {
+    string root = canonical_path(root_path);
+    LoaderState state = new_loader_state(parent_directory(root));
+
+    match (load_module(state, root, 0)) {
+        Failed(error) {
+            return LoadResult.Failure { error = error };
+        }
+        Ok(module) {
+            Module[] modules = new Module[state.module_count];
+            int index = 0;
+            while (index < state.module_count) {
+                modules[index] = state.modules[index];
+                index++;
+            }
+            return LoadResult.Success {
+                modules = modules,
+                module_count = state.module_count
+            };
+        }
+    }
+}

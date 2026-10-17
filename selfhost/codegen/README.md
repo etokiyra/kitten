@@ -17,8 +17,9 @@ being built one at a time:
 - the translation unit emitter - the entry point rule, the C entry point, and the
   assembly of the whole unit.
 
-A module loader and a pipeline that writes and builds the output do not exist
-yet.
+A module loader now exists under `selfhost/loader`, and the `selfhost/loadunit.ktn`
+driver uses it to feed this generator; a pipeline that writes and builds the output
+does not exist yet.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything
@@ -911,20 +912,22 @@ Running `go test -count=1 -v -run TestKittenFixtures ./cmd/kitten/` reports:
 
 ## What is deliberately not here
 
-- **A module loader.** The drivers read two fixed paths, as the checker's driver
-  does. Nothing discovers imports in Kitten, so a multi-module program reaches the
-  emitters only through a caller that supplies the module set. The reference's own
-  loader is Go, and `kitten build` still uses it.
+- **Production integration of the loader.** The Kitten-written loader lives under
+  `selfhost/loader` and discovers imports for an absolute root path, but `kitten
+  build` still uses the Go loader. Missing and unreadable files remain fatal
+  through `read_file` until 4E.2 decides recoverable file input.
 - **Writing the unit anywhere but standard output.** The unit driver prints the C;
   the self-hosted runtime offers no file writing, no command-line arguments, and no
   program-selected exit status.
 
-Kitten is not self-hosting, and this phase does not make it so: the backend now
-emits complete translation units for every expression kind the language has, but a
-full compiler still needs a Kitten-written module loader, a driver that writes and
-builds, and a bootstrap in which the Kitten-written compiler compiles its own
-source. Until then the Go compiler remains the bootstrap
+Kitten is not self-hosting, and these phases do not make it so: the backend emits
+complete translation units for every expression kind the language has and the
+Kitten-written loader discovers imports for an absolute root path, but a full
+compiler still needs a driver that writes and builds, recoverable file input for
+missing-file diagnostics, and a bootstrap in which the Kitten-written compiler
+compiles its own source. Until then the Go compiler remains the bootstrap
 reference and the only pipeline `kitten build` and `kitten run` use: the lexer, the
 parser, the checker, and the generator's helper, declaration, expression,
-literal-pool, statement, and unit layers are Kitten, while the loader, the pipeline
-that writes and compiles the output, and the production compiler itself are Go.
+literal-pool, statement, and unit layers are Kitten, and the loader core is Kitten
+too, while the production loader integration, the pipeline that writes and
+compiles the output, and the production compiler itself are Go.

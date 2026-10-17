@@ -350,17 +350,23 @@ It is also the only way a self-hosting claim means anything.
 | Checker + semantic model | 1,862 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
 | Entry point and translation-unit assembly | 76 whole units, 2,907 lines |
-| Generated programs executed | 22 programs compiled and run under GCC and Clang, outputs compared |
+| Module loader | 20 targeted trees, 14 multi-file corpus programs, `tests/modules/` |
+| Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
+| Generated programs executed | 23 programs compiled and run under GCC and Clang, outputs compared |
 
 </details>
 
 **What it cannot compile yet, and why that is a short list.** The Kitten-written
 generator now emits every expression kind the language has, including assignment, map
 entry insertion, compound assignment, increment/decrement, and string append. All nine
-fixtures in `tests/` compile end-to-end through the Kitten-written backend, match the
-reference generator's C byte for byte, and produce their expected output. The only
-missing generator-side piece is a Kitten-written module loader: it is an exact, known
-port of a Go loader that already exists, not an open design question.
+top-level fixtures in `tests/` compile end-to-end through the Kitten-written backend,
+match the reference generator's C byte for byte, and produce their expected output.
+The Kitten-written module loader matches the Go loader over its corpus for an absolute
+root path, and `tests/modules/` runs through the fully Kitten-written loader, lexer,
+parser, checker, and generator. Two loader limits remain: a missing or unreadable file
+is still fatal because SPEC.md defers recoverable file input, and a relative root needs
+a working-directory primitive. Those are the 4E.2 decision and the driver phase, not
+open generator questions.
 
 The Go compiler remains the bootstrap and the only pipeline the CLI uses. Kitten is
 **not** self-hosting yet, and this README will not say it is until a Kitten-built compiler
@@ -386,8 +392,8 @@ tests/         .ktn fixtures with their expected program output
 ```
 
 `selfhost/` mirrors the compiler stage by stage: a lexer, a parser, a checker, a semantic
-model, and a C code generator, each with a driver that prints what it produced so the
-Go-side harnesses can compare it with the reference.
+model, a module loader, and a C code generator, each with a driver that prints what it
+produced so the Go-side harnesses can compare it with the reference.
 
 ## Testing
 
@@ -398,10 +404,10 @@ CC=clang go test ./...
 ```
 
 The suite includes both ordinary unit tests and the differential harnesses described
-above: the Kitten-written lexer, parser, checker, semantic model, code generator, and
-translation-unit emitter are each compared against the Go implementation over a large
-corpus, and every fixture is compiled, executed, and compared against its expected output
-under both GCC and Clang.
+above: the Kitten-written lexer, parser, checker, semantic model, module loader, code
+generator, and translation-unit emitter are each compared against the Go implementation
+over a large corpus, and every fixture is compiled, executed, and compared against its
+expected output under both GCC and Clang.
 
 ## How the project is developed
 

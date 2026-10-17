@@ -1,0 +1,63 @@
+// load.ktn - print the module set the Kitten-written loader produces.
+//
+// It reads the root module's absolute path from the fixed relative path
+// input.txt, loads that module and every module it imports with the
+// Kitten-written loader, and prints:
+//
+//     ok <module_count>
+//     module <id> <canonical_path>        one line per module, in order
+//
+// or, for a loader failure:
+//
+//     error <path>:<line>:<column>: <message>
+//     error <path>: <message>
+//     error <message>
+//
+// choosing the same three shapes as the reference loader's Error.Error. A
+// failure inside a source file carries a position; an import outside the root or
+// a read failure does not.
+//
+// The root path is absolute because the self-hosted runtime has no working
+// directory. The harness writes input.txt and selects the working directory, so
+// this driver needs no command-line arguments. A missing or unreadable file is
+// fatal through read_file, as SPEC.md Section 22.2 defines, and is not a loader
+// diagnostic in this phase.
+//
+// This is test infrastructure, not a compiler CLI: the output goes to standard
+// output and the driver writes no file.
+
+import "checker/state.ktn";
+import "loader/loader.ktn";
+
+// format_error renders a loader failure the way the reference loader's Error.Error
+// does: path:line:column when there is a position, path when there is a path, and
+// the message alone otherwise.
+fn format_error(LoadError error) -> string {
+    string text = "";
+    if (error.path != "") {
+        text = error.path;
+        if (error.line > 0) {
+            text += ":" + decimal(error.line) + ":" + decimal(error.column);
+        }
+        text += ": ";
+    }
+    return text + error.message;
+}
+
+fn main() {
+    string root = read_file("input.txt");
+
+    match (load_program(root)) {
+        Success(modules, module_count) {
+            print("ok", module_count);
+            int index = 0;
+            while (index < module_count) {
+                print("module", modules[index].id, modules[index].path);
+                index++;
+            }
+        }
+        Failure(error) {
+            print("error " + format_error(error));
+        }
+    }
+}

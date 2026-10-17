@@ -1,0 +1,136 @@
+// paths.ktn - lexical path handling for the Kitten-written module loader.
+//
+// The reference loader uses Go's path/filepath on Linux: Abs, Clean, Dir, Join,
+// and Rel. The loader itself only ever canonicalizes an absolute root path and
+// joins imports onto an absolute directory, so these helpers reproduce the
+// lexical parts of those functions without touching the filesystem. Symlinks are
+// not resolved by filepath either, so this is the same view of a path.
+//
+// clean_path reproduces filepath.Clean: empty segments and "." elements are
+// removed, each ".." removes the preceding element, a leading ".." is dropped on
+// an absolute path and kept on a relative one, and the root is "/". A trailing
+// slash is removed except for the root itself.
+//
+// The module loader requires an absolute root path. These helpers still define a
+// relative path the way filepath.Clean does, rather than inventing a cwd.
+
+// path_separator is the Linux separator byte.
+fn path_separator() -> int { return 47; }
+
+// dot_component is the parent-directory component.
+fn dot_component() -> string { return ".."; }
+
+// clean_path returns the lexical cleaned form of a path.
+public fn clean_path(string path) -> string {
+    int size = length(path);
+    if (size == 0) {
+        return ".";
+    }
+
+    bool rooted = path[0] == path_separator();
+    string[] components = new string[size + 1];
+    int count = 0;
+    int index = 0;
+    while (index < size) {
+        while (index < size && path[index] == path_separator()) {
+            index++;
+        }
+        int start = index;
+        while (index < size && path[index] != path_separator()) {
+            index++;
+        }
+        if (index > start) {
+            string component = substring(path, start, index);
+            if (component == ".") {
+                // A single dot names the current directory, so it contributes
+                // no component.
+            } else if (component == dot_component()) {
+                if (count > 0 && components[count - 1] != dot_component()) {
+                    count--;
+                } else if (!rooted) {
+                    components[count] = component;
+                    count++;
+                }
+            } else {
+                components[count] = component;
+                count++;
+            }
+        }
+    }
+
+    if (!rooted && count == 0) {
+        return ".";
+    }
+
+    string cleaned = "";
+    if (rooted) {
+        cleaned = "/";
+    }
+    int component_index = 0;
+    while (component_index < count) {
+        if (component_index > 0) {
+            cleaned += "/";
+        }
+        cleaned += components[component_index];
+        component_index++;
+    }
+    return cleaned;
+}
+
+// parent_directory reproduces filepath.Dir for a path this loader has cleaned.
+// The root's parent is the root, and a relative path with no separator has "."
+// as its parent.
+public fn parent_directory(string path) -> string {
+    string cleaned = clean_path(path);
+    int size = length(cleaned);
+    int last_separator = -1;
+    int index = 0;
+    while (index < size) {
+        if (cleaned[index] == path_separator()) {
+            last_separator = index;
+        }
+        index++;
+    }
+    if (last_separator < 0) {
+        return ".";
+    }
+    if (last_separator == 0) {
+        return "/";
+    }
+    return substring(cleaned, 0, last_separator);
+}
+
+// join_path reproduces filepath.Join for a directory and a relative import path:
+// it concatenates with one separator and cleans the result. A leading separator
+// in the import does not replace the directory, matching filepath.Join.
+public fn join_path(string directory, string relative) -> string {
+    return clean_path(directory + "/" + relative);
+}
+
+// within_directory reports whether a cleaned path is the directory itself or lies
+// inside it, which is the lexical question filepath.Rel answers for the
+// reference loader. Both arguments are absolute here.
+public fn within_directory(string directory, string path) -> bool {
+    string root = clean_path(directory);
+    string checked = clean_path(path);
+    if (root == "/") {
+        return length(checked) > 0 && checked[0] == path_separator();
+    }
+    if (checked == root) {
+        return true;
+    }
+    if (length(checked) <= length(root)) {
+        return false;
+    }
+    if (checked[length(root)] != path_separator()) {
+        return false;
+    }
+    int index = 0;
+    while (index < length(root)) {
+        if (checked[index] != root[index]) {
+            return false;
+        }
+        index++;
+    }
+    return true;
+}

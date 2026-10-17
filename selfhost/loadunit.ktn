@@ -1,0 +1,86 @@
+// loadunit.ktn - print a whole translation unit from a root path.
+//
+// It reads the root module's absolute path from input.txt, loads that module and
+// every module it imports with the Kitten-written loader, checks them with the
+// Kitten-written checker, and emits the complete C translation unit with the
+// Kitten-written generator. Standard output is therefore the unit itself, byte
+// for byte, so one comparison covers the whole self-hosted path: loader, lexer,
+// parser, checker, and generator.
+//
+// The root path is absolute because the self-hosted runtime has no working
+// directory. A failure prints one diagnostic line and no C. A missing or
+// unreadable file is fatal through read_file, as SPEC.md Section 22.2 defines.
+//
+// This is test infrastructure, not a compiler CLI: the unit goes to standard
+// output and nothing writes a file, invokes a C compiler, or sets an exit status.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/errors.ktn";
+import "codegen/unit.ktn";
+import "loader/loader.ktn";
+
+// print_lines writes text one line at a time, so that standard output holds it
+// byte for byte: print terminates every argument with a newline.
+fn print_lines(string text) {
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            print(substring(text, start, index));
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size) {
+        print(substring(text, start, size));
+    }
+}
+
+// report_load_error prints a loader failure in the driver's one-line shape.
+fn report_load_error(LoadError error) {
+    if (error.path == "") {
+        print("error", "Load", "-", error.line, error.column, error.message);
+    } else {
+        print("error", "Load", error.path, error.line, error.column, error.message);
+    }
+}
+
+// report_generate_error prints a generation failure. The file is the module the
+// failure belongs to, or "-" when it belongs to none.
+fn report_generate_error(GenerateError error) {
+    if (error.file == "") {
+        print("error", "Generate", "-", error.line, error.column, error.message);
+    } else {
+        print("error", "Generate", error.file, error.line, error.column, error.message);
+    }
+}
+
+fn main() {
+    string root = read_file("input.txt");
+
+    match (load_program(root)) {
+        Failure(error) {
+            report_load_error(error);
+        }
+        Success(modules, module_count) {
+            match (check_modules(modules, module_count)) {
+                Failure(error) {
+                    print("error", "Check", error_kind_name(error.kind), error.file, error.line, error.column, error.message);
+                }
+                Success(summary, model) {
+                    match (emit_translation_unit(model)) {
+                        Failure(error) {
+                            report_generate_error(error);
+                        }
+                        Success(text, lines) {
+                            print_lines(text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
