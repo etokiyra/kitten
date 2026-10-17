@@ -594,10 +594,10 @@ outcome here.
 - Concurrency.
 - The precise behavior of the garbage collector and runtime, and the concrete
   Boehm GC configuration.
-- A way for a Kitten program to read its command-line arguments, to write to
-  standard error, and to choose its process exit status. None exists, so a
-  program cannot take a path from the command line and cannot report failure
-  except through a fatal runtime error (Section 25.4).
+- A way for a Kitten program to write to standard error and to choose its
+  process exit status. `argv()` is now available (Section 18.8), so a program can
+  read its arguments, but it cannot yet report a diagnostic on standard error or
+  select a non-fatal exit status (Section 25.4).
 
 **Parser clarifications deferred**
 
@@ -978,7 +978,7 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Five functions are provided by the language: `print`, `length`, `has`,
+Six functions are provided by the language: `print`, `length`, `argv`, `has`,
 `substring`, and `read_file`. All are represented in the semantic environment
 rather than special-cased in expression checking. A user-defined top-level
 declaration with the same name shadows the built-in.
@@ -999,6 +999,18 @@ declaration with the same name shadows the built-in.
 - Calling it with no arguments, more than one argument, or an argument that is
   not a collection is an error.
 - Its return type is `int`, and it is not variadic.
+
+**`argv`**
+
+- `argv()` takes no arguments and returns the process argument vector as a
+  `string[]`. Index 0 is the program name as the host reported it, followed by
+  the program arguments in order. The program name is not necessarily an absolute
+  path. No arguments beyond the program name adds no elements.
+- Every call returns a fresh array. Mutating that array, including assigning to
+  its elements, does not change the process arguments or the result of a later
+  `argv()` call.
+- Calling it with any argument is an error.
+- Its return type is `string[]`, and it is not variadic.
 
 **`has`**
 
@@ -1119,7 +1131,8 @@ is **deferred**.
 - The runtime is written in C and has no dependency on the compiler's
   implementation language.
 - `ktn_rt_init` initializes the Boehm–Demers–Weiser conservative collector. The
-  generated C entry point calls it before any allocation.
+  generated C entry point calls it before any allocation, then calls
+  `ktn_rt_set_args(argc, argv)` before the Kitten `main` runs.
 - `ktn_rt_alloc` allocates a zero-initialized, pointer-scanned object with the
   collector. Struct allocation and constructed strings go through it. The
   collector reclaims objects automatically; Kitten code never frees memory by
@@ -1131,9 +1144,9 @@ is **deferred**.
 - The runtime also provides `ktn_rt_string_equal`, `ktn_rt_string_concat`,
   `ktn_rt_string_append`, `ktn_rt_string_length`, `ktn_rt_string_at`,
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
-  `ktn_rt_array_length`, `ktn_rt_map_new`, `ktn_rt_map_set`, `ktn_rt_map_at`,
-  `ktn_rt_map_has`, `ktn_rt_map_length`, `ktn_rt_read_file`, and the built-in
-  print helpers.
+  `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
+  `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
+  `ktn_rt_read_file`, and the built-in print helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1174,9 +1187,9 @@ or the equivalent `fn main() -> void`. The entry point:
 
 A missing or invalid entry point is rejected at build time with a diagnostic;
 the compiler never invents a `main`. The generated C entry point is the C
-function `main`, which calls the runtime initializer and then the compiled
-Kitten `main` function. The two never collide because Kitten functions are
-emitted with a reserved prefix.
+function `main`, which calls the runtime initializer, saves its `argc`/`argv` for
+`argv()` (Section 18.8), and then calls the compiled Kitten `main` function. The
+two never collide because Kitten functions are emitted with a reserved prefix.
 
 ### 19.6 Native build pipeline and command line
 
@@ -1231,8 +1244,9 @@ targets the host platform; cross-compilation and Windows are **not** supported.
    and there are no string/number conversions or code-point operations.
 4. The runtime provides GC initialization, struct allocation, string
    concatenation/append/equality/length/indexing/ranges, dynamic arrays, maps,
-   and print helpers.
-5. The entry point must be a zero-parameter, void-returning `main`.
+   the process argument vector, and print helpers.
+5. The entry point must be a zero-parameter, void-returning `main`; the generated
+   C entry point captures `argc`/`argv` for `argv()` before calling it.
 6. Default `build` output is the source base name in the current directory.
 7. Only the host platform is supported; there is no cross-compilation.
 8. Code generation targets C; there is no LLVM or native object-code backend.
@@ -2049,11 +2063,11 @@ uninitialized token is observed, and no slot is written twice.
 - **Embedded NUL bytes.** A Kitten string cannot contain a NUL byte
   (Section 20.1), so a source file containing one is truncated at that byte by
   `read_file`; the reference lexer would continue past it.
-- **No command-line arguments, standard error, or chosen exit status.** The
-  runtime exposes no way for a program to read its arguments, to write to
-  standard error, or to select a nonzero exit status; the only nonzero exit is a
-  fatal runtime error. The driver therefore reads the fixed relative path
-  `input.txt` and reports a lexical error on standard output. Argument access and
+- **No standard error or chosen exit status.** The runtime exposes no way for a
+  program to write to standard error or to select a nonzero exit status; the only
+  nonzero exit is a fatal runtime error. The lexer driver still reads the fixed
+  relative path `input.txt` and reports a lexical error on standard output,
+  although the language now provides `argv()` (Section 18.8). Standard error and
   exit status are **deferred** (Section 16).
 
 None of these differences changes the language: they are properties of this
@@ -2523,7 +2537,8 @@ resolved function. The built-ins are expanded: `print` becomes a comma expressio
 the runtime helpers for each argument's type, separated by the space helper and
 terminated by the newline helper, which has type void and is `print`'s own type;
 `length` becomes the array, map, or string length helper chosen by the argument's
-type; and `has`, `substring`, and `read_file` are one runtime call each. Arguments
+type; and `has`, `substring`, `read_file`, and `argv` are one runtime call each.
+Arguments
 are rendered left to right and the first failure among them stops the call, so a call
 is never emitted with a hole where an argument failed. The built-ins whose argument
 is a container choose their length or membership helper from the argument's type, and
@@ -2641,7 +2656,8 @@ followed by the declaration sections of Section 28.6; the pooled literal
 declarations of Section 28.8, with one blank line after them or nothing at all for a
 program with no literals; one definition per function from Section 28.9, each
 followed by a blank line; and the C entry point, which calls the runtime
-initialization and then the root module's `ktn_fn_main` and returns 0.
+initialization, saves `argc`/`argv` for `argv()`, then calls the root module's
+`ktn_fn_main` and returns 0.
 
 **The entry point rule** runs before anything is emitted, exactly as the reference
 runs it, so a program with both an invalid entry point and an expression the emitter

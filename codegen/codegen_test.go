@@ -76,8 +76,9 @@ func literalRef(t *testing.T, generated, kittenLiteral string) string {
 func TestGeneratedIncludesRuntimeHeader(t *testing.T) {
 	generated := generateSource(t, "fn main() {\n}\n")
 	assertContains(t, generated, `#include "kitten_runtime.h"`)
-	assertContains(t, generated, "int main(void) {")
+	assertContains(t, generated, "int main(int argc, char **argv) {")
 	assertContains(t, generated, "ktn_rt_init();")
+	assertContains(t, generated, "ktn_rt_set_args(argc, argv);")
 	assertContains(t, generated, "ktn_fn_main();")
 }
 
@@ -129,7 +130,7 @@ func TestFunctionAndMainNamesDoNotCollide(t *testing.T) {
 	// The Kitten main function and the C entry point are distinct symbols.
 	assertContains(t, generated, "void ktn_fn_main(void);")
 	assertContains(t, generated, "void ktn_fn_main(void) {")
-	assertContains(t, generated, "int main(void) {")
+	assertContains(t, generated, "int main(int argc, char **argv) {")
 }
 
 func TestPrintExpansion(t *testing.T) {

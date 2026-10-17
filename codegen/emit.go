@@ -549,6 +549,8 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 			return "", err
 		}
 		return fmt.Sprintf("%s(%s)", runtime.ReadFileFunction, argument), nil
+	case checker.BuiltinArgv:
+		return fmt.Sprintf("%s()", runtime.ArgvFunction), nil
 	}
 
 	identifier, ok := expression.Callee.(*parser.Identifier)

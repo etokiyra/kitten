@@ -48,6 +48,9 @@ const (
 	// BuiltinReadFile reads a whole file into a string.
 	BuiltinReadFile
 
+	// BuiltinArgv returns the process argument vector.
+	BuiltinArgv
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 

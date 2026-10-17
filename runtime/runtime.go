@@ -58,6 +58,12 @@ const (
 	// ArrayLengthFunction returns the number of elements in an array.
 	ArrayLengthFunction = "ktn_rt_array_length"
 
+	// SetArgsFunction stores the process argument vector before user code runs.
+	SetArgsFunction = "ktn_rt_set_args"
+
+	// ArgvFunction returns the process argument vector as an array of strings.
+	ArgvFunction = "ktn_rt_argv"
+
 	// MapNewFunction allocates an empty map with a given value size.
 	MapNewFunction = "ktn_rt_map_new"
 

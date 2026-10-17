@@ -52,6 +52,14 @@ func callCases() []callCase {
 }
 `,
 	}, {
+		description: "argv built-in",
+		root: `fn main() {
+    print(length(argv()));
+    print(argv()[0]);
+    print(argv()[1]);
+}
+`,
+	}, {
 		description: "print with no arguments, which the checker rejects",
 		root: `fn main() {
     print();

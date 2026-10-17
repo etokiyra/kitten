@@ -162,7 +162,13 @@ and duplicate handling, outside-root diagnostic, and lex/parse diagnostics. All
 the reference loader byte for byte, and `tests/modules/` runs end-to-end through the
 fully Kitten-written loader, lexer, parser, checker, and generator. Missing and
 unreadable files and relative root paths are out of scope; Phase 4E.2 is blocked on
-a SPEC decision for recoverable file input and a working-directory primitive.
+a SPEC decision for recoverable file input and a working-directory primitive. Phase
+5.1 added the `argv()` built-in end to end in both pipelines: the generated C entry
+point now takes `argc`/`argv`, saves them with `ktn_rt_set_args`, and user code sees
+the vector through `ktn_rt_argv`. The phase also added a runtime test with zero, one,
+and several arguments, including an empty argument and one containing spaces. Phase
+5.2 (`eprint`) is next; `exit`, `try_read_file`, loader read-error parity, the driver,
+and the fixpoint remain future phases.
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, generator, and
@@ -209,7 +215,8 @@ authorization.
    Phase 4E.1 added the Kitten-written module loader for absolute roots, with the
    same order, ids, paths, and diagnostics as Go over the loader corpus, and a
    fully Kitten-written path through `tests/modules/`. Missing-file diagnostics and
-   relative roots are deferred to 4E.2, which needs a SPEC decision).
+   relative roots are deferred to 4E.2, which needs a SPEC decision; Phase 5.1
+   added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

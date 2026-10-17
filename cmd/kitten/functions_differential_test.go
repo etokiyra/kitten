@@ -15,7 +15,7 @@ package main
 //
 // Both boundaries are structural. The pool's lines are the only ones beginning
 // with a pooled literal declaration, a definition is a prototype with " {" in
-// place of ";", and the entry point is the line `int main(void) {`, which no
+// place of ";", and the entry point is the line `int main(int argc, char **argv) {`, which no
 // generated name can be because a Kitten `main` is emitted as `ktn_fn_main`.
 //
 // A program is only compared when the reference can generate it and this emitter
@@ -133,7 +133,7 @@ func referenceFunctionDefinitions(t *testing.T, generated string) string {
 	lines := strings.Split(generated, "\n")
 	end := -1
 	for index := bodyStart; index < len(lines); index++ {
-		if lines[index] == "int main(void) {" {
+		if lines[index] == "int main(int argc, char **argv) {" {
 			end = index
 			break
 		}

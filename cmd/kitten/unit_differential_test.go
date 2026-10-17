@@ -140,6 +140,13 @@ func unitCases() []unitCase {
 }
 `,
 	}, {
+		description: "argv in a whole unit",
+		root: `fn main() {
+    print(length(argv()));
+    print(argv()[0]);
+}
+`,
+	}, {
 		description: "a main whose body does something",
 		root: `fn main() {
     int index = 0;
@@ -832,6 +839,7 @@ fn main() {
 		{"a changed literal number", strings.Replace(generated, "ktn_literal_1", "ktn_literal_2", 1)},
 		{"a reordered function", swapLines(generated, "int64_t ktn_fn_describe", "const ktn_string * ktn_fn_label")},
 		{"a changed entry point line", strings.Replace(generated, "    ktn_fn_main();", "    ktn_fn_main;", 1)},
+		{"a changed argument capture line", strings.Replace(generated, "    ktn_rt_set_args(argc, argv);", "    ktn_rt_set_args(argc);", 1)},
 		{"a dropped function definition", strings.Replace(generated, "\nvoid ktn_fn_main(void) {\n}\n", "\n", 1)},
 		{"a removed declaration section", strings.Replace(generated, "typedef struct ktn_s_Point ktn_s_Point;\n", "", 1)},
 		{"a dropped include", strings.Replace(generated, "#include \"kitten_runtime.h\"\n", "", 1)},
@@ -1159,6 +1167,13 @@ type programResult struct {
 func buildAndRunProgram(t *testing.T, compiler, compileFlags, linkFlags []string, directory, text string, index int) (programResult, error) {
 	t.Helper()
 
+	return buildAndRunProgramWithArgs(t, compiler, compileFlags, linkFlags, directory, text, index, nil)
+}
+
+// buildAndRunProgramWithArgs is buildAndRunProgram with a process argument vector.
+func buildAndRunProgramWithArgs(t *testing.T, compiler, compileFlags, linkFlags []string, directory, text string, index int, args []string) (programResult, error) {
+	t.Helper()
+
 	if err := os.WriteFile(filepath.Join(directory, "program.c"), []byte(text), 0o644); err != nil {
 		return programResult{}, fmt.Errorf("writing program.c: %v", err)
 	}
@@ -1186,7 +1201,7 @@ func buildAndRunProgram(t *testing.T, compiler, compileFlags, linkFlags []string
 		return programResult{}, fmt.Errorf("compiling unit %d with %s produced diagnostics:\n%s", index, filepath.Base(compiler[0]), output)
 	}
 
-	run := exec.Command(filepath.Join(directory, "program"))
+	run := exec.Command(filepath.Join(directory, "program"), args...)
 	run.Dir = directory
 	var stdout, stderr bytes.Buffer
 	run.Stdout = &stdout

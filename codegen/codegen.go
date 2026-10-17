@@ -603,13 +603,15 @@ func (g *generator) emitFunctionDefinitions() error {
 	return nil
 }
 
-// emitEntryPoint emits the C entry point, which initializes the runtime and
-// calls the Kitten main function of the root module. The C name "main" cannot
-// collide with the Kitten main function, which is emitted as "ktn_fn_main".
+// emitEntryPoint emits the C entry point, which initializes the runtime, saves
+// the process argument vector for argv(), and calls the Kitten main function of
+// the root module. The C name "main" cannot collide with the Kitten main
+// function, which is emitted as "ktn_fn_main".
 func (g *generator) emitEntryPoint() {
-	g.line("int main(void) {")
+	g.line("int main(int argc, char **argv) {")
 	g.indent++
 	g.line("%s();", runtime.InitFunction)
+	g.line("%s(argc, argv);", runtime.SetArgsFunction)
 	g.line("%s();", functionName("main", g.rootModule().ID))
 	g.line("return 0;")
 	g.indent--

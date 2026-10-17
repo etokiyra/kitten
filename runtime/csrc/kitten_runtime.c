@@ -237,6 +237,38 @@ int64_t ktn_rt_array_length(const ktn_array *array) {
 }
 
 /*
+ * The process argument vector saved by ktn_rt_set_args. It is initialized to an
+ * empty vector so that ktn_rt_argv is safe before the generated entry point has
+ * run, although generated programs always set it before user code.
+ */
+static int ktn_rt_saved_argc = 0;
+static char **ktn_rt_saved_argv = NULL;
+
+void ktn_rt_set_args(int argc, char **argv) {
+    ktn_rt_saved_argc = argc < 0 ? 0 : argc;
+    ktn_rt_saved_argv = argv;
+}
+
+ktn_array *ktn_rt_argv(void) {
+    int count = ktn_rt_saved_argc;
+    ktn_array *result = ktn_rt_array_new((int64_t)count, sizeof(const ktn_string *));
+    const ktn_string **slots = (const ktn_string **)result->data;
+    int index = 0;
+    while (index < count) {
+        const char *text = "";
+        if (ktn_rt_saved_argv != NULL && ktn_rt_saved_argv[index] != NULL) {
+            text = ktn_rt_saved_argv[index];
+        }
+        size_t length = strlen(text);
+        ktn_string *value = ktn_rt_string_allocate((int64_t)length);
+        memcpy(ktn_rt_string_bytes(value), text, length);
+        slots[index] = value;
+        index++;
+    }
+    return result;
+}
+
+/*
  * FNV-1a hash of a string, computed over its bytes so that two distinct strings
  * with the same contents hash identically.
  */

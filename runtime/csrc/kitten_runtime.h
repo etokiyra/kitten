@@ -176,6 +176,22 @@ void *ktn_rt_array_at(const ktn_array *array, int64_t index);
 int64_t ktn_rt_array_length(const ktn_array *array);
 
 /*
+ * Stores the process argument vector for a later ktn_rt_argv call. The
+ * generated C entry point calls this once, before the Kitten main function
+ * runs. The pointers remain valid for the lifetime of the process.
+ */
+void ktn_rt_set_args(int argc, char **argv);
+
+/*
+ * Returns a new ktn_array of const ktn_string * holding the process argument
+ * vector, including the program name at index 0. Every string is a fresh
+ * GC-managed copy. Each call returns a fresh array, so a program that mutates
+ * the array does not change the process arguments or a later call's result.
+ * Before ktn_rt_set_args the argument count is zero.
+ */
+ktn_array *ktn_rt_argv(void);
+
+/*
  * A map from string keys to values of a fixed size.
  *
  * length is the number of entries; capacity is the number of slots in the hash

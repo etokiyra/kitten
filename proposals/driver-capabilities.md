@@ -1,12 +1,30 @@
 # Minimum driver capabilities for a Kitten-written compiler
 
-> **PROPOSED, not adopted.**
+> **ADOPTED in principle; implementation is staged.**
 >
-> This document is a proposal for the human to approve or amend. It changes no
-> code, no tests, and no existing SPEC.md semantics. Nothing here is implemented
-> or authorized until the human explicitly says so.
+> The human approved the eight decisions below. Phase 5.1 (`argv`) is implemented;
+> `eprint`, `exit`, `try_read_file`, the loader read-error parity, the driver, and
+> the fixpoint remain future phases.
 >
-> Status: proposal, Phase 5.0. Date: 2026-10-18.
+> Status: adopted, Phase 5.0 proposal; Phase 5.1 done. Date: 2026-10-18.
+>
+> **Adopted decisions**
+>
+> 1. `ReadFileResult { Ok{text}; Failed{message} }` with `try_read_file(path)` is
+>    approved, in a later phase.
+> 2. `argv() -> string[]` is approved, with the program name at index 0.
+> 3. A POSIX-shell wrapper is acceptable for the first fixpoint. It is temporary,
+>    must not be Go, and is replaced by `purr` later. The Kitten compiler writes C
+>    to stdout, diagnostics to stderr, and status via `exit`; the wrapper owns
+>    `-o`, temporary files, `cc`, and `run`.
+> 4. Read-error parity (4E.2) is completed before the driver and before any
+>    README self-hosting claim.
+> 5. Parity covers the common errnos (not found, permission denied,
+>    is-a-directory) plus a generic fallback, with a Go-compatible errno mapping.
+> 6. `argv`, `eprint`, `exit`, and `try_read_file` are permanent built-ins.
+> 7. Linux is verified; the design must not break macOS by construction, and
+>    untested macOS support is not claimed.
+> 8. The Kitten driver parses the source path only.
 
 ## 1. Scope and target
 

@@ -64,6 +64,7 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         Print { return "Print"; }
         Length { return "Length"; }
         ReadFile { return "ReadFile"; }
+        Argv { return "Argv"; }
         MapHas { return "MapHas"; }
         Substring { return "Substring"; }
     }

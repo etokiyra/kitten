@@ -263,6 +263,7 @@ public enum BuiltinKind {
     Print,
     Length,
     ReadFile,
+    Argv,
     MapHas,
     Substring
 }
@@ -523,6 +524,18 @@ public fn builtin_functions() -> map[string]Function {
         return_type = primitive_type(TypeKind.String, "string"),
         module = 0,
         builtin = BuiltinKind.ReadFile,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["argv"] = Function {
+        name = "argv",
+        parameter_names = new string[1],
+        parameter_count = 0,
+        parameter_types = new Type[1],
+        return_type = array_type(primitive_type(TypeKind.String, "string")),
+        module = 0,
+        builtin = BuiltinKind.Argv,
         variadic = false,
         allowed_types = new Type[1],
         allowed_count = 0

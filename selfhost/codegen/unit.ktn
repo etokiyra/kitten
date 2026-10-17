@@ -142,16 +142,18 @@ fn check_main(ModuleModel root, Token at) -> EntryPointCheck {
 
 // entry_point_lines is the number of lines the C entry point occupies.
 public fn entry_point_lines() -> int {
-    return 5;
+    return 6;
 }
 
-// entry_point_text renders the C entry point, which initializes the runtime and
-// calls the Kitten main of the root module. The C name "main" cannot collide with
-// the Kitten main, which is emitted as ktn_fn_main.
+// entry_point_text renders the C entry point, which initializes the runtime,
+// saves the process argument vector for argv(), and calls the Kitten main of the
+// root module. The C name "main" cannot collide with the Kitten main, which is
+// emitted as ktn_fn_main.
 fn entry_point_text(SemanticModel model) -> string {
     Output output = new_output(entry_point_lines());
-    output_line(output, 0, "int main(void) {");
+    output_line(output, 0, "int main(int argc, char **argv) {");
     output_line(output, 1, init_function() + "();");
+    output_line(output, 1, set_args_function() + "(argc, argv);");
     output_line(output, 1, function_name("main", module_model(model, 0).id) + "();");
     output_line(output, 1, "return 0;");
     output_line(output, 0, "}");

@@ -721,6 +721,9 @@ fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int
     if (builtin == BuiltinKind.ReadFile) {
         return builtin_call_expression(context, callee, read_file_function(), "read_file", arguments, argument_count, 1);
     }
+    if (builtin == BuiltinKind.Argv) {
+        return ExpressionResult.Ok { text = argv_function() + "()" };
+    }
     return user_call_expression(context, callee, arguments, argument_count);
 }
 

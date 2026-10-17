@@ -216,7 +216,6 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 	}
 
 	c := &checker{
-		builtins:        builtinFunctions(),
 		arrayTypes:      map[*Type]*Type{},
 		mapTypes:        map[mapTypeIdentity]*Type{},
 		publicTypes:     map[string]*Type{},
@@ -234,6 +233,7 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 			Symbols:         map[*parser.Identifier]*Symbol{},
 		},
 	}
+	c.builtins = c.builtinFunctions()
 
 	for _, module := range modules {
 		if module == nil || module.Program == nil {
@@ -271,9 +271,10 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 	return c.result, nil
 }
 
-// builtinFunctions returns the language's built-in functions. print and length
-// are provided by the language, not declared by the user.
-func builtinFunctions() map[string]*Function {
+// builtinFunctions returns the language's built-in functions. They are provided
+// by the language, not declared by the user. It is a method so that argv can
+// return the checker's interned string-array type.
+func (c *checker) builtinFunctions() map[string]*Function {
 	return map[string]*Function{
 		"print": {
 			Name:         "print",
@@ -292,6 +293,11 @@ func builtinFunctions() map[string]*Function {
 			ParameterTypes: []*Type{StringType},
 			ReturnType:     StringType,
 			Builtin:        BuiltinReadFile,
+		},
+		"argv": {
+			Name:       "argv",
+			ReturnType: c.arrayType(StringType),
+			Builtin:    BuiltinArgv,
 		},
 		"has": {
 			Name:       "has",

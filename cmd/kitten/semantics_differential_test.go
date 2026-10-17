@@ -184,6 +184,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "Length"
 	case checker.BuiltinReadFile:
 		return "ReadFile"
+	case checker.BuiltinArgv:
+		return "Argv"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

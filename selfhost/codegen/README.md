@@ -142,11 +142,12 @@ An unrecognized directive prints `unknown <directive>`.
   `print` call expands into (integer, float, bool, string, space, and newline),
   `array_length_function()`, `map_length_function()`, and
   `string_length_function()` are the `length` helpers the argument's type chooses
-  between, `substring_function()`, `map_has_function()`, and
-  `read_file_function()` are the remaining built-ins, and `string_at_function()`,
-  `array_new_function()`, `array_at_function()`, `map_new_function()`,
-  `map_set_function()`, and `map_at_function()` are the indexing, creation, and
-  assignment helpers.
+  between, `substring_function()`, `map_has_function()`,
+  `read_file_function()`, and `argv_function()` are the remaining built-ins,
+  `set_args_function()` is the entry-point call that saves `argc`/`argv`, and
+  `string_at_function()`, `array_new_function()`, `array_at_function()`,
+  `map_new_function()`, `map_set_function()`, and `map_at_function()` are the
+  indexing, creation, and assignment helpers.
 
 `output.ktn`:
 
@@ -302,7 +303,7 @@ handles with no more than a recursive walk and parentheses:
 | unary `-` `!` `++` `--` | `(<op><operand>)` for a prefix, `(<operand><op>)` for a postfix |
 | binary `+` `-` `*` `/` `%` `<` `<=` `>` `>=` `==` `!=` `&&` `\|\|` | `(<left> <op> <right>)` |
 | call to a function | `<ktn_fn_name>(<argument>, ...)`, named by the module that declared it |
-| call to a built-in | `print`, `length`, `has`, and `substring` are expanded; `read_file` is one runtime call |
+| call to a built-in | `print`, `length`, `has`, and `substring` are expanded; `read_file` and `argv` are one runtime call |
 | member access | `(<receiver>)->ktn_f_<field>` |
 | qualified variant reference | `ktn_ec_<Module><Enum>_<Case>` for an enum case, or `ktn_new_<Module><Union>_<Variant>()` for a payload-less union variant |
 | struct literal | `<ktn_new_Module><Struct>(<value>, ...)`, values in field declaration order |
@@ -336,6 +337,7 @@ resolve is reported rather than named after what it was written as.
 | `has(map, key)` | `ktn_rt_map_has(map, key)` |
 | `substring(s, start, end)` | `ktn_rt_substring(s, start, end)` |
 | `read_file(path)` | `ktn_rt_read_file(path)` |
+| `argv()` | `ktn_rt_argv()` |
 
 Arguments are rendered left to right, and the first failure among them stops the
 call: a call is never emitted with a hole where an argument failed. `print` chooses
@@ -581,7 +583,8 @@ The sections, in the reference's order, with the reference's blank lines:
    all for a program with no literals;
 3. one definition per function, each followed by a blank line, from the statement
    emitter;
-4. `int main(void)`, which calls `ktn_rt_init()` and then the root module's
+4. `int main(int argc, char **argv)`, which calls `ktn_rt_init()`, saves the
+   argument vector with `ktn_rt_set_args(argc, argv)`, and then calls the root module's
    `ktn_fn_main()`, and returns 0.
 
 The parts are concatenated once each, so the assembly itself copies the unit a
@@ -703,7 +706,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 668 string literals whose escaping and byte length match the reference
+- 707 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -727,7 +730,7 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
   modules, declaration order, bodies with and without literals, a shared literal
   pool, many declarations of every kind, and wide field and parameter lists.
 - 35 corpus programs whose sections match byte for byte, over 544 lines, and
-  1757 whose check error the probe reports exactly as the reference checker does.
+  1759 whose check error the probe reports exactly as the reference checker does.
 - 57 corpus programs without an entry point, verified by deriving the reference
   section: prepending `fn main() {}` adds exactly one prototype line and nothing
   else, and removing it - together with the prototype block's blank line when the
@@ -758,7 +761,7 @@ Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
   every compound operator, string append, map entry assignment, and the nested
   combinations of them. The lines that are not compared are the subexpressions
   of a compared expression, which the compared whole already validates.
-- 119 of 1220 expected lines of 34 corpus programs compared byte for byte, over
+- 121 of 1230 expected lines of 34 corpus programs compared byte for byte, over
   the checker corpus, and whose **71 pooled entries** are compared as well. The
   compared-line count falls because assignment now renders rather than reporting
   an unimplemented message, and an assignment that is a statement is not a print
@@ -816,7 +819,7 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/kitten/` reports:
   initializer that is an expression, a union with a string payload, `match` inside
   loops, string literals in nested statements that keep the pool's order, and a
   second module.
-- 34 corpus programs over 692 lines and 55 functions compared byte for byte.
+- 34 corpus programs over 693 lines and 55 functions compared byte for byte.
 - Match temporaries numbered in emission order across a unit, checked directly.
 - 11 assignment programs over 85 lines compared byte for byte, covering an
   assignment statement, a field, an element, a compound assignment, a loop
@@ -837,7 +840,7 @@ driver's shape including the file, which only the entry point rule sets.
 
 Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
 
-- **26 whole units identical over 1022 lines** in the targeted corpus: a minimal
+- **27 whole units identical over 1064 lines** in the targeted corpus: a minimal
   `main`; a `main` that runs a loop, a string concatenation, and an `if`; several
   functions in declaration order; nested blocks and control flow; loops of every
   shape; `match` over enums and unions; structs, enums, and unions with
@@ -848,8 +851,8 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
   and repeated literals; the pool's order when strings appear in different
   functions; strings inside nested statements; and two modules, one of which
   declares its own `main`.
-- **34 whole corpus units identical over 1380 lines**, plus **57 corpus programs whose
-  entry point failure is reported identically**, and 1757 check errors reported
+- **34 whole corpus units identical over 1415 lines**, plus **57 corpus programs whose
+  entry point failure is reported identically**, and 1759 check errors reported
   identically.
 - **4 targeted and 57 corpus entry point rejections**, covering a missing `main`,
   parameters, a return value, and an imported module that declares `main` but is not
@@ -872,7 +875,7 @@ and runs both generated programs and compares what they write.
 
 Running `go test -count=1 -v -run TestKittenCalls ./cmd/kitten/` reports:
 
-- **16 whole units identical over 505 lines**: `print` with every primitive type and
+- **17 whole units identical over 538 lines**: `print` with every primitive type and
   with several at once; user calls with zero, one, and several arguments; calls in
   an expression statement, a local initializer, a condition, a loop condition, a
   return, a match arm, and an argument position; nested calls; void and value

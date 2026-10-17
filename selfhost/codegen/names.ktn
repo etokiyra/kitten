@@ -50,6 +50,11 @@ public fn alloc_function() -> string { return "ktn_rt_alloc"; }
 // program's own main runs, which starts the garbage collector.
 public fn init_function() -> string { return "ktn_rt_init"; }
 
+// set_args_function stores the process argument vector before user main runs, and
+// argv_function returns it as an array of strings.
+public fn set_args_function() -> string { return "ktn_rt_set_args"; }
+public fn argv_function() -> string { return "ktn_rt_argv"; }
+
 // string_concat_function and string_equal_function are the runtime helpers a
 // string "+", "==", or "!=" becomes. A Kitten string is a length-carrying
 // pointer, so "+" is a concatenation and "==" compares content rather than
