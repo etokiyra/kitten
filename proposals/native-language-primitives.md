@@ -10,11 +10,11 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1/8.2/8.3/8.4/8.5 status:** Section 2 (defined integer arithmetic),
+> **Phase 8.1/8.2/8.3/8.4/8.5/8.6 status:** Section 2 (defined integer arithmetic),
 > Section 3 (bitwise/shift operators and hex/binary literals), Section 4
-> (`byte` and `byte[]`), Section 5 (explicit conversions), and Section 6
-> (recoverable file, directory, and process APIs) are **ADOPTED**. Sections 7
-> and 8 remain **PROPOSED, not adopted**.
+> (`byte` and `byte[]`), Section 5 (explicit conversions), Section 6
+> (recoverable file, directory, and process APIs), and Section 7 (current
+> directory) are **ADOPTED**. Section 8 remains **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -620,7 +620,7 @@ creation/listing/removal and file writes. These must be recoverable: a path
 failure is data, not a process termination. Reuse the 5.4 prelude decisions
 rather than adding generics.
 
-### 6.2 Predeclared source (FileResult, ListDirectoryResult, and RunResult adopted; CurrentDirectoryResult proposed)
+### 6.2 Predeclared source
 
 Use these public unions, assembled only as needed (Section 6.3):
 
@@ -647,10 +647,9 @@ public union CurrentDirectoryResult {
 ```
 
 `ReadFileResult` remains exactly as it is. The adopted names `FileResult`,
-`ListDirectoryResult`, and `RunResult` are reserved against every user top-level
-declaration in every program, whether or not a trigger fires, following the
-`ReadFileResult` rule. `CurrentDirectoryResult` is reserved only when its
-proposed phase is adopted.
+`ListDirectoryResult`, `RunResult`, and `CurrentDirectoryResult` are reserved
+against every user top-level declaration in every program, whether or not a
+trigger fires, following the `ReadFileResult` rule.
 
 ### 6.3 Built-ins and exact rules
 
@@ -784,7 +783,7 @@ recursive remove; no metadata. Alternatives: individual result unions (more
 types), one universal prelude (changes existing C), fatal APIs (rejected),
 generic `Result<T>` (no generics).
 
-## 7. `try_current_directory`
+## 7. `try_current_directory` (ADOPTED in Phase 8.6)
 
 ### 7.1 Need and exact rule
 
@@ -798,8 +797,10 @@ try_current_directory() -> CurrentDirectoryResult
 
 It returns the current working directory as an absolute path in
 `CurrentDirectoryResult.Ok { path }`, or a `Failed { message }` from the OS.
-The prelude fragment is the `CurrentDirectoryResult` union, appended only when
-this builtin is called. Its C helper is
+It uses the kernel's `getcwd` result, ignores `$PWD`, and grows its buffer on
+`ERANGE` rather than imposing a `PATH_MAX` limit. Failure text is
+`getwd: <reason>`. The prelude fragment is the `CurrentDirectoryResult` union,
+appended only when this builtin is called. Its C helper is
 `ktn_prelude_<P>_try_current_directory`, backed by:
 
 ```c

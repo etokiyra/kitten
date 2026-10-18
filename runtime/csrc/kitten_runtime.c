@@ -541,6 +541,19 @@ static const ktn_string *ktn_rt_path_error(const char *operation, const ktn_stri
     return ktn_rt_path_error_with_reason(operation, path, reason);
 }
 
+/* Builds "<operation>: <reason>" for an operation with no path operand. */
+static const ktn_string *ktn_rt_operation_error(const char *operation, int error) {
+    char fallback[256];
+    const char *reason = ktn_rt_go_error_reason(error, fallback, sizeof(fallback));
+    size_t operation_length = strlen(operation);
+    size_t reason_length = strlen(reason);
+    size_t length = operation_length + 2 + reason_length;
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    char *bytes = ktn_rt_string_bytes(result);
+    snprintf(bytes, length + 1, "%s: %s", operation, reason);
+    return result;
+}
+
 /* Returns a plain failure message string for a non-path condition. */
 static const ktn_string *ktn_rt_plain_error(const char *message) {
     size_t length = strlen(message);
@@ -721,6 +734,51 @@ bool ktn_rt_try_run(const ktn_string *program, const ktn_array *args, int64_t *s
     }
     *message = ktn_rt_plain_error("wait returned an unexpected status");
     return false;
+}
+
+bool ktn_rt_try_current_directory(const ktn_string **path, const ktn_string **message) {
+    if (path == NULL || message == NULL) {
+        ktn_rt_fail("try_current_directory received a null result slot");
+    }
+    *path = NULL;
+    *message = NULL;
+
+    size_t capacity = 256;
+    char *buffer = (char *)malloc(capacity);
+    if (buffer == NULL) {
+        *message = ktn_rt_operation_error("getwd", ENOMEM);
+        return false;
+    }
+    for (;;) {
+        if (getcwd(buffer, capacity) != NULL) {
+            size_t length = strlen(buffer);
+            ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+            memcpy(ktn_rt_string_bytes(result), buffer, length);
+            free(buffer);
+            *path = result;
+            return true;
+        }
+        int error = errno;
+        if (error != ERANGE) {
+            free(buffer);
+            *message = ktn_rt_operation_error("getwd", error);
+            return false;
+        }
+        if (capacity > SIZE_MAX / 2) {
+            free(buffer);
+            *message = ktn_rt_operation_error("getwd", ENAMETOOLONG);
+            return false;
+        }
+        size_t next = capacity * 2;
+        char *grown = (char *)realloc(buffer, next);
+        if (grown == NULL) {
+            free(buffer);
+            *message = ktn_rt_operation_error("getwd", ENOMEM);
+            return false;
+        }
+        buffer = grown;
+        capacity = next;
+    }
 }
 
 /* Writes every byte or reports the first write failure. */

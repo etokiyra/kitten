@@ -1145,6 +1145,15 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_current_directory call and result match",
+		root: `fn main() {
+    match (try_current_directory()) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "try_run call and RunResult match",
 		root: `fn main() {
     match (try_run("/bin/true", new string[0])) {

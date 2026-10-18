@@ -233,10 +233,13 @@ their `FileResult` and `ListDirectoryResult` prelude unions, Go-compatible error
 text, and the generalized on-use prelude. Phase 8.5 added the recoverable
 `try_run` process-launch built-in and its `RunResult` prelude union, with direct
 `execve` semantics, inherited environment/working directory/descriptors, status
-and signal reporting, and pre-fork stream flushing. Phase 8.6
-(`try_current_directory` and `CurrentDirectoryResult`) is next; file writing now
-unblocks `purr new` and process launch makes `purr run`-style tooling writable
-in Kitten, both as separate later phases. A SPEC cleanup
+and signal reporting, and pre-fork stream flushing. Phase 8.6 added the
+recoverable `try_current_directory` built-in and its `CurrentDirectoryResult`
+prelude union, using the kernel's `getcwd` path, ignoring `$PWD`, and growing its
+buffer on `ERANGE`. Phase 8.7 (the synthetic `<runtime>` module) is next; the
+Kitten loader/driver can now accept relative roots in a separate later change.
+File writing now unblocks `purr new` and process launch makes `purr run`-style
+tooling writable in Kitten, both as separate later phases. A SPEC cleanup
 of Go/C-flavored wording remains a later candidate. The native backend and a
 standard library remain unauthorized.
 
@@ -349,7 +352,8 @@ authorization after the design is approved.
    in source and fixtures; Phase 8.3b added the `byte` type, `byte[]`, and
    explicit byte/string conversions; Phase 8.4 added recoverable file and
    directory operations and their on-use result unions; Phase 8.5 added
-   recoverable process launch and `RunResult`).
+   recoverable process launch and `RunResult`; Phase 8.6 added the current
+   directory query and `CurrentDirectoryResult`).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

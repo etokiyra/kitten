@@ -1036,11 +1036,11 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Nineteen functions are provided by the language: `print`, `eprint`, `exit`,
+Twenty functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
-`try_list_directory`, `try_run`, `int_from_byte`, `byte_from_int`,
-`string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
+`try_list_directory`, `try_run`, `try_current_directory`, `int_from_byte`,
+`byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1194,29 +1194,38 @@ the same name shadows the built-in.
       Ok { int status; }
       Failed { string message; }
   }
+
+  union CurrentDirectoryResult {
+      Ok { string path; }
+      Failed { string message; }
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
   `FileResult.Ok`. `FileResult.Failed { message = ... }`,
   `ListDirectoryResult.Ok { entries = ... }`, `ListDirectoryResult.Failed`,
-  `RunResult.Ok { status = ... }`, and `RunResult.Failed { message = ... }` are
-  ordinary variant constructions.
-- The four predeclared union names `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, and `RunResult` are reserved in **every** program: any
-  user top-level declaration with one of those names is an error, whether or not
-  the corresponding implicit type is introduced.
+  `RunResult.Ok { status = ... }`, `RunResult.Failed { message = ... }`,
+  `CurrentDirectoryResult.Ok { path = ... }`, and
+  `CurrentDirectoryResult.Failed { message = ... }` are ordinary variant
+  constructions.
+- The five predeclared union names `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, `RunResult`, and `CurrentDirectoryResult` are reserved
+  in **every** program: any user top-level declaration with one of those names
+  is an error, whether or not the corresponding implicit type is introduced.
 - `file` and `directory` built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, `RunResult`, with each union's fixed source text
-  concatenated directly (each block ends with its closing brace and newline). A program using
+  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, with each
+  union's fixed source text concatenated directly (each block ends with its
+  closing brace and newline). A program using
   only `try_read_file` therefore gets exactly the existing `ReadFileResult`
   prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
   `try_read_file`: an identifier call named `try_write_file` (even if shadowed
   by a user function) introduces `FileResult` and its generated helper; the same
-  applies to the other new built-ins, including `try_run` and `RunResult`. A program with no new built-in and no
+  applies to the other new built-ins, including `try_run`/`RunResult` and
+  `try_current_directory`/`CurrentDirectoryResult`. A program with no new built-in and no
   `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
@@ -1331,6 +1340,31 @@ the same name shadows the built-in.
 - Calling it with the wrong number of arguments, a non-`string` program, or a
   non-`string[]` argument array is an error. Its return type is `RunResult`, and
   it is not variadic.
+
+**`try_current_directory`**
+
+- `try_current_directory()` takes no arguments and returns the process's current
+  working directory as an absolute path. It uses the kernel's `getcwd` result
+  and does **not** consult `$PWD`. There is no `chdir` built-in. The runtime grows
+  its buffer when `getcwd` reports `ERANGE`, so there is no `PATH_MAX`-sized
+  limit.
+- `CurrentDirectoryResult` is the predeclared result union:
+
+  ```kitten
+  union CurrentDirectoryResult {
+      Ok { string path; }
+      Failed { string message; }
+  }
+  ```
+
+- Success returns `CurrentDirectoryResult.Ok { path = ... }` with a fresh
+  GC-managed absolute path. Failure is recoverable and returns
+  `CurrentDirectoryResult.Failed { message = ... }` with
+  `getwd: <reason>`, using the same lower-case Go-compatible reason mapping as
+  the other recoverable built-ins. A removed current directory therefore fails
+  with `getwd: no such file or directory`.
+- Calling it with any argument is an error. Its return type is
+  `CurrentDirectoryResult`, and it is not variadic.
 
 **`int_from_byte`**
 
@@ -1489,7 +1523,7 @@ is **deferred**.
   `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_try_write_file`,
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
   `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
-  `ktn_rt_exit`, the
+  `ktn_rt_try_current_directory`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -1967,6 +2001,10 @@ loader prefix.
   status; a signal termination yields `128 + signal`. A failure to start is a
   recoverable `fork/exec <program>: <reason>`. Output capture, stdin
   redirection, environment control, and timeouts are **deferred**.
+- `try_current_directory() -> CurrentDirectoryResult` returns the kernel's
+  absolute current-directory path. It ignores `$PWD`, has no `chdir`
+  counterpart, grows its buffer on `ERANGE`, and reports a removed directory as
+  `getwd: no such file or directory`. The path is a fresh GC-managed string.
 
 Current-working-directory changes, recursive removal, atomic replacement, and
 file metadata beyond the operations above are **not** implemented.
@@ -2052,7 +2090,8 @@ The following are **not** implemented and must not be assumed:
   paths.
 - Metadata, recursive operations, atomic replacement, and other filesystem
   operations beyond the built-ins in Section 18.8.
-- Output capture, stdin redirection, environment control, and process timeouts.
+- Output capture, stdin redirection, environment control, process timeouts, and
+  changing the current directory.
 
 - Separate compilation or incremental builds; the whole program is reloaded and
   recompiled each time.
@@ -2079,6 +2118,8 @@ The following are **not** implemented and must not be assumed:
 12. `try_run` executes directly, inherits the environment, working directory,
     and standard descriptors, and reports normal or signal exit statuses as
     `RunResult.Ok`; only a start failure is `Failed`.
+13. `try_current_directory` returns the kernel's absolute current-directory
+    path, ignores `$PWD`, and has no `chdir` counterpart.
 
 ---
 

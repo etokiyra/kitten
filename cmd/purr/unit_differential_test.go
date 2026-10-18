@@ -789,6 +789,7 @@ fn main() {
     try_remove("e");
     try_list_directory("f");
     try_run("/bin/true", new string[0]);
+    try_current_directory();
 }
 `,
 	}, {
@@ -853,6 +854,38 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_current_directory with CurrentDirectoryResult",
+		root: `fn main() {
+    match (try_current_directory()) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "direct CurrentDirectoryResult construction",
+		root: `fn main() {
+    try_current_directory();
+    CurrentDirectoryResult ok = CurrentDirectoryResult.Ok { path = "/x" };
+    CurrentDirectoryResult failed = CurrentDirectoryResult.Failed { message = "m" };
+    match (ok) { Ok(path) { print(path); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "try_current_directory from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_current_directory()));
+}
+`,
+		imported: `public fn classify(CurrentDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+`,
+	}, {
 		description: "a shadowed try_write_file still emits the prelude helper",
 		root: `fn try_write_file(string path, string text) -> int {
     return 1;
@@ -868,6 +901,15 @@ fn main() {
 }
 fn main() {
     print(try_run("x", new string[0]));
+}
+`,
+	}, {
+		description: "a shadowed try_current_directory still emits the prelude helper",
+		root: `fn try_current_directory() -> int {
+    return 1;
+}
+fn main() {
+    print(try_current_directory());
 }
 `,
 	}, {

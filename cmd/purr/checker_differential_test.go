@@ -384,6 +384,38 @@ fn main() {
     try_run("/bin/true", new string[0]);
 }
 `)
+	add("try_current_directory and CurrentDirectoryResult", `fn describe(CurrentDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    CurrentDirectoryResult direct_ok = CurrentDirectoryResult.Ok { path = "/x" };
+    CurrentDirectoryResult direct_failed = CurrentDirectoryResult.Failed { message = "m" };
+    print(describe(try_current_directory()));
+    print(describe(direct_ok), describe(direct_failed));
+}
+`)
+	add("try_current_directory only", `fn main() {
+    match (try_current_directory()) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_run with try_current_directory", `fn main() {
+    try_run("/bin/true", new string[0]);
+    try_current_directory();
+}
+`)
+	add("shadowed try_current_directory still injects its prelude", `fn try_current_directory() -> int {
+    return 1;
+}
+fn main() {
+    print(try_current_directory());
+}
+`)
 	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
     return 1;
 }
@@ -632,6 +664,14 @@ fn main() {
 		"fn f() { try_run(1, new string[0]); }\n",
 		"fn f() { try_run(\"/bin/true\", \"x\"); }\n",
 		"fn f() { try_run(\"/bin/true\", new int[0]); }\n",
+		"fn f() { match (try_current_directory()) { Ok(path) { } } }\n",
+		"fn f() { try_current_directory(1); }\n",
+		"fn f() { try_current_directory(\"x\"); }\n",
+		"fn f() { try_current_directory(1, 2); }\n",
+		"fn CurrentDirectoryResult() {}\n",
+		"struct CurrentDirectoryResult {}\n",
+		"enum CurrentDirectoryResult { A }\n",
+		"union CurrentDirectoryResult { A }\n",
 		"fn RunResult() {}\n",
 		"struct RunResult {}\n",
 		"enum RunResult { A }\n",
@@ -809,6 +849,17 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_current_directory from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_current_directory()));
+}
+`, `public fn classify(CurrentDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
     }
 }
 `)

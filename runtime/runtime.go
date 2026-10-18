@@ -124,6 +124,9 @@ const (
 	// TryRunFunction launches a program and reports its status or start error.
 	TryRunFunction = "ktn_rt_try_run"
 
+	// TryCurrentDirectoryFunction returns the absolute current directory.
+	TryCurrentDirectoryFunction = "ktn_rt_try_current_directory"
+
 	// StringToBytesFunction returns a string's bytes as a byte array.
 	StringToBytesFunction = "ktn_rt_string_to_bytes"
 

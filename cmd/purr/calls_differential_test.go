@@ -320,6 +320,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "current directory result through call arguments",
+		root: `fn inspect(CurrentDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(inspect(try_current_directory()));
+}
+`,
+	}, {
 		description: "run result through call arguments",
 		root: `fn inspect(RunResult result) -> int {
     match (result) {

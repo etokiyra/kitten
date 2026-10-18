@@ -78,6 +78,9 @@ const (
 	// BuiltinTryRun launches a process and returns its status.
 	BuiltinTryRun
 
+	// BuiltinTryCurrentDirectory returns the absolute current directory.
+	BuiltinTryCurrentDirectory
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 

@@ -204,6 +204,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "TryListDirectory"
 	case checker.BuiltinTryRun:
 		return "TryRun"
+	case checker.BuiltinTryCurrentDirectory:
+		return "TryCurrentDirectory"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

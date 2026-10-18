@@ -792,6 +792,9 @@ fn call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] a
     if (builtin == BuiltinKind.TryRun) {
         return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_run", 2);
     }
+    if (builtin == BuiltinKind.TryCurrentDirectory) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_current_directory", 0);
+    }
     if (builtin == BuiltinKind.IntFromByte) {
         return int_from_byte_expression(context, callee, arguments, argument_count);
     }

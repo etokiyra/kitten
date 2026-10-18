@@ -472,6 +472,15 @@ bool ktn_rt_try_run(const ktn_string *program,
                     const ktn_string **message);
 
 /*
+ * Returns the process's absolute current working directory as a fresh
+ * GC-managed string. It uses getcwd, ignores PWD, and grows the buffer on
+ * ERANGE. On failure it stores a Go-compatible "getwd: <reason>" message and
+ * returns false.
+ */
+bool ktn_rt_try_current_directory(const ktn_string **path,
+                                  const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

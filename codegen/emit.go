@@ -690,6 +690,8 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		return g.preludeCall(expression, "try_list_directory", 1)
 	case checker.BuiltinTryRun:
 		return g.preludeCall(expression, "try_run", 2)
+	case checker.BuiltinTryCurrentDirectory:
+		return g.preludeCall(expression, "try_current_directory", 0)
 	case checker.BuiltinIntFromByte:
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {

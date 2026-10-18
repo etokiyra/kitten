@@ -26,12 +26,13 @@ public struct PreludeUses {
     bool remove;
     bool list_directory;
     bool run;
+    bool current_directory;
 }
 
 // prelude_uses_any reports whether any prelude built-in is used.
 public fn prelude_uses_any(PreludeUses uses) -> bool {
     return uses.read_file || uses.write_file || uses.write_bytes ||
-        uses.create_directory || uses.remove || uses.list_directory || uses.run;
+        uses.create_directory || uses.remove || uses.list_directory || uses.run || uses.current_directory;
 }
 
 // read_file_result_prelude, file_result_prelude, and
@@ -53,6 +54,10 @@ public fn run_result_prelude() -> string {
     return "public union RunResult {\n    Ok { int status; }\n    Failed { string message; }\n}\n";
 }
 
+public fn current_directory_result_prelude() -> string {
+    return "public union CurrentDirectoryResult {\n    Ok { string path; }\n    Failed { string message; }\n}\n";
+}
+
 // prelude_source assembles the fixed source in the same order and with the same
 // subset rule as the Go checker.
 public fn prelude_source(PreludeUses uses) -> string {
@@ -69,10 +74,13 @@ public fn prelude_source(PreludeUses uses) -> string {
     if (uses.run) {
         source = source + run_result_prelude();
     }
+    if (uses.current_directory) {
+        source = source + current_directory_result_prelude();
+    }
     return source;
 }
 
-// prelude_uses scans every module for syntactic calls to the seven prelude
+// prelude_uses scans every module for syntactic calls to the eight prelude
 // built-ins. A user function with one of these names may inject the prelude
 // unused, but helpers are non-static and no semantic rule depends on it.
 public fn prelude_uses(Module[] modules, int module_count) -> PreludeUses {
@@ -83,7 +91,8 @@ public fn prelude_uses(Module[] modules, int module_count) -> PreludeUses {
         create_directory = uses_callee(modules, module_count, "try_create_directory"),
         remove = uses_callee(modules, module_count, "try_remove"),
         list_directory = uses_callee(modules, module_count, "try_list_directory"),
-        run = uses_callee(modules, module_count, "try_run")
+        run = uses_callee(modules, module_count, "try_run"),
+        current_directory = uses_callee(modules, module_count, "try_current_directory")
     };
 }
 
@@ -151,6 +160,11 @@ fn string_string_array_parameters() -> Type[] {
     Type[] types = new Type[2];
     types[0] = primitive_type(TypeKind.String, "string");
     types[1] = array_type(primitive_type(TypeKind.String, "string"));
+    return types;
+}
+
+fn no_parameters() -> Type[] {
+    Type[] types = new Type[0];
     return types;
 }
 
@@ -227,6 +241,14 @@ public fn register_prelude_builtins(Checker checker, PreludeUses uses) -> StepRe
         Function function = prelude_builtin("try_run", string_string_array_parameters(), checker.public_types["RunResult"], BuiltinKind.TryRun);
         checker.builtins["try_run"] = function;
         checker.model.builtins["try_run"] = function;
+    }
+    if (uses.current_directory) {
+        if (!has(checker.public_types, "CurrentDirectoryResult")) {
+            return missing_prelude_type("CurrentDirectoryResult");
+        }
+        Function function = prelude_builtin("try_current_directory", no_parameters(), checker.public_types["CurrentDirectoryResult"], BuiltinKind.TryCurrentDirectory);
+        checker.builtins["try_current_directory"] = function;
+        checker.model.builtins["try_current_directory"] = function;
     }
     return StepResult.Ok;
 }

@@ -75,6 +75,7 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         TryRemove { return "TryRemove"; }
         TryListDirectory { return "TryListDirectory"; }
         TryRun { return "TryRun"; }
+        TryCurrentDirectory { return "TryCurrentDirectory"; }
         MapHas { return "MapHas"; }
         Substring { return "Substring"; }
         IntFromByte { return "IntFromByte"; }

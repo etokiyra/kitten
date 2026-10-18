@@ -36,6 +36,12 @@ const (
     Failed { string message; }
 }
 `
+
+	currentDirectoryResultPrelude = `public union CurrentDirectoryResult {
+    Ok { string path; }
+    Failed { string message; }
+}
+`
 )
 
 // preludeModulePath identifies the synthetic module. A user source file cannot
@@ -45,19 +51,20 @@ const preludeModulePath = "<prelude>"
 
 // preludeUses records which prelude built-ins a program calls syntactically.
 type preludeUses struct {
-	readFile        bool
-	writeFile       bool
-	writeBytes      bool
-	createDirectory bool
-	remove          bool
-	listDirectory   bool
-	run             bool
+	readFile         bool
+	writeFile        bool
+	writeBytes       bool
+	createDirectory  bool
+	remove           bool
+	listDirectory    bool
+	run              bool
+	currentDirectory bool
 }
 
 // any reports whether any prelude built-in is used.
 func (u preludeUses) any() bool {
 	return u.readFile || u.writeFile || u.writeBytes || u.createDirectory ||
-		u.remove || u.listDirectory || u.run
+		u.remove || u.listDirectory || u.run || u.currentDirectory
 }
 
 // preludeSource assembles the fixed prelude source for the used built-ins. The
@@ -77,6 +84,9 @@ func preludeSource(uses preludeUses) string {
 	if uses.run {
 		source.WriteString(runResultPrelude)
 	}
+	if uses.currentDirectory {
+		source.WriteString(currentDirectoryResultPrelude)
+	}
 	return source.String()
 }
 
@@ -94,19 +104,20 @@ func parsePrelude(source string) (*parser.Module, error) {
 	return &parser.Module{Path: preludeModulePath, Program: program}, nil
 }
 
-// scanPreludeUses scans every module for syntactic calls to the seven prelude
+// scanPreludeUses scans every module for syntactic calls to the eight prelude
 // built-ins. It is deliberately syntactic: a user function with one of these
 // names may cause the prelude to be injected unused, but helpers are non-static
 // and no semantic rule depends on the false positive.
 func scanPreludeUses(modules []*parser.Module) preludeUses {
 	return preludeUses{
-		readFile:        usesCallee(modules, "try_read_file"),
-		writeFile:       usesCallee(modules, "try_write_file"),
-		writeBytes:      usesCallee(modules, "try_write_bytes"),
-		createDirectory: usesCallee(modules, "try_create_directory"),
-		remove:          usesCallee(modules, "try_remove"),
-		listDirectory:   usesCallee(modules, "try_list_directory"),
-		run:             usesCallee(modules, "try_run"),
+		readFile:         usesCallee(modules, "try_read_file"),
+		writeFile:        usesCallee(modules, "try_write_file"),
+		writeBytes:       usesCallee(modules, "try_write_bytes"),
+		createDirectory:  usesCallee(modules, "try_create_directory"),
+		remove:           usesCallee(modules, "try_remove"),
+		listDirectory:    usesCallee(modules, "try_list_directory"),
+		run:              usesCallee(modules, "try_run"),
+		currentDirectory: usesCallee(modules, "try_current_directory"),
 	}
 }
 
@@ -267,10 +278,11 @@ func declarationName(declaration parser.Decl) (string, parser.Position, bool) {
 // preludeReservedNames are reserved against every user top-level declaration,
 // whether or not the corresponding prelude union is introduced.
 var preludeReservedNames = map[string]bool{
-	"ReadFileResult":      true,
-	"FileResult":          true,
-	"ListDirectoryResult": true,
-	"RunResult":           true,
+	"ReadFileResult":         true,
+	"FileResult":             true,
+	"ListDirectoryResult":    true,
+	"RunResult":              true,
+	"CurrentDirectoryResult": true,
 }
 
 // registerPreludeBuiltins adds the built-ins whose calls triggered the prelude.
@@ -292,6 +304,7 @@ func (c *checker) registerPreludeBuiltins(uses preludeUses) error {
 		{uses.remove, "try_remove", []*Type{StringType}, "FileResult", BuiltinTryRemove},
 		{uses.listDirectory, "try_list_directory", []*Type{StringType}, "ListDirectoryResult", BuiltinTryListDirectory},
 		{uses.run, "try_run", []*Type{StringType, c.arrayType(StringType)}, "RunResult", BuiltinTryRun},
+		{uses.currentDirectory, "try_current_directory", []*Type{}, "CurrentDirectoryResult", BuiltinTryCurrentDirectory},
 	}
 	for _, entry := range registrations {
 		if !entry.used {

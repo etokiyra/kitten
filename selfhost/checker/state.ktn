@@ -273,6 +273,7 @@ public enum BuiltinKind {
     TryRemove,
     TryListDirectory,
     TryRun,
+    TryCurrentDirectory,
     MapHas,
     Substring,
     IntFromByte,

@@ -486,6 +486,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "CurrentDirectoryResult parameters",
+		root: `fn describe(CurrentDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(describe(try_current_directory()));
+}
+`,
+	}, {
 		description: "RunResult parameters",
 		root: `fn describe(RunResult result) -> int {
     match (result) {
