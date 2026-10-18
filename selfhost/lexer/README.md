@@ -4,7 +4,7 @@ This directory holds the first substantial component of the eventual self-hostin
 compiler: a lexer written in Kitten, compiled by the Go bootstrap compiler, and
 compared byte-for-byte against the Go reference lexer.
 
-It is **not** the production front end. `kitten build` and `kitten run` still use
+It is **not** the production front end. `purr build` and `purr run` still use
 the Go lexer in `lexer/`, which remains authoritative. Nothing here changes the
 language, and no language feature was added to make it easier.
 
@@ -22,9 +22,9 @@ language, and no language feature was added to make it easier.
 # From the repository root. The driver reads the fixed relative path
 # "input.txt", so the working directory selects the input.
 printf 'fn main() {\n    int x = 42 + 3.5;\n}\n' > input.txt
-go build -o /tmp/kitten ./cmd/kitten
-/tmp/kitten build selfhost/lexer/main.ktn -o /tmp/kitten-lexer
-/tmp/kitten-lexer   # prints one "token ..." line per token
+go build -o /tmp/purr ./cmd/purr
+/tmp/purr build selfhost/lexer/main.ktn -o /tmp/purr-lexer
+/tmp/purr-lexer   # prints one "token ..." line per token
 ```
 
 Output format, one line per token:
@@ -79,11 +79,11 @@ token-or-error outcome of a single scan step.
 
 ## Differential testing
 
-`cmd/kitten/differential_test.go` builds the Kitten lexer once and runs it over a
+`cmd/purr/differential_test.go` builds the Kitten lexer once and runs it over a
 corpus of 772 inputs, comparing the result with the Go lexer:
 
 ```sh
-go test -count=1 -v -run TestKittenLexer ./cmd/kitten/
+go test -count=1 -v -run TestKittenLexer ./cmd/purr/
 ```
 
 The corpus covers every keyword, type name, and boolean literal; identifiers and
@@ -139,7 +139,7 @@ its byte length next to its bytes (SPEC.md 20.6), so the scanner's work is
 plus the per-token cost of allocating a token, a scan result, and a lexeme, which
 is also linear in the number of tokens. Measured with `TestKittenLexerScaling`,
 which logs its numbers (`go test -count=1 -v -run TestKittenLexerScaling
-./cmd/kitten/`), on the development machine and with process start-up (about
+./cmd/purr/`), on the development machine and with process start-up (about
 1.3 ms) subtracted:
 
 | Source | Tokens | Go lexer | Kitten lexer | Growth for a 4× input |

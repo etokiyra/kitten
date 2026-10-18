@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//     kitten-selfhost <absolute-source.ktn>
+//     purr-selfhost <absolute-source.ktn>
 //
 // It loads the source and its imports with the Kitten-written loader, checks them
 // with the Kitten-written checker, emits the complete C translation unit with the
@@ -10,7 +10,7 @@
 // to standard error. Exit status is 0 on success, 1 for a load, check, or
 // generation failure, and 2 for a usage error.
 //
-// The wrapper (kittenc.sh) makes the source path absolute, writes the emitted C
+// The wrapper (purr-bootstrap.sh) makes the source path absolute, writes the emitted C
 // to a temporary file, copies the runtime, and invokes the C compiler. The
 // driver itself parses no options and invokes no other process.
 //
@@ -77,8 +77,8 @@ fn report_generate_error(string root, GenerateError error) {
 
 // usage_error reports a driver invocation error and exits with status 2.
 fn usage_error(string message) {
-    eprint("kitten-selfhost: " + message);
-    eprint("Usage: kitten-selfhost <absolute-source.ktn>");
+    eprint("purr-selfhost: " + message);
+    eprint("Usage: purr-selfhost <absolute-source.ktn>");
     exit(2);
 }
 

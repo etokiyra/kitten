@@ -54,8 +54,8 @@ func buildStageThroughWrapper(t *testing.T, wrapper, driver, driverSource, outpu
 	t.Helper()
 
 	environment := []string{
-		"KITTENC_DRIVER=" + driver,
-		"KITTEN_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
+		"PURR_BOOTSTRAP_DRIVER=" + driver,
+		"PURR_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
 	}
 	result := runExternal(t, wrapper, []string{"build", driverSource, "-o", output}, repoPath(t, "."), environment)
 	if result.status != 0 || result.stderr != "" {
@@ -216,8 +216,8 @@ func TestKittenFixpoint(t *testing.T) {
 	var goStdout, goStderr bytes.Buffer
 	goStatus := run(nil, &goStdout, &goStderr)
 	wrapperResult := runExternal(t, wrapper, nil, errorDirectory, []string{
-		"KITTENC_DRIVER=" + stage2,
-		"KITTEN_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
+		"PURR_BOOTSTRAP_DRIVER=" + stage2,
+		"PURR_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
 	})
 	if wrapperResult.status != goStatus || wrapperResult.stderr != goStderr.String() || wrapperResult.stdout != goStdout.String() {
 		t.Errorf("usage: wrapper staged with stage 2 differs from the Go CLI\nstatus %d vs %d\nstderr %q\nwant %q",

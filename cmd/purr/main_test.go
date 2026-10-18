@@ -35,7 +35,7 @@ var (
 )
 
 func probeToolchain() error {
-	directory, err := os.MkdirTemp("", "kitten-probe-")
+	directory, err := os.MkdirTemp("", "purr-probe-")
 	if err != nil {
 		return err
 	}
@@ -717,7 +717,7 @@ func temporaryBuildDirectories(t *testing.T) []string {
 	}
 	var names []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "kitten-run-") || strings.HasPrefix(entry.Name(), "kitten-build-") {
+		if strings.HasPrefix(entry.Name(), "purr-run-") || strings.HasPrefix(entry.Name(), "purr-build-") {
 			names = append(names, entry.Name())
 		}
 	}

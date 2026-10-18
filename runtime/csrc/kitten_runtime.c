@@ -54,7 +54,7 @@ static void ktn_rt_flush_streams(void) {
  */
 void ktn_rt_fail(const char *message) {
     ktn_rt_flush_streams();
-    fputs("kitten: ", stderr);
+    fputs("purr: ", stderr);
     fputs(message, stderr);
     fputc('\n', stderr);
     ktn_rt_exit(1);

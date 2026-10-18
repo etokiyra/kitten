@@ -19,11 +19,11 @@ being built one at a time:
 
 A module loader now exists under `selfhost/loader`, and the `selfhost/loadunit.ktn`
 driver uses it to feed this generator. `selfhost/driver.ktn` and the temporary
-`selfhost/driver/kittenc.sh` wrapper use the same path to write C to stdout and
+`selfhost/driver/purr-bootstrap.sh` wrapper use the same path to write C to stdout and
 build a native executable; they are test infrastructure, not the production CLI.
 
 The reference is the Go generator in `codegen/`, which remains the production
-backend. `kitten build` and `kitten run` are unchanged and do not use anything
+backend. `purr build` and `purr run` are unchanged and do not use anything
 here.
 
 ## Files
@@ -52,23 +52,23 @@ here.
   definitions those bodies produced.
 - `selfhost/unit.ktn` — the unit driver: it reads two modules, runs the Kitten
   front end, and prints the complete C translation unit.
-- `cmd/kitten/codegen_differential_test.go`,
-  `cmd/kitten/declarations_differential_test.go`,
-  `cmd/kitten/expressions_differential_test.go`,
-  `cmd/kitten/literals_differential_test.go`,
-  `cmd/kitten/functions_differential_test.go`, and
-  `cmd/kitten/unit_differential_test.go` — the differential harnesses.
+- `cmd/purr/codegen_differential_test.go`,
+  `cmd/purr/declarations_differential_test.go`,
+  `cmd/purr/expressions_differential_test.go`,
+  `cmd/purr/literals_differential_test.go`,
+  `cmd/purr/functions_differential_test.go`, and
+  `cmd/purr/unit_differential_test.go` — the differential harnesses.
 
 ## Building and running
 
 ```sh
 # From the repository root. The drivers read fixed relative paths, so the
 # working directory selects the input.
-kitten build selfhost/codegen.ktn -o /tmp/codegen-probe
-kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
-kitten build selfhost/expressions.ktn -o /tmp/expressions-probe
-kitten build selfhost/functions.ktn -o /tmp/functions-probe
-kitten build selfhost/unit.ktn -o /tmp/unit-probe
+purr build selfhost/codegen.ktn -o /tmp/codegen-probe
+purr build selfhost/declarations.ktn -o /tmp/declarations-probe
+purr build selfhost/expressions.ktn -o /tmp/expressions-probe
+purr build selfhost/functions.ktn -o /tmp/functions-probe
+purr build selfhost/unit.ktn -o /tmp/unit-probe
 cd /tmp/example && printf 'function 0 main\nescape "a\\tb"\n' > input.txt && /tmp/codegen-probe
 ```
 
@@ -273,7 +273,7 @@ a short section.
 
 ```sh
 # From the repository root.
-kitten build selfhost/declarations.ktn -o /tmp/declarations-probe
+purr build selfhost/declarations.ktn -o /tmp/declarations-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf 'struct S {\n    int a;\n}\nfn main() {\n}\n' > input.txt
 printf '' > input2.txt
@@ -397,7 +397,7 @@ string.
 
 ```sh
 # From the repository root.
-kitten build selfhost/expressions.ktn -o /tmp/expressions-probe
+purr build selfhost/expressions.ktn -o /tmp/expressions-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf 'fn main() {\n    int a = 1;\n    print(a + 2);\n}\n' > input.txt
 printf '' > input2.txt
@@ -558,8 +558,8 @@ report an overflow instead of the body the reference produces.
 
 ```sh
 # From the repository root.
-kitten build selfhost/functions.ktn -o /tmp/functions-probe
-kitten build selfhost/unit.ktn -o /tmp/unit-probe
+purr build selfhost/functions.ktn -o /tmp/functions-probe
+purr build selfhost/unit.ktn -o /tmp/unit-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf 'fn count(int limit) -> int {\n    int index = 0;\n    while (index < limit) {\n        index++;\n    }\n    return index;\n}\nfn main() {\n}\n' > input.txt
 printf '' > input2.txt
@@ -629,7 +629,7 @@ statement emitter's counted line bound is what makes one pass enough.
 
 ```sh
 # From the repository root.
-kitten build selfhost/unit.ktn -o /tmp/unit-probe
+purr build selfhost/unit.ktn -o /tmp/unit-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf 'fn main() {\n}\n' > input.txt
 printf '' > input2.txt
@@ -681,7 +681,7 @@ sixteen times the input costs more than forty times as much.
 
 ## Differential testing
 
-`cmd/kitten/codegen_differential_test.go` builds the probe once and compares it
+`cmd/purr/codegen_differential_test.go` builds the probe once and compares it
 with the reference generator in `codegen/`.
 
 The probe's results are compared with values the reference generator itself
@@ -708,7 +708,7 @@ runes and would replace an invalid byte before the literal is spelled out. That 
 the lexer's documented byte-oriented difference, and it is covered by the lexer
 harness rather than here.
 
-Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenCodegen ./cmd/purr/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
@@ -718,7 +718,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/kitten/` reports:
   overflow runs, including a partial line that never ends.
 - Linear accumulation, with the growth of each step logged.
 
-`cmd/kitten/declarations_differential_test.go` compares the declaration section
+`cmd/purr/declarations_differential_test.go` compares the declaration section
 itself. The reference emits the whole translation unit, so the harness separates
 the section structurally rather than by offset: the section ends at whichever
 comes first of a pooled literal declaration, which is the only line beginning
@@ -727,7 +727,7 @@ prototype with ` {` in place of `;`. Neither boundary depends on a string litera
 being present, and neither can be confused with a constructor, which is named
 `ktn_new_`.
 
-Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/purr/` reports:
 
 - 16 targeted programs whose sections match byte for byte, covering primitives,
   strings, arrays, maps, structs, structs referring to later structs, enums,
@@ -748,7 +748,7 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/kitten/` reports:
 - Representative sections compile with `-std=c11 -Wall -Wextra` and produce no
   diagnostics.
 
-`cmd/kitten/expressions_differential_test.go` compares expression renderings. The
+`cmd/purr/expressions_differential_test.go` compares expression renderings. The
 probe prints one line per expression node in emission order, and the harness walks
 the reference AST in that same order and pairs the two lists line by line, so a
 wrong node, a wrong order, a wrong position, or a wrong kind cannot pass. A
@@ -757,7 +757,7 @@ extractable position: a print argument is the balanced parenthesized text after 
 print helper's opening parenthesis, in emission order. Every kind is implemented,
 so the emitter's failure message has no remaining kind to describe.
 
-Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenExpressions ./cmd/purr/` reports:
 
 - 200 of 1264 expected lines of the 26 targeted programs compared byte for byte,
   covering every literal kind, both booleans, every unary and binary operator,
@@ -779,7 +779,7 @@ Running `go test -count=1 -v -run TestKittenExpressions ./cmd/kitten/` reports:
   lexer's tokens.
 - The nested-expression measurements in the section above.
 
-`cmd/kitten/literals_differential_test.go` compares the pool itself. The pool
+`cmd/purr/literals_differential_test.go` compares the pool itself. The pool
 appears in the reference's own output between the declaration sections and the
 first function body, and the harness extracts exactly those lines, so the
 comparison is a byte-for-byte comparison of the declarations rather than of a
@@ -787,7 +787,7 @@ reconstruction. Each case also compares the expression lines that produced the
 pool, so a pooled symbol cannot be right while the expression referring to it is
 wrong.
 
-Running `go test -count=1 -v -run TestKittenLiterals ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenLiterals ./cmd/purr/` reports:
 
 - 15 programs whose pools match byte for byte, over **36 pooled entries**: one
   literal, empty strings, multiple distinct strings, a literal repeated across
@@ -807,14 +807,14 @@ Running `go test -count=1 -v -run TestKittenLiterals ./cmd/kitten/` reports:
 - Interning measurements: 100, 200, and 400 literals cost 5 ms, 8 ms, and 18 ms,
   which is linear in the number of literals.
 
-`cmd/kitten/functions_differential_test.go` compares whole function definitions.
+`cmd/purr/functions_differential_test.go` compares whole function definitions.
 The probe renders the pool and the bodies; the harness extracts the same two
 regions from the reference's own output - the pool between the declaration sections
 and the first definition, and the definitions from there to the entry point - and
 compares each byte for byte. A body that cannot be rendered fails the comparison
 rather than being counted as a match.
 
-Running `go test -count=1 -v -run TestKittenFunctions ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenFunctions ./cmd/purr/` reports:
 
 - 16 targeted programs over **46 functions and 438 lines** compared byte for byte:
   empty bodies, locals with and without initializers, expression statements,
@@ -838,13 +838,13 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/kitten/` reports:
 - The generated definitions, compiled and linked against the runtime and run under
   both GCC and Clang, print the values the source implies.
 
-`cmd/kitten/unit_differential_test.go` compares whole translation units, so one
+`cmd/purr/unit_differential_test.go` compares whole translation units, so one
 comparison per program covers the header, the declaration sections, the pool, the
 bodies, and the entry point at once, and no expected output is hand-maintained. A
 program the reference rejects is compared through its error instead, rendered in the
 driver's shape including the file, which only the entry point rule sets.
 
-Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenUnit ./cmd/purr/` reports:
 
 - **29 whole units identical over 1104 lines** in the targeted corpus: a minimal
   `main`; an `eprint` unit; an `exit` unit; a `main` that runs a loop, a string
@@ -876,11 +876,11 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/kitten/` reports:
   stderr, and exiting with status 0. One of them checks that a compound assignment
   to an element whose index is a call evaluates that call once.
 
-`cmd/kitten/calls_differential_test.go` compares whole translation units for programs
+`cmd/purr/calls_differential_test.go` compares whole translation units for programs
 whose expressions are calls, and, because a program can now print, compiles, links,
 and runs both generated programs and compares what they write.
 
-Running `go test -count=1 -v -run TestKittenCalls ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenCalls ./cmd/purr/` reports:
 
 - **19 whole units identical over 582 lines**: `print` and `eprint` with every
   primitive type and with several at once; `exit` with an int expression; user
@@ -908,13 +908,13 @@ Running `go test -count=1 -v -run TestKittenCalls ./cmd/kitten/` reports:
 - Deterministic generation across repeated runs and across a different program in
   between, and nested calls of depth 25, 50, and 100 costing 3, 4, and 6 ms.
 
-`cmd/kitten/fixtures_differential_test.go` puts the fixtures under `tests/` through
+`cmd/purr/fixtures_differential_test.go` puts the fixtures under `tests/` through
 the Kitten backend end to end. Each fixture is handed to the unit driver: a fixture
 the backend generates must match the reference's unit byte for byte and, compiled
 against the real runtime and run under the environment's C compiler, print exactly
 its `.expected` file.
 
-Running `go test -count=1 -v -run TestKittenFixtures ./cmd/kitten/` reports:
+Running `go test -count=1 -v -run TestKittenFixtures ./cmd/purr/` reports:
 
 - **All 9 fixtures** generated, compiled, run, and matching their expected output:
   `hello`, `fizzbuzz`, `math`, `room`, `strings`, `arrays`, `variants`, `maps`, and
@@ -925,7 +925,7 @@ Running `go test -count=1 -v -run TestKittenFixtures ./cmd/kitten/` reports:
 ## What is deliberately not here
 
 - **Production integration of the loader.** The Kitten-written loader lives under
-  `selfhost/loader` and discovers imports for an absolute root path, but `kitten
+  `selfhost/loader` and discovers imports for an absolute root path, but `purr
   build` still uses the Go loader. Missing and unreadable files remain fatal
   through `read_file` until 4E.2 decides recoverable file input.
 - **Writing the unit anywhere but standard output.** The unit driver prints the C;
@@ -938,7 +938,7 @@ Kitten-written loader discovers imports for an absolute root path, but a full
 compiler still needs a driver that writes and builds, recoverable file input for
 missing-file diagnostics, and a bootstrap in which the Kitten-written compiler
 compiles its own source. Until then the Go compiler remains the bootstrap
-reference and the only pipeline `kitten build` and `kitten run` use: the lexer, the
+reference and the only pipeline `purr build` and `purr run` use: the lexer, the
 parser, the checker, and the generator's helper, declaration, expression,
 literal-pool, statement, and unit layers are Kitten, and the loader core is Kitten
 too, while the production loader integration, the pipeline that writes and

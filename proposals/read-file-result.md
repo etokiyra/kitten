@@ -530,9 +530,9 @@ documented, not introduced by this design.
    not fail on a feature it does not implement.
 4. Acceptance:
    - `go test -count=1 ./checker ./codegen ./runtime`
-   - `go test -count=1 ./cmd/kitten -run 'TestTryReadFile|TestReadFileResult'`
+   - `go test -count=1 ./cmd/purr -run 'TestTryReadFile|TestReadFileResult'`
    - a Go-built program exercising Ok/Failed, checked against stdout/stderr/status;
-   - `gofmt -l .`, `git diff --check`, `go vet ./...`, `go build ./cmd/kitten`.
+   - `gofmt -l .`, `git diff --check`, `go vet ./...`, `go build ./cmd/purr`.
 
 ### 5.4c — Kitten pipeline and differential parity
 
@@ -544,7 +544,7 @@ documented, not introduced by this design.
    and directory cases, comparing stdout, stderr, exit status, and the exact
    `Failed.message`.
 4. Acceptance:
-   - `go test -count=1 -run 'TestKitten(Checker|Expressions|Calls|Unit|Semantics)' ./cmd/kitten`
+   - `go test -count=1 -run 'TestKitten(Checker|Expressions|Calls|Unit|Semantics)' ./cmd/purr`
    - `go test -count=1 ./...`, `CC=gcc go test -count=1 ./...`,
      `CC=clang go test -count=1 ./...` (the full suite may be run once at the end
      of this split)

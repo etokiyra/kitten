@@ -57,7 +57,7 @@ The proposal is written against the current tree at
 
 ### 2.1 End-to-end behavior
 
-`cmd/kitten/main.go`:
+`cmd/purr/main.go`:
 
 1. Reads `os.Args[1:]` and dispatches `help`, `build`, or `run`
    (`main.go:57-83`). No arguments, an unknown command, a missing source, a
@@ -186,7 +186,7 @@ amended.
 ### 3.1 Program arguments: `argv()`
 
 **Need.** The current Go driver takes the source path from `os.Args`
-(`cmd/kitten/main.go:57-83`, `98-128`). The Kitten drivers instead read
+(`cmd/purr/main.go:57-83`, `98-128`). The Kitten drivers instead read
 `input.txt` (`selfhost/load.ktn`, `selfhost/loadunit.ktn`), which cannot become a
 real compiler CLI without a wrapper renaming or copying inputs. A Kitten
 compiler must accept at least the root source path, and the eventual `run` mode
@@ -258,10 +258,10 @@ is not a real compiler CLI and forces the wrapper to stage input.
 ### 3.2 Writing to stderr: `eprint(...)`
 
 **Need.** The Go driver puts usage, loader/checker/codegen diagnostics, and C
-compiler output on stderr (`cmd/kitten/main.go:64-83`, `304-331`). The Kitten
+compiler output on stderr (`cmd/purr/main.go:64-83`, `304-331`). The Kitten
 driver prints everything with `print`, which is stdout. If diagnostics share
 stdout with generated C, a wrapper cannot separate a translation unit from an
-error message. `kitten run` also needs to keep the compiled program's stdout
+error message. `purr run` also needs to keep the compiled program's stdout
 clean. SPEC.md Section 16 currently records the absence of stderr access
 (`SPEC.md:597-600`), and Section 25.4 documents it for the lexer driver.
 
@@ -308,7 +308,7 @@ numeric formatting in Kitten, which the language does not have. A string-only
 
 ### 3.3 Program-selected exit status: `exit(status)`
 
-**Need.** The Go driver returns 0/1/2 (`cmd/kitten/main.go:50-55`) and `run`
+**Need.** The Go driver returns 0/1/2 (`cmd/purr/main.go:50-55`) and `run`
 propagates the child's status (`main.go:192-199`). Without a language-level
 exit, a Kitten compiler can only succeed or die through a runtime fatal error;
 a wrapper cannot distinguish "usage error", "source error", and "success" in
@@ -488,13 +488,13 @@ out that plain `strerror` is not sufficient for byte parity.
 The recommended architecture is:
 
 ```text
-kitten-selfhost <absolute-root.ktn> > program.c
+purr-selfhost <absolute-root.ktn> > program.c
         # stdout: one C translation unit, stderr: diagnostics
         # exit status: 0 success, nonzero failure
 
 wrapper:
     create temp directory
-    run kitten-selfhost > temp/program.c
+    run purr-selfhost > temp/program.c
     copy kitten_runtime.c and kitten_runtime.h into temp/
     run cc ... temp/program.c temp/kitten_runtime.c -o <output>
     for "run": execute <output>, propagate stdin/stdout/stderr/status
@@ -513,7 +513,7 @@ replace it once file writing and process launch exist.
   and makes interactive debugging slightly less direct.
 - The wrapper must create temp directories, copy runtime sources, discover the
   compiler, honor `CC`, obtain GC flags, and clean up. Those are real driver
-  behaviors today (`cmd/kitten/main.go:225-288`).
+  behaviors today (`cmd/purr/main.go:225-288`).
 - `build`/`run` semantics, `-o`, default output names, and C compiler
   diagnostics live in the wrapper, not in Kitten.
 - A shell wrapper is not portable to Windows and is not yet the `purr` tool.
@@ -595,11 +595,11 @@ own acceptance checks.
    - `selfhost/driver.ktn` reads `argv()`, requires an absolute root,
      loads/checks/emits, writes diagnostics with `eprint`, and uses `exit`; it
      does no file writing or C compiler invocation.
-   - `selfhost/driver/kittenc.sh` owns temp files, runtime copying, C compiler
+   - `selfhost/driver/purr-bootstrap.sh` owns temp files, runtime copying, C compiler
      discovery/`CC`/GC flags, output path, and run-status propagation.
    - Acceptance: the wrapper builds and runs every fixture and `tests/modules/`;
      the emitted C is byte-identical to the Go reference; the wrapper's
-     stdout/stderr/status match `kitten build`/`kitten run` for the corpus; the
+     stdout/stderr/status match `purr build`/`purr run` for the corpus; the
      wrapper itself contains no Go.
 
 6. **DONE — Fixpoint proof.**

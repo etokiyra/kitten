@@ -18,7 +18,8 @@ Project instructions for everyone (human or AI) working on Kitten.
    features exist, add a `.ktn` program and a matching `.expected` file under
    `tests/`, and compare the program's actual output against the expected output.
 5. Run `go test ./...` before completing a task. Also run `go vet ./...` and
-   `gofmt` (or `gofmt -l .`) when Go code changed.
+   `gofmt` (or `gofmt -l .`) when Go code changed. Build the CLI with
+   `go build ./cmd/purr` when the command or its packaged code changed.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
@@ -42,7 +43,7 @@ them to match buggy behavior.
    Conventional short names are fine for loop indices and local coordinates.
 10. Components written in Kitten for the eventual self-hosting compiler live
     under `selfhost/`. They are compiled and tested by the bootstrap compiler but
-    are not wired into `kitten build` or `kitten run`, which keep using the Go
+    are not wired into `purr build` or `purr run`, which keep using the Go
     implementation. Do not make the production pipeline depend on them without
     explicit authorization.
 
@@ -82,9 +83,9 @@ is **`purr`**. `purr` was chosen because the Kitty terminal already ships a
 `kitten` command, so a language tool named `kitten` would collide with it in
 `PATH`. The project manifest is `purr.toml` and the lockfile is `purr.lock`.
 
-17. Write new documentation against `purr`, not `kitten`. The compiler binary is
-    still built from `cmd/kitten` and installed as `kitten`; renaming it is a
-    separate, authorized change. Do not describe that rename as done until it is.
+17. Write documentation against `purr`. The compiler binary is built from
+    `cmd/purr` and installed as `purr`; the tool rename is done. The language
+    remains **Kitten** and source files remain `.ktn`.
 
 ## Current phase
 
@@ -92,7 +93,7 @@ Phase 1 delivered the project skeleton, the provisional specification, the
 example programs, and the lexer. Phase 2A delivered the parser and the abstract
 syntax tree. Phase 2B delivered semantic analysis and the type checker. Phase 2C
 delivered the C code generator, the C runtime, and native compilation through
-`kitten build` and `kitten run`. Phase 3A delivered dynamic strings:
+`purr build` and `purr run`. Phase 3A delivered dynamic strings:
 concatenation with `+` and `+=`, and content-based equality, over the existing
 NUL-terminated representation. Phase 3B delivered dynamic arrays: typed array
 declarations, `new Element[length]` creation, bounds-checked indexing,
@@ -106,21 +107,21 @@ table in the runtime. Phase 3F prepared for a Kitten-written lexer: string byte
 length, bounds-checked byte indexing, and byte ranges (`substring`). Phase 3G
 delivered the first real component written in Kitten: a lexer under
 `selfhost/lexer` that mirrors the Go reference lexer and is checked against it by
-a differential corpus of 772 inputs in `cmd/kitten`. Phase 3H gave strings a
+a differential corpus of 772 inputs in `cmd/purr`. Phase 3H gave strings a
 stored byte length alongside the bytes, so `length` and indexing are
 constant-time while the bytes stay NUL-terminated; the observable string
 semantics did not change, and the Kitten-written lexer now scans linearly. Phase
 4A added the next self-hosted component: a parser under `selfhost/parser`, driven
 by `selfhost/parse.ktn`, that reproduces the Go reference parser's grammar,
 precedence, tree, and diagnostics, and is checked against it by a differential
-corpus of 262 inputs in `cmd/kitten`. Phase 4B added a semantic checker under
+corpus of 262 inputs in `cmd/purr`. Phase 4B added a semantic checker under
 `selfhost/checker`, driven by `selfhost/check.ktn`, that reproduces the Go
 checker's passes, rules, and diagnostics. Phase 4C exposed the checker's resolved
 semantic model — the types, symbols, variants, and declarations a generator reads
 — for a future code generator. Phase 4D.1 began the C code generator written in
 Kitten: its C naming, C type mapping, string-literal escaping, and bounded output
 accumulation under `selfhost/codegen`, exposed by `selfhost/codegen.ktn` and
-checked against the Go generator in `cmd/kitten`. Phase 4D.2 added the declaration
+checked against the Go generator in `cmd/purr`. Phase 4D.2 added the declaration
 emitter under `selfhost/codegen/declarations.ktn`, driven by
 `selfhost/declarations.ktn`: it reproduces the nine sections the reference
 generator emits before any function body, byte for byte, and is checked against
@@ -175,7 +176,7 @@ both pipelines. Phase 5.3 added `exit(status)` and one shared flush path:
 it while keeping its message and status 1, and the runtime fixture checks stdout,
 stderr, and the exact status, including POSIX low-eight-bit behavior. Phase 5.6
 added the Kitten-written driver `selfhost/driver.ktn` and the temporary POSIX-sh
-wrapper `selfhost/driver/kittenc.sh`: the driver takes one absolute source path,
+wrapper `selfhost/driver/purr-bootstrap.sh`: the driver takes one absolute source path,
 emits byte-identical C on stdout, reports diagnostics on stderr, and uses exit
 statuses 0/1/2; the wrapper builds and runs fixtures and `tests/modules/` under
 GCC and Clang. The implementation order changed: `ReadFileResult`/`try_read_file`
@@ -189,10 +190,17 @@ stages; stage 2 also reproduces the Go reference for all nine fixtures and
 `tests/modules/`. The stage binaries were byte-identical in the measured run, but
 the claim rests on the C, not the binaries.
 
+Phase 6.0 renamed the command-line tool from `kitten` to `purr`: the source
+directory is `cmd/purr`, the built binary is `purr`, CLI text says `purr`, the
+temporary wrapper is `selfhost/driver/purr-bootstrap.sh` with
+`PURR_BOOTSTRAP_DRIVER` and `PURR_RUNTIME_DIR`, and tests, build commands, and
+documentation use the new name. The language remains **Kitten**, source files
+remain `.ktn`, and generated C, runtime file names, `ktn_` identifiers, and
+`#include "kitten_runtime.h"` are unchanged.
+
 Next candidates, none started: the postponed `ReadFileResult`/`try_read_file` and
-loader read-error parity (5.4/5.5); renaming the installed binary from `kitten` to
-`purr`; and a SPEC cleanup of Go/C-flavored wording. Native backend, standard
-library, and file writing remain unauthorized.
+loader read-error parity (5.4/5.5), and a SPEC cleanup of Go/C-flavored wording.
+Native backend, standard library, and file writing remain unauthorized.
 
 ### Adding a built-in
 
@@ -210,7 +218,7 @@ or the Go and Kitten pipelines stop agreeing:
    `selfhost/checker/expr.ktn` (`check_call`).
 4. **Semantic-model naming** — `selfhost/checker/semantics.ktn`
    (`builtin_kind_name`) and the Go mirror in
-   `cmd/kitten/semantics_differential_test.go` (`builtinKindName`).
+   `cmd/purr/semantics_differential_test.go` (`builtinKindName`).
 5. **Runtime names** — `runtime/runtime.go` for the Go generator's constants and
    `selfhost/codegen/names.ktn` for the Kitten generator's helpers.
 6. **Runtime implementation** — `runtime/csrc/kitten_runtime.h` and
@@ -226,8 +234,8 @@ or the Go and Kitten pipelines stop agreeing:
 10. **Documentation** — `README.md`, `AGENTS.md`, and the relevant
     `selfhost/*/README.md`; update measured counts, never invent them.
 
-None of the self-hosted components is part of the production pipeline: `kitten
-build` and `kitten run` still use the Go lexer, parser, checker, generator, and
+None of the self-hosted components is part of the production pipeline: `purr
+build` and `purr run` still use the Go lexer, parser, checker, generator, and
 loader, which remain authoritative. The Kitten-written driver and its POSIX
 wrapper are test infrastructure for the fixpoint, not the production CLI. Their
 deliberate differences (byte-oriented positions, an absolute-root Kitten loader

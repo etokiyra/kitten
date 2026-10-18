@@ -44,7 +44,7 @@
 // marks, so it is everything on the line after the directive word. The other
 // arguments are separate fields.
 //
-// The differential harness in cmd/kitten writes the directives, predicts each
+// The differential harness in cmd/purr writes the directives, predicts each
 // result line, and anchors the predicted names against the C that the reference
 // generator produces for a program that contains them, so a helper is verified
 // against the reference implementation rather than against a copy of its logic.

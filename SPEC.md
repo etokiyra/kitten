@@ -6,7 +6,7 @@ as deferred are not decided and must not be assumed by any component.
 
 This revision covers the language surface, its static semantics, and the native
 compilation model. The lexer, parser, checker, C code generator, and C runtime
-are implemented, and `kitten build`/`kitten run` produce and execute native
+are implemented, and `purr build`/`purr run` produce and execute native
 executables on the host platform. Self-hosting, a native backend, and the
 standard library are not implemented.
 
@@ -479,7 +479,7 @@ one per phase:
 
 Supporting layout:
 
-- `cmd/kitten` — the `kitten` command-line entry point. It runs the full
+- `cmd/purr` — the `purr` command-line entry point. It runs the full
   pipeline and invokes the system C compiler and linker.
 - `tests/` — `.ktn` programs and matching `.expected` output files. They are
   compiled and executed by the end-to-end tests.
@@ -614,7 +614,7 @@ outcome here.
 - The parser is implemented (Phase 2A) and accepts the grammar in Section 17.
 - The checker is implemented (Phase 2B) and enforces the rules in Section 18.
 - The C code generator and C runtime are implemented (Phase 2C), and
-  `kitten build` and `kitten run` compile to native executables on the host
+  `purr build` and `purr run` compile to native executables on the host
   platform.
 - The `.ktn` fixtures lex, parse, check, compile, and execute; the end-to-end
   tests compare their output with the matching `.expected` files byte-for-byte.
@@ -1228,12 +1228,12 @@ two never collide because Kitten functions are emitted with a reserved prefix.
 
 ### 19.6 Native build pipeline and command line
 
-`kitten build <file.ktn> [-o <output>]` runs the whole pipeline and writes a
+`purr build <file.ktn> [-o <output>]` runs the whole pipeline and writes a
 native executable. Without `-o`, the executable is written to the current
 directory as the source file's base name without the `.ktn` extension. The
 command never reports success unless the executable was produced.
 
-`kitten run <file.ktn>` compiles through the same pipeline into a temporary
+`purr run <file.ktn>` compiles through the same pipeline into a temporary
 location, executes the program, forwards its standard output and standard error,
 and removes the temporary artifacts. It returns the program's exit status.
 
@@ -1696,7 +1696,7 @@ supported.
 
 ### 22.8 Command line
 
-`kitten build <file.ktn> [-o <output>]` and `kitten run <file.ktn>` are
+`purr build <file.ktn> [-o <output>]` and `purr run <file.ktn>` are
 unchanged in shape. `<file.ktn>` is the root module; imported modules are found
 relative to it. Diagnostics name the file an error was found in, with a
 line and column where the error is inside a source file.
@@ -2048,8 +2048,8 @@ The following are **not** implemented and must not be assumed:
 ## 25. Kitten-written lexer (experimental)
 
 This section records a component that is written in Kitten itself and runs under
-the Go bootstrap compiler. It is **not** the production front end: `kitten build`
-and `kitten run` continue to use the Go lexer in `lexer/`, and Sections 3–8
+the Go bootstrap compiler. It is **not** the production front end: `purr build`
+and `purr run` continue to use the Go lexer in `lexer/`, and Sections 3–8
 remain the normative description of lexical structure. The section exists so that
 the artifact, its deliberate differences, and its known limits are documented
 rather than assumed.
@@ -2073,7 +2073,7 @@ checker, and the code generator are still written only in Go.
 The Kitten lexer reproduces the reference behavior described in Sections 3–8: the
 same token kinds, the same token text, the same one-based line and column
 positions, the same first-error behavior, and the same messages. A differential
-test in `cmd/kitten` compiles the Kitten lexer and compares it against the Go
+test in `cmd/purr` compiles the Kitten lexer and compares it against the Go
 lexer over a corpus of hundreds of inputs; the corpus, the comparison rules, and
 the results are recorded in `selfhost/lexer/README.md`.
 
@@ -2153,8 +2153,8 @@ The following are **not** implemented and must not be assumed:
 ## 26. Kitten-written parser (experimental)
 
 This section records a second component written in Kitten itself, alongside the
-lexer of Section 25. It is **not** the production front end: `kitten build` and
-`kitten run` continue to use the Go parser in `parser/`, and Section 17 remains
+lexer of Section 25. It is **not** the production front end: `purr build` and
+`purr run` continue to use the Go parser in `parser/`, and Section 17 remains
 the normative description of the grammar. The section exists so that the
 artifact, its design decisions, and its known limits are documented rather than
 assumed.
@@ -2183,7 +2183,7 @@ The Kitten parser accepts the grammar of Section 17, applies the precedence and
 associativity of Section 17.3, and produces the same tree as the Go reference
 parser: the same node kinds, the same fields, the same positions, the same
 fail-fast diagnostics, and the same messages. A differential test in
-`cmd/kitten` compiles the parser and compares its rendering of the tree against
+`cmd/purr` compiles the parser and compares its rendering of the tree against
 the reference implementation's rendering of the same source, over a corpus that
 includes every grammar production, every precedence boundary, deeply nested
 constructs, malformed input, every fixture, and the self-hosted sources;
@@ -2244,7 +2244,7 @@ The following are **not** implemented and must not be assumed:
 
 This section records a third component written in Kitten itself, alongside the
 lexer of Section 25 and the parser of Section 26. It is **not** the production
-front end: `kitten build` and `kitten run` continue to use the Go checker in
+front end: `purr build` and `purr run` continue to use the Go checker in
 `checker/`, and Sections 18 and 22–24 remain the normative description of the
 rules. The section exists so that the artifact, its design decisions, and its
 known limits are documented rather than assumed.
@@ -2372,7 +2372,7 @@ nor a missing block, so those branches are unreachable for the reference as well
 
 ### 27.5 Differential testing
 
-A differential test in `cmd/kitten` compiles the checker and compares its
+A differential test in `cmd/purr` compiles the checker and compares its
 rendering — the outcome, the first error's category, position, and message, and
 the declaration counts on success — against the reference implementation's
 rendering of the same input, over a corpus that includes every construct, every
@@ -2712,7 +2712,7 @@ render every expression twice and intern every literal twice.
 
 ### 28.11 Differential testing
 
-The differential tests in `cmd/kitten` compare the Kitten-written generator with
+The differential tests in `cmd/purr` compare the Kitten-written generator with
 the reference. The helper test compares values the reference produced rather than a
 copy of its logic: for every literal of the corpus the harness reads the pooled
 declaration out of the reference's own output and compares both the escaped text

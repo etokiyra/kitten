@@ -4,7 +4,7 @@ This directory holds the second component of the eventual self-hosting compiler:
 a parser written in Kitten that consumes the tokens produced by the
 Kitten-written lexer and builds an abstract syntax tree.
 
-It is **not** the production front end. `kitten build` and `kitten run` still use
+It is **not** the production front end. `purr build` and `purr run` still use
 the Go parser in `parser/`, which remains authoritative. Nothing here changes the
 language, and no language feature was added to make the parser easier.
 
@@ -28,9 +28,9 @@ policy, not of the parser.
 # From the repository root. The driver reads the fixed relative path
 # "input.txt", so the working directory selects the input.
 printf 'fn add(int a, int b) -> int {\n    return a + b;\n}\n' > input.txt
-go build -o /tmp/kitten ./cmd/kitten
-/tmp/kitten build selfhost/parse.ktn -o /tmp/kitten-parser
-/tmp/kitten-parser
+go build -o /tmp/purr ./cmd/purr
+/tmp/purr build selfhost/parse.ktn -o /tmp/purr-parser
+/tmp/purr-parser
 ```
 
 On a successful parse the driver prints the canonical AST, one node per line,
@@ -156,12 +156,12 @@ out-of-bounds write, and the differential corpus checks the bound on every input
 
 ## Differential testing
 
-`cmd/kitten/parser_differential_test.go` builds the Kitten parser once and runs
+`cmd/purr/parser_differential_test.go` builds the Kitten parser once and runs
 it over a corpus of 262 inputs, comparing its rendering with the reference
 implementation's rendering of the same source:
 
 ```sh
-go test -count=1 -v -run TestKittenParser ./cmd/kitten/
+go test -count=1 -v -run TestKittenParser ./cmd/purr/
 ```
 
 The corpus covers every grammar production listed above, empty and one-token
@@ -188,7 +188,7 @@ change together.
 Parsing is roughly linear in the input size. Measured with
 `TestKittenParserScaling`, which also checks that both implementations agree on
 the largest input (`go test -count=1 -v -run TestKittenParserScaling
-./cmd/kitten/`), including the cost of rendering the AST and starting the
+./cmd/purr/`), including the cost of rendering the AST and starting the
 process:
 
 | Source | Functions | AST lines | Time |

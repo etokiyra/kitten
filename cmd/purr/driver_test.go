@@ -31,7 +31,7 @@ func buildStage1(t *testing.T) string {
 	t.Helper()
 
 	requireToolchain(t)
-	executable := filepath.Join(t.TempDir(), "kitten-stage1")
+	executable := filepath.Join(t.TempDir(), "purr-stage1")
 	var diagnostics bytes.Buffer
 	if err := buildExecutable(repoPath(t, "..", "..", "selfhost", "driver.ktn"), executable, &diagnostics); err != nil {
 		t.Fatalf("building stage 1: %v\n%s", err, diagnostics.String())
@@ -67,14 +67,14 @@ func runExternal(t *testing.T, executable string, arguments []string, directory 
 
 // wrapperPath returns the wrapper's absolute path.
 func wrapperPath(t *testing.T) string {
-	return repoPath(t, "..", "..", "selfhost", "driver", "kittenc.sh")
+	return repoPath(t, "..", "..", "selfhost", "driver", "purr-bootstrap.sh")
 }
 
 // wrapperEnvironment selects the stage-1 driver and the repository runtime.
 func wrapperEnvironment(stage1 string, t *testing.T) []string {
 	return []string{
-		"KITTENC_DRIVER=" + stage1,
-		"KITTEN_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
+		"PURR_BOOTSTRAP_DRIVER=" + stage1,
+		"PURR_RUNTIME_DIR=" + repoPath(t, "..", "..", "runtime", "csrc"),
 	}
 }
 

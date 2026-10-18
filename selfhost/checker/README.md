@@ -4,7 +4,7 @@ This directory holds the third component of the eventual self-hosting compiler: 
 semantic checker written in Kitten that consumes the AST produced by the
 Kitten-written parser and validates it exactly as the Go reference checker does.
 
-It is **not** the production front end. `kitten build` and `kitten run` still use
+It is **not** the production front end. `purr build` and `purr run` still use
 the Go checker in `checker/`, which remains authoritative. Nothing here changes
 the language, and no language feature was added to make the checker easier.
 
@@ -31,9 +31,9 @@ checker.
 # working directory selects the input.
 printf 'struct Point { int x; }\nfn main() {\n    Point p = Point { x = 1 };\n}\n' > input.txt
 printf '' > input2.txt
-go build -o /tmp/kitten ./cmd/kitten
-/tmp/kitten build selfhost/check.ktn -o /tmp/kitten-check
-/tmp/kitten-check
+go build -o /tmp/purr ./cmd/purr
+/tmp/purr build selfhost/check.ktn -o /tmp/purr-check
+/tmp/purr-check
 # ok modules 2 types 1 functions 1 bodies 1
 ```
 
@@ -239,12 +239,12 @@ conversion remains deferred.
 
 ## Differential testing
 
-`cmd/kitten/checker_differential_test.go` builds the checker once and runs it over
+`cmd/purr/checker_differential_test.go` builds the checker once and runs it over
 a corpus of **1873 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
-go test -count=1 -v -run TestKittenChecker ./cmd/kitten/
+go test -count=1 -v -run TestKittenChecker ./cmd/purr/
 ```
 
 The corpus covers valid programs for every construct; one invalid program per

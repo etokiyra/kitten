@@ -178,10 +178,6 @@ alongside **Rust** / **`.rs`** / **`cargo`**.
 The project manifest is `purr.toml` and the lockfile is `purr.lock`, named after the
 tool that reads them, the way `Cargo.toml` is named after Cargo.
 
-> The command is currently still called `kitten` and is built from `cmd/kitten`.
-> Renaming the binary is a scheduled, separate change; the documentation describes where
-> it is going so nothing new is written against the old name.
-
 ---
 
 ## The ecosystem, concretely

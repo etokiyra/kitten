@@ -1,10 +1,10 @@
 #!/bin/sh
-# kittenc.sh - temporary POSIX-sh wrapper around the Kitten-written driver.
+# purr-bootstrap.sh - temporary POSIX-sh wrapper around the Kitten-written driver.
 #
 # It mirrors the Go CLI's build/run surface for the subset that the Kitten
 # driver supports: build <src> [-o out] and run <src> [args...]. The driver is
-# expected in KITTENC_DRIVER (default: kitten-stage1 next to this script) and
-# the runtime sources in KITTEN_RUNTIME_DIR (default: runtime/csrc in this
+# expected in PURR_BOOTSTRAP_DRIVER (default: purr-stage1 next to this script) and
+# the runtime sources in PURR_RUNTIME_DIR (default: runtime/csrc in this
 # repository). The wrapper owns absolute paths, temporary files, the C compiler,
 # CC, GC flags, output naming, and run-status propagation.
 
@@ -12,14 +12,14 @@ set -u
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd -P) || exit 2
 repo_root=$(CDPATH= cd "$script_dir/../.." && pwd -P) || exit 2
-driver=${KITTENC_DRIVER:-$script_dir/kitten-stage1}
-runtime_dir=${KITTEN_RUNTIME_DIR:-$repo_root/runtime/csrc}
+driver=${PURR_BOOTSTRAP_DRIVER:-$script_dir/purr-stage1}
+runtime_dir=${PURR_RUNTIME_DIR:-$repo_root/runtime/csrc}
 
 usage_text='Kitten compiler
 
 Usage:
-  kitten build <file.ktn> [-o <output>]   Compile a Kitten source file
-  kitten run <file.ktn>                   Compile and run a Kitten source file
+  purr build <file.ktn> [-o <output>]   Compile a Kitten source file
+  purr run <file.ktn>                   Compile and run a Kitten source file
 
 Options:
   -o, --output <path>   Write the executable to <path> (build only)
@@ -32,13 +32,13 @@ usage() {
 }
 
 build_usage_error() {
-    printf 'kitten build: %s\n\n' "$1" >&2
+    printf 'purr build: %s\n\n' "$1" >&2
     usage >&2
     exit 2
 }
 
 run_usage_error() {
-    printf 'kitten run: %s\n\n' "$1" >&2
+    printf 'purr run: %s\n\n' "$1" >&2
     usage >&2
     exit 2
 }
@@ -93,21 +93,21 @@ prepare_build() {
     announce=$5
 
     if [ ! -x "$driver" ]; then
-        printf 'kitten: Kitten driver not found or not executable: %s\n' "$driver" >&2
+        printf 'purr: Kitten driver not found or not executable: %s\n' "$driver" >&2
         return 1
     fi
     if [ ! -f "$runtime_dir/kitten_runtime.c" ] || [ ! -f "$runtime_dir/kitten_runtime.h" ]; then
-        printf 'kitten: runtime sources not found in %s\n' "$runtime_dir" >&2
+        printf 'purr: runtime sources not found in %s\n' "$runtime_dir" >&2
         return 1
     fi
     if ! select_compiler; then
-        printf 'kitten: no C compiler found; set CC or install cc, gcc, or clang\n' >&2
+        printf 'purr: no C compiler found; set CC or install cc, gcc, or clang\n' >&2
         return 1
     fi
     gc_flags
 
-    build_tmp=$(mktemp -d "${TMPDIR:-/tmp}/kitten-build.XXXXXX") || {
-        printf 'kitten: cannot create a temporary build directory\n' >&2
+    build_tmp=$(mktemp -d "${TMPDIR:-/tmp}/purr-build.XXXXXX") || {
+        printf 'purr: cannot create a temporary build directory\n' >&2
         return 1
     }
     trap 'cleanup_build' EXIT HUP INT TERM
@@ -126,7 +126,7 @@ prepare_build() {
 
     if ! cp "$runtime_dir/kitten_runtime.c" "$build_tmp/kitten_runtime.c" ||
        ! cp "$runtime_dir/kitten_runtime.h" "$build_tmp/kitten_runtime.h"; then
-        printf 'kitten: cannot copy the runtime sources\n' >&2
+        printf 'purr: cannot copy the runtime sources\n' >&2
         cleanup_build
         trap - EXIT HUP INT TERM
         return 1
@@ -327,7 +327,7 @@ case $command in
         exit $?
         ;;
     *)
-        printf 'kitten: unknown command "%s"\n\n' "$command" >&2
+        printf 'purr: unknown command "%s"\n\n' "$command" >&2
         usage >&2
         exit 2
         ;;

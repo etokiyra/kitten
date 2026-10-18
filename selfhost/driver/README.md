@@ -4,17 +4,24 @@
 Go compiler into a stage-1 executable, then uses only the Kitten-written loader,
 lexer, parser, checker, and C generator.
 
-`selfhost/driver/kittenc.sh` is a temporary POSIX-shell wrapper that turns the
-driver's C output into native executables. It is not the production `kitten`
-pipeline and is not a self-hosting claim; `kitten build` and `kitten run` still
+`selfhost/driver/purr-bootstrap.sh` is a temporary POSIX-shell wrapper that turns the
+driver's C output into native executables. It is not the production `purr`
+pipeline and is not a self-hosting claim; `purr build` and `purr run` still
 use the Go implementation. `purr` will replace the wrapper later.
+
+## Renamed in 6.0
+
+The tool rename changed the wrapper and its environment names:
+`kittenc.sh` became `purr-bootstrap.sh`, `KITTENC_DRIVER` became
+`PURR_BOOTSTRAP_DRIVER`, and `KITTEN_RUNTIME_DIR` became `PURR_RUNTIME_DIR`.
+The driver's usage prefix changed from `kitten-selfhost` to `purr-selfhost`.
 
 ## Driver
 
 Usage:
 
 ```text
-kitten-selfhost <absolute-source.ktn>
+purr-selfhost <absolute-source.ktn>
 ```
 
 - It reads exactly one argument, `argv()[1]`, which must be an absolute path.
@@ -31,8 +38,8 @@ Kitten loader restricts imports to the root source's directory. From
 Build stage 1 with the Go compiler:
 
 ```sh
-kitten build selfhost/driver.ktn -o /tmp/kitten-stage1
-/tmp/kitten-stage1 /absolute/path/to/main.ktn > program.c
+purr build selfhost/driver.ktn -o /tmp/purr-stage1
+/tmp/purr-stage1 /absolute/path/to/main.ktn > program.c
 ```
 
 The generated C is byte-identical to the Go pipeline's output for the same
@@ -41,7 +48,7 @@ streams never mix.
 
 ## Wrapper
 
-`selfhost/driver/kittenc.sh` is POSIX `sh`. It owns:
+`selfhost/driver/purr-bootstrap.sh` is POSIX `sh`. It owns:
 
 - making source and output paths absolute;
 - `build <src> [-o out]` and `run <src> [args...]`;
@@ -58,9 +65,9 @@ though the usage line is kept identical to the Go CLI's.
 
 Environment:
 
-- `KITTENC_DRIVER` — the stage-1 executable. Default:
-  `selfhost/driver/kitten-stage1`.
-- `KITTEN_RUNTIME_DIR` — the directory holding `kitten_runtime.c` and
+- `PURR_BOOTSTRAP_DRIVER` — the stage-1 executable. Default:
+  `selfhost/driver/purr-stage1`.
+- `PURR_RUNTIME_DIR` — the directory holding `kitten_runtime.c` and
   `kitten_runtime.h`. Default: `runtime/csrc` in this repository.
 - `CC` — the C compiler command. The wrapper splits it into words, as the Go CLI
   does. If unset, it tries `cc`, `gcc`, then `clang`.
@@ -69,17 +76,17 @@ Environment:
 Example:
 
 ```sh
-kitten build selfhost/driver.ktn -o /tmp/kitten-stage1
-KITTENC_DRIVER=/tmp/kitten-stage1 \
-  selfhost/driver/kittenc.sh build tests/modules/main.ktn -o /tmp/modules
+purr build selfhost/driver.ktn -o /tmp/purr-stage1
+PURR_BOOTSTRAP_DRIVER=/tmp/purr-stage1 \
+  selfhost/driver/purr-bootstrap.sh build tests/modules/main.ktn -o /tmp/modules
 /tmp/modules
 ```
 
 `run`:
 
 ```sh
-KITTENC_DRIVER=/tmp/kitten-stage1 \
-  selfhost/driver/kittenc.sh run program.ktn alpha "" "two words"
+PURR_BOOTSTRAP_DRIVER=/tmp/purr-stage1 \
+  selfhost/driver/purr-bootstrap.sh run program.ktn alpha "" "two words"
 ```
 
 ## Diagnostics and exclusions
@@ -112,11 +119,11 @@ builds stage 2 from `selfhost/driver.ktn`; stage 2 builds stage 3; and the C for
 also reproduces the Go reference for all nine fixtures and `tests/modules/`.
 
 ```sh
-kitten build selfhost/driver.ktn -o /tmp/stage1
-KITTENC_DRIVER=/tmp/stage1 KITTEN_RUNTIME_DIR=runtime/csrc \
-  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage2
-KITTENC_DRIVER=/tmp/stage2 KITTEN_RUNTIME_DIR=runtime/csrc \
-  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage3
+purr build selfhost/driver.ktn -o /tmp/stage1
+PURR_BOOTSTRAP_DRIVER=/tmp/stage1 PURR_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/purr-bootstrap.sh build selfhost/driver.ktn -o /tmp/stage2
+PURR_BOOTSTRAP_DRIVER=/tmp/stage2 PURR_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/purr-bootstrap.sh build selfhost/driver.ktn -o /tmp/stage3
 /tmp/stage1 "$PWD/selfhost/driver.ktn" > /tmp/stage1.c
 /tmp/stage2 "$PWD/selfhost/driver.ktn" > /tmp/stage2.c
 /tmp/stage3 "$PWD/selfhost/driver.ktn" > /tmp/stage3.c
@@ -136,7 +143,7 @@ not on binary reproducibility.
 
 ## Testing
 
-`cmd/kitten/driver_test.go` builds stage 1 with the Go compiler and checks:
+`cmd/purr/driver_test.go` builds stage 1 with the Go compiler and checks:
 
 - every top-level fixture and `tests/modules/`: stage-1 stdout is byte-identical
   to `codegen.Generate` for the same loader/checker result, and wrapper-built
@@ -157,7 +164,7 @@ repeats the error and usage comparisons with stage 2. It is skipped only under
 The wrapper is checked with `sh -n`; `shellcheck` is not installed in the test
 environment.
 
-Measured on the development machine with the Go-built `kitten` CLI: building
+Measured on the development machine with the Go-built `purr` CLI: building
 stage 1 from `selfhost/driver.ktn` took about 2.9 s and 70 MB RSS, producing a
 304 KB executable. Stage 1 then emitted C for `lexer_proof`, `maps`, and
 `tests/modules/` in 5–10 ms with about 5.4 MB RSS. These are measurements, not

@@ -7,8 +7,8 @@ pre-order, ids equal to positions in that order, one module per canonical path,
 cycles allowed, duplicate and diamond imports deduplicated, and the same
 diagnostics for paths outside the root and for lexical or syntax errors.
 
-It is a self-hosted component, not part of the production pipeline. `kitten build`
-and `kitten run` still use the Go loader, which remains authoritative.
+It is a self-hosted component, not part of the production pipeline. `purr build`
+and `purr run` still use the Go loader, which remains authoritative.
 
 ## Files
 
@@ -20,7 +20,7 @@ and `kitten run` still use the Go loader, which remains authoritative.
   `input.txt` and prints the ordered module set or the loader's failure.
 - `selfhost/loadunit.ktn` — the whole-path driver. It loads, checks, and emits a
   complete C translation unit with the Kitten-written stages.
-- `cmd/kitten/loader_differential_test.go` — the differential harness.
+- `cmd/purr/loader_differential_test.go` — the differential harness.
 
 ## API
 
@@ -99,8 +99,8 @@ recoverable file input.
 The loaders read the root path from `input.txt`; the working directory selects it.
 
 ```sh
-kitten build selfhost/load.ktn -o /tmp/load-probe
-kitten build selfhost/loadunit.ktn -o /tmp/loadunit-probe
+purr build selfhost/load.ktn -o /tmp/load-probe
+purr build selfhost/loadunit.ktn -o /tmp/loadunit-probe
 mkdir -p /tmp/example && cd /tmp/example
 printf '%s' /absolute/path/to/main.ktn > input.txt
 /tmp/load-probe
@@ -127,7 +127,7 @@ single diagnostic line otherwise.
 
 ## Differential testing
 
-`cmd/kitten/loader_differential_test.go` compares against `loader.Load` for the
+`cmd/purr/loader_differential_test.go` compares against `loader.Load` for the
 same absolute root:
 
 - **20 targeted trees**, covering a simple import, diamonds, cycles, self-import,

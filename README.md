@@ -237,9 +237,8 @@ development headers.
 git clone https://github.com/etokiyra/kitten.git
 cd kitten
 
-# Build the compiler. The tool is `purr`; its source directory is still named
-# cmd/kitten while that rename is pending.
-go build -o purr ./cmd/kitten
+# Build the compiler.
+go build -o purr ./cmd/purr
 
 # Compile and run a program.
 ./purr run tests/fizzbuzz.ktn
@@ -283,7 +282,7 @@ installed and configured.
 
 | Piece | What it does | Status |
 | --- | --- | --- |
-| `purr build`, `purr run` | compile a source file, or compile and execute it | **works** (as `kitten`) |
+| `purr build`, `purr run` | compile a source file, or compile and execute it | **works** |
 | `purr new` | scaffold a project or a library with the standard layout | planned |
 | `purr add`, `purr remove` | manage dependencies in the manifest | planned |
 | `purr install` | fetch, build, and install a package in one command | planned |
@@ -372,7 +371,7 @@ the Go reference's generated C byte for byte.**
 
 **What is still not independent.** Go still builds stage 1; the bootstrap has not
 left the pipeline. A C compiler and the temporary POSIX wrapper
-(`selfhost/driver/kittenc.sh`) are still required, and the runtime is still C.
+(`selfhost/driver/purr-bootstrap.sh`) are still required, and the runtime is still C.
 Missing or unreadable imports are **not** matched because the postponed
 `ReadFileResult`/`try_read_file` work has not landed; those failures are fatal
 through `read_file`. Relative source paths are made absolute by the wrapper; the
@@ -382,11 +381,11 @@ ecosystem) have not started.
 To reproduce the fixpoint by hand:
 
 ```sh
-kitten build selfhost/driver.ktn -o /tmp/stage1
-KITTENC_DRIVER=/tmp/stage1 KITTEN_RUNTIME_DIR=runtime/csrc \
-  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage2
-KITTENC_DRIVER=/tmp/stage2 KITTEN_RUNTIME_DIR=runtime/csrc \
-  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage3
+purr build selfhost/driver.ktn -o /tmp/stage1
+PURR_BOOTSTRAP_DRIVER=/tmp/stage1 PURR_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/purr-bootstrap.sh build selfhost/driver.ktn -o /tmp/stage2
+PURR_BOOTSTRAP_DRIVER=/tmp/stage2 PURR_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/purr-bootstrap.sh build selfhost/driver.ktn -o /tmp/stage3
 /tmp/stage1 "$PWD/selfhost/driver.ktn" > /tmp/stage1.c
 /tmp/stage2 "$PWD/selfhost/driver.ktn" > /tmp/stage2.c
 /tmp/stage3 "$PWD/selfhost/driver.ktn" > /tmp/stage3.c
@@ -412,7 +411,7 @@ checker/       Go: AST -> typed, resolved program
 codegen/       Go: checked program -> C
 runtime/       Go wrapper around the C runtime (csrc/)
 loader/        Go: source files -> modules, resolving imports
-cmd/kitten/    Go: the compiler CLI and the differential test harnesses
+cmd/purr/    Go: the compiler CLI and the differential test harnesses
 selfhost/      Kitten, in Kitten: the second implementation and its drivers
 tests/         .ktn fixtures with their expected program output
 ```

@@ -1,4 +1,4 @@
-// Command kitten compiles Kitten source files into native executables.
+// Command purr compiles Kitten source files into native executables.
 //
 // The pipeline is: source -> lexer -> parser -> checker -> C code generation ->
 // C compiler/linker -> native executable, linked against the Kitten runtime and
@@ -6,8 +6,8 @@
 //
 // Usage:
 //
-//	kitten build <file.ktn> [-o <output>]   Compile a source file
-//	kitten run <file.ktn>                   Compile and run a source file
+//	purr build <file.ktn> [-o <output>]   Compile a source file
+//	purr run <file.ktn>                   Compile and run a source file
 //
 // Exit codes:
 //
@@ -35,8 +35,8 @@ import (
 const usageText = `Kitten compiler
 
 Usage:
-  kitten build <file.ktn> [-o <output>]   Compile a Kitten source file
-  kitten run <file.ktn>                   Compile and run a Kitten source file
+  purr build <file.ktn> [-o <output>]   Compile a Kitten source file
+  purr run <file.ktn>                   Compile and run a Kitten source file
 
 Options:
   -o, --output <path>   Write the executable to <path> (build only)
@@ -76,7 +76,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "run":
 		return runRun(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "kitten: unknown command %q\n\n", args[0])
+		fmt.Fprintf(stderr, "purr: unknown command %q\n\n", args[0])
 		fmt.Fprintln(stderr, usageText)
 		return exitUsage
 	}
@@ -132,12 +132,12 @@ func parseCommandArgs(args []string) (commandArgs, error) {
 func runBuild(args []string, stdout, stderr io.Writer) int {
 	parsed, err := parseCommandArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "kitten build: %v\n\n", err)
+		fmt.Fprintf(stderr, "purr build: %v\n\n", err)
 		fmt.Fprintln(stderr, usageText)
 		return exitUsage
 	}
 	if !strings.HasSuffix(parsed.source, sourceExtension) {
-		fmt.Fprintf(stderr, "kitten build: %q is not a Kitten source file (expected a %s file)\n", parsed.source, sourceExtension)
+		fmt.Fprintf(stderr, "purr build: %q is not a Kitten source file (expected a %s file)\n", parsed.source, sourceExtension)
 		return exitUsage
 	}
 
@@ -159,22 +159,22 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 func runRun(args []string, stdout, stderr io.Writer) int {
 	parsed, err := parseCommandArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "kitten run: %v\n\n", err)
+		fmt.Fprintf(stderr, "purr run: %v\n\n", err)
 		fmt.Fprintln(stderr, usageText)
 		return exitUsage
 	}
 	if parsed.output != "" {
-		fmt.Fprintln(stderr, "kitten run: -o is not supported; run compiles to a temporary executable")
+		fmt.Fprintln(stderr, "purr run: -o is not supported; run compiles to a temporary executable")
 		return exitUsage
 	}
 	if !strings.HasSuffix(parsed.source, sourceExtension) {
-		fmt.Fprintf(stderr, "kitten run: %q is not a Kitten source file (expected a %s file)\n", parsed.source, sourceExtension)
+		fmt.Fprintf(stderr, "purr run: %q is not a Kitten source file (expected a %s file)\n", parsed.source, sourceExtension)
 		return exitUsage
 	}
 
-	directory, err := os.MkdirTemp("", "kitten-run-")
+	directory, err := os.MkdirTemp("", "purr-run-")
 	if err != nil {
-		fmt.Fprintf(stderr, "kitten run: %v\n", err)
+		fmt.Fprintf(stderr, "purr run: %v\n", err)
 		return exitFailure
 	}
 	defer os.RemoveAll(directory)
@@ -194,7 +194,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		if errors.As(err, &exitError) {
 			return exitError.ExitCode()
 		}
-		fmt.Fprintf(stderr, "kitten run: %v\n", err)
+		fmt.Fprintf(stderr, "purr run: %v\n", err)
 		return exitFailure
 	}
 	return exitSuccess
@@ -227,7 +227,7 @@ func buildExecutable(sourcePath, outputPath string, diagnostics io.Writer) error
 		return err
 	}
 
-	buildDirectory, err := os.MkdirTemp("", "kitten-build-")
+	buildDirectory, err := os.MkdirTemp("", "purr-build-")
 	if err != nil {
 		return err
 	}
