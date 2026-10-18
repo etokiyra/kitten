@@ -559,6 +559,20 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		return fmt.Sprintf("%s(%s)", runtime.ReadFileFunction, argument), nil
 	case checker.BuiltinArgv:
 		return fmt.Sprintf("%s()", runtime.ArgvFunction), nil
+	case checker.BuiltinTryReadFile:
+		if len(expression.Arguments) < 1 {
+			position := expression.OpenParen
+			return "", &Error{Line: position.Line, Column: position.Column, Message: "try_read_file is missing its path argument"}
+		}
+		resultType, err := g.expressionType(expression)
+		if err != nil {
+			return "", err
+		}
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", preludeTryReadFileHelperName(resultType.Module), argument), nil
 	}
 
 	identifier, ok := expression.Callee.(*parser.Identifier)

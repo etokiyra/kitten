@@ -57,6 +57,9 @@ const (
 	// BuiltinArgv returns the process argument vector.
 	BuiltinArgv
 
+	// BuiltinTryReadFile reads a file into the predeclared result union.
+	BuiltinTryReadFile
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 

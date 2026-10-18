@@ -286,6 +286,20 @@ _Noreturn void ktn_rt_exit(int64_t status);
 const ktn_string *ktn_rt_read_file(const ktn_string *path);
 
 /*
+ * Reads the entire contents of the regular file at path without terminating on
+ * a file error. On success it returns true, stores a fresh GC-managed string in
+ * *text, and stores NULL in *message. On failure it returns false, stores NULL
+ * in *text, and stores a fresh GC-managed Go-compatible OS error message in
+ * *message (for example "open /x: no such file or directory"). The caller's
+ * ReadFileResult helper adds no prefix; the loader may add
+ * "cannot read source file: ". The same KTN_RT_MAX_FILE_SIZE limit as
+ * ktn_rt_read_file applies; an oversized file is a failure, not a crash.
+ */
+bool ktn_rt_try_read_file(const ktn_string *path,
+                          const ktn_string **text,
+                          const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

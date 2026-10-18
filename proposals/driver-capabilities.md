@@ -9,8 +9,8 @@
 > until after the fixpoint. Until then a missing/unreadable file is fatal through
 > `read_file` and is not matched.
 >
-> Status: adopted, Phase 5.0 proposal; Phase 5.7 done; 5.4/5.5 next. Date:
-> 2026-10-18.
+> Status: adopted, Phase 5.0 proposal; Phase 5.7 done; Phase 5.4b
+> (runtime + Go pipeline) done; 5.4c and 5.5 next. Date: 2026-10-18.
 >
 > **Adopted decisions**
 >
@@ -581,9 +581,9 @@ own acceptance checks.
      flushed before exit; stderr is flushed; the existing fatal-error tests still
      pass.
 
-4. **POSTPONED — `try_read_file` and `ReadFileResult`.** The design in
-   `proposals/read-file-result.md` stays proposed and untouched until after the
-   fixpoint.
+4. **IN PROGRESS — `try_read_file` and `ReadFileResult`.** Phase 5.4b implemented
+   the runtime and Go pipeline; 5.4c (Kitten checker/generator) and 5.5 (loader
+   parity) remain. The design is adopted in `proposals/read-file-result.md`.
    - Predeclared type in both checkers/generators; runtime result object and
      Go-compatible error formatting; existing `read_file` untouched.
    - Acceptance: the Phase 4E loader harness gains missing, unreadable, and

@@ -100,6 +100,12 @@ func variantConstructorName(unionType *checker.Type, variantName string) string 
 	return constructorPrefix + modulePrefix(unionType.Module) + unionType.Name + "_" + variantName
 }
 
+// preludeTryReadFileHelperName is the generated helper that builds the
+// predeclared ReadFileResult from the runtime's non-fatal read primitive.
+func preludeTryReadFileHelperName(module int) string {
+	return "ktn_prelude_" + strconv.Itoa(module) + "_try_read_file"
+}
+
 // cType maps a resolved Kitten type to its C representation:
 //
 //	int    -> int64_t             (signed 64-bit)

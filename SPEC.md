@@ -973,10 +973,11 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Eight functions are provided by the language: `print`, `eprint`, `exit`,
-`length`, `argv`, `has`, `substring`, and `read_file`. All are represented in the
-semantic environment rather than special-cased in expression checking. A
-user-defined top-level declaration with the same name shadows the built-in.
+Nine functions are provided by the language: `print`, `eprint`, `exit`,
+`length`, `argv`, `has`, `substring`, `read_file`, and `try_read_file`. All are
+represented in the semantic environment rather than special-cased in expression
+checking. A user-defined top-level declaration with the same name shadows the
+built-in.
 
 **`print`**
 
@@ -1074,6 +1075,39 @@ user-defined top-level declaration with the same name shadows the built-in.
   error.
 - A failed read is a fatal runtime error, not a recoverable result; see
   Section 22.2.
+
+**`try_read_file`**
+
+- The language provides a predeclared public union:
+
+  ```kitten
+  union ReadFileResult {
+      Ok { string text; }
+      Failed { string message; }
+  }
+  ```
+
+- `try_read_file(path)` takes exactly one `string` and returns a
+  `ReadFileResult`. On success it returns `Ok` with the complete file contents;
+  an empty file is `Ok { text = "" }`. On failure it returns `Failed` with the
+  Go-compatible operating-system error text, without the loader's
+  `cannot read source file: ` prefix. For example, a missing file is
+  `Failed { message = "open /x.ktn: no such file or directory" }`.
+- The type is visible from every module without an import. It is introduced
+  implicitly when a module contains a syntactic `try_read_file` call. The name
+  `ReadFileResult` is reserved: any user top-level declaration with that name is
+  an error, whether or not the implicit type is introduced.
+- `try_read_file` remains shadowable like the other built-ins; a user-defined
+  function with that name takes precedence.
+- Users may construct `ReadFileResult.Ok { text = ... }` and
+  `ReadFileResult.Failed { message = ... }` directly; the type behaves as an
+  ordinary union.
+- `try_read_file` uses the same 256 MiB (`KTN_RT_MAX_FILE_SIZE`) limit as
+  `read_file`. A larger file is a `Failed` result, not a fatal read. The same
+  NUL-byte limitation as `read_file` applies.
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error.
+- Its return type is `ReadFileResult`, and it is not variadic.
 
 ### 18.9 Diagnostics
 
@@ -1181,7 +1215,8 @@ is **deferred**.
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
-  `ktn_rt_read_file`, `ktn_rt_exit`, and the built-in print and eprint helpers.
+  `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_exit`, and the built-in
+  print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1294,8 +1329,9 @@ targets the host platform; cross-compilation and Windows are **not** supported.
     zero-initialized; access is bounds-checked at runtime (Section 21).
 13. A program may span several modules; a file is a module, imports resolve by
     relative path, and default visibility is private (Section 22).
-14. File reading is limited to `read_file`, and a failed read is fatal
-    (Section 22.2).
+14. File reading is `read_file` (fatal on failure) or `try_read_file`
+    (recoverable `ReadFileResult`); both use the same 256 MiB limit
+    (Sections 18.8 and 22.2).
 15. Enums are value types compared by case; unions are GC-managed references
     inspected only with an exhaustive `match` (Section 23).
 16. Maps are GC-managed references with string keys, an inline value, and a
@@ -1607,19 +1643,23 @@ first working design and may evolve.
 
 ### 22.2 File I/O
 
-One built-in function performs file input:
+Two built-in functions perform file input:
 
 - `read_file(path) -> string` reads the entire contents of the regular file at
   `path` into a new GC-managed string. An empty file yields the empty string, so
   an empty file is distinguishable from an error: a successful read of an empty
   file returns `""`, while a failure terminates the program.
-- Failure is a **fatal runtime error**, not a recoverable result: a missing or
-  unreadable file, a path that is not a seekable regular file, a file larger
-  than the runtime's maximum read size (256 MiB), or a read error prints a
-  message on standard error and exits with a nonzero status. This is a
-  deliberate limitation: the type system has no result or optional type, so
-  recoverable I/O errors cannot be represented cleanly yet.
-- The file is always closed, including on failure paths.
+- `try_read_file(path) -> ReadFileResult` is the recoverable form: it returns
+  `Ok { text }` with the complete contents, or `Failed { message }` with the
+  Go-compatible operating-system error text (Section 18.8). The loader adds its
+  own `cannot read source file: ` prefix when it consumes this result.
+- `read_file` failure is a **fatal runtime error**: a missing or unreadable file,
+  a path that is not a seekable regular file, a file larger than the runtime's
+  maximum read size (256 MiB), or a read error prints a message on standard
+  error and exits with a nonzero status. `try_read_file` reports those file
+  failures as `Failed` instead, without terminating.
+- Both functions apply the same 256 MiB limit. The file is always closed,
+  including on failure paths.
 - The returned string is NUL-terminated. Because strings cannot contain an
   embedded NUL byte (Section 20.1), content after the first NUL byte in the file
   is not represented. Non-UTF-8 bytes are otherwise preserved as byte
@@ -1712,7 +1752,6 @@ The following are **not** implemented and must not be assumed:
   paths.
 - Writing files, directory listing, file metadata, and other filesystem
   operations.
-- Recoverable I/O errors (they require a result or optional type).
 - Separate compilation or incremental builds; the whole program is reloaded and
   recompiled each time.
 - Compiled module caching.
@@ -2759,13 +2798,14 @@ produce its expected output when compiled and run.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **Recoverable file input and relative root paths.** The Kitten-written loader
-  requires an absolute root and calls `read_file`, so a missing or unreadable file
-  is fatal rather than a loader diagnostic. Recoverable I/O is deferred by Section
-  22.9, and the runtime has no working directory (Sections 22.2 and 22.4). This is
-  the 4E.2 gap.
-- File writing, command-line arguments, standard error, and a program-selected exit
-  status (Section 16), none of which the self-hosted runtime offers.
+- **Recoverable file input in the Kitten-written pipeline and relative root
+  paths.** The Go pipeline now implements `try_read_file`; the Kitten-written
+  checker, generator, and loader parity is pending 5.4c/5.5. The Kitten-written
+  loader still requires an absolute root and calls the fatal `read_file`, so a
+  missing or unreadable file is fatal rather than a loader diagnostic. The
+  self-hosted runtime has no working directory (Sections 22.2 and 22.4).
+- File writing, directory operations, and process launch, none of which the
+  self-hosted runtime offers.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,
 and the generator's helper, declaration, expression, literal-pool, statement, and

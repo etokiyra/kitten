@@ -80,8 +80,12 @@ const (
 	// MapLengthFunction returns the number of entries in a map.
 	MapLengthFunction = "ktn_rt_map_length"
 
-	// ReadFileFunction reads a whole file into a new string.
+	// ReadFileFunction reads a whole file into a new string, fatally on failure.
 	ReadFileFunction = "ktn_rt_read_file"
+
+	// TryReadFileFunction reads a whole file and reports success or an error
+	// string without terminating the program.
+	TryReadFileFunction = "ktn_rt_try_read_file"
 
 	// FailFunction reports a fatal runtime error and terminates the program.
 	FailFunction = "ktn_rt_fail"

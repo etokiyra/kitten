@@ -49,7 +49,14 @@ func (e *Error) Error() string {
 // entry point is reported as an error rather than silently replaced. Generate
 // returns an error rather than panicking on an inconsistent syntax tree.
 func Generate(modules []*parser.Module, checked *checker.Result) (string, error) {
-	if len(modules) == 0 || checked == nil {
+	if checked == nil {
+		return "", &Error{Line: 1, Column: 1, Message: "cannot generate C without modules and a checked result"}
+	}
+	// The checker may append the implicit ReadFileResult prelude after the
+	// loaded modules. Its result is authoritative; the caller's slice may be the
+	// pre-prelude set.
+	modules = checked.Modules
+	if len(modules) == 0 {
 		return "", &Error{Line: 1, Column: 1, Message: "cannot generate C without modules and a checked result"}
 	}
 	for _, module := range modules {
@@ -174,6 +181,9 @@ func (g *generator) generate() (string, error) {
 		return "", err
 	}
 	if err := g.emitUnionConstructors(); err != nil {
+		return "", err
+	}
+	if err := g.emitPreludeHelper(); err != nil {
 		return "", err
 	}
 
@@ -538,6 +548,34 @@ func (g *generator) emitUnionConstructors() error {
 			g.line("")
 		}
 	}
+	return nil
+}
+
+// emitPreludeHelper emits the helper that turns the runtime's non-fatal read
+// result into the predeclared ReadFileResult union. The runtime does not know
+// the union layout; the helper calls the generated constructors.
+func (g *generator) emitPreludeHelper() error {
+	unionType, ok := g.checked.Types["ReadFileResult"]
+	if !ok || unionType == nil {
+		return nil
+	}
+	if !unionType.IsUnion() {
+		return &Error{Line: 1, Column: 1, Message: "the predeclared ReadFileResult is not a union"}
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_path) {", cStruct, preludeTryReadFileHelperName(unionType.Module))
+	g.indent++
+	g.line("const ktn_string *ktn_text = NULL;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s(ktn_path, &ktn_text, &ktn_message)) {", runtime.TryReadFileFunction)
+	g.indent++
+	g.line("return %s(ktn_text);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
 	return nil
 }
 

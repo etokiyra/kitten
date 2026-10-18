@@ -373,11 +373,12 @@ the Go reference's generated C byte for byte.**
 **What is still not independent.** Go still builds stage 1; the bootstrap has not
 left the pipeline. A C compiler and the temporary POSIX wrapper
 (`selfhost/driver/purr-bootstrap.sh`) are still required, and the runtime is still C.
-Missing or unreadable imports are **not** matched because the postponed
-`ReadFileResult`/`try_read_file` work has not landed; those failures are fatal
-through `read_file`. Relative source paths are made absolute by the wrapper; the
-driver itself requires an absolute path. Goal 2 (no C) and Goal 3 (the `purr`
-ecosystem) have not started.
+Missing or unreadable imports are **not** matched yet: the Go pipeline now has
+`try_read_file`, but the Kitten-written checker/generator parity (5.4c) and the
+loader's read-error parity (5.5) are still pending, so the Kitten loader's
+failures remain fatal through `read_file`. Relative source paths are made
+absolute by the wrapper; the driver itself requires an absolute path. Goal 2 (no
+C) and Goal 3 (the `purr` ecosystem) have not started.
 
 To reproduce the fixpoint by hand:
 

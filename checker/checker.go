@@ -215,6 +215,19 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "cannot check a program with no modules"}
 	}
 
+	preludeNeeded := usesTryReadFile(modules)
+	if preludeNeeded {
+		prelude, err := parseReadFileResultPrelude()
+		if err != nil {
+			return nil, err
+		}
+		prelude.ID = len(modules)
+		extended := make([]*parser.Module, len(modules)+1)
+		copy(extended, modules)
+		extended[len(modules)] = prelude
+		modules = extended
+	}
+
 	c := &checker{
 		arrayTypes:      map[*Type]*Type{},
 		mapTypes:        map[mapTypeIdentity]*Type{},
@@ -254,6 +267,20 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 
 	if err := c.collectDeclarations(); err != nil {
 		return nil, err
+	}
+	if preludeNeeded {
+		resultType, ok := c.publicTypes["ReadFileResult"]
+		if !ok || resultType == nil {
+			return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "the ReadFileResult prelude was not registered"}
+		}
+		function := &Function{
+			Name:           "try_read_file",
+			ParameterTypes: []*Type{StringType},
+			ReturnType:     resultType,
+			Builtin:        BuiltinTryReadFile,
+		}
+		c.builtins["try_read_file"] = function
+		c.result.Builtins["try_read_file"] = function
 	}
 	if err := c.resolveStructs(); err != nil {
 		return nil, err
@@ -333,6 +360,11 @@ func (c *checker) collectDeclarations() error {
 	for index, module := range c.modules {
 		c.current = module
 		for _, declaration := range c.result.Modules[index].Program.Declarations {
+			if module.path != preludeModulePath {
+				if name, at, ok := declarationName(declaration); ok && name == "ReadFileResult" {
+					return c.errorAt(DuplicateDeclaration, at, `cannot declare "ReadFileResult": the name is reserved for the predeclared type`)
+				}
+			}
 			switch d := declaration.(type) {
 			case *parser.ImportDecl:
 				// Import declarations carry no language declarations; the module

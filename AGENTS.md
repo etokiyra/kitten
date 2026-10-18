@@ -201,9 +201,13 @@ documentation use the new name. The language remains **Kitten**, source files
 remain `.ktn`, and generated C, runtime file names, `ktn_` identifiers, and
 `#include "kitten_runtime.h"` are unchanged.
 
-Next candidates, none started: the postponed `ReadFileResult`/`try_read_file` and
-loader read-error parity (5.4/5.5), and a SPEC cleanup of Go/C-flavored wording.
-Native backend, standard library, and file writing remain unauthorized.
+Phase 5.4b implemented the adopted `ReadFileResult`/`try_read_file` design in the
+C runtime and the Go pipeline only: the predeclared union and on-use prelude,
+the Go checker/generator, Go-compatible errno text, and Go-only tests. No
+`selfhost/` or loader behavior changed. Phase 5.4c (Kitten checker/generator)
+is next, then 5.5 (loader read-error parity). A SPEC cleanup of Go/C-flavored
+wording remains a later candidate. Native backend, standard library, and file
+writing remain unauthorized.
 
 ### Adding a built-in
 

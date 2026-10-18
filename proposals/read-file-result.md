@@ -1,11 +1,25 @@
 # Predeclared `ReadFileResult` and `try_read_file`
 
-> **PROPOSED, not adopted.**
+> **ADOPTED; implementation is staged.**
 >
-> This document is a design for approval. It changes no code, no tests, and no
-> SPEC.md semantics. Nothing here is authorized until the human approves it.
+> Phase 5.4b implements the runtime and Go-pipeline portion of this design. The
+> Kitten-written checker/generator (5.4c) and loader read-error parity (5.5)
+> remain pending. The Kitten pipeline cannot use `try_read_file` yet.
 >
 > Date: 2026-10-18. Starting commit: `498a321`.
+>
+> **Adopted answers to Section 11**
+>
+> 1. `ReadFileResult` is reserved against **any** top-level declaration with that
+>    name, type or function, in every program, whether or not the syntactic
+>    trigger fires. No existing corpus program uses the name.
+> 2. `try_read_file` remains shadowable like `print`/`argv`; the non-static helper
+>    prevents unused-function warnings.
+> 3. No new size limit: `try_read_file` uses exactly the existing `read_file` limit
+>    of 256 MiB (`KTN_RT_MAX_FILE_SIZE`).
+> 4. Users may construct `ReadFileResult.Ok { ... }` and
+>    `ReadFileResult.Failed { ... }` directly; it is a normal union.
+> 5. The syntactic `try_read_file(` trigger is accepted.
 
 ## 1. Fixed decisions
 
@@ -292,7 +306,10 @@ declaration's position.
 ### 4.4 Exact generated C
 
 For a prelude module with ID `P` (where `P` is the number of loaded modules), the
-normal union emitter produces exactly:
+prelude contributes the following fragments through the normal union emitter.
+They are not necessarily contiguous in the full file: other modules' function
+prototypes appear between the tag enum and the struct section, because that is
+the existing section order.
 
 ```c
 typedef struct ktn_s_P_ReadFileResult ktn_s_P_ReadFileResult;

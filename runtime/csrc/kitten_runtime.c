@@ -33,9 +33,12 @@
 #include "kitten_runtime.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /*
  * Flushes both output streams in the order a process exit must preserve: stdout
@@ -444,6 +447,115 @@ int64_t ktn_rt_map_length(const ktn_map *map) {
         ktn_rt_fail("length of a null map reference");
     }
     return map->length;
+}
+
+/*
+ * Returns the Go-style text for a saved errno. The common cases are explicit
+ * because Go uses lower-case operation/error text rather than strerror's
+ * capitalized, locale-dependent text.
+ */
+static const char *ktn_rt_go_error_reason(int error, char *fallback, size_t capacity) {
+    switch (error) {
+        case ENOENT:
+            return "no such file or directory";
+        case EACCES:
+            return "permission denied";
+        case EISDIR:
+            return "is a directory";
+        case ENOTDIR:
+            return "not a directory";
+        case ENAMETOOLONG:
+            return "file name too long";
+        case EMFILE:
+            return "too many open files";
+        case ENFILE:
+            return "too many open files in system";
+        case ELOOP:
+            return "too many levels of symbolic links";
+        default:
+            break;
+    }
+    snprintf(fallback, capacity, "%s", strerror(error));
+    if (fallback[0] >= 'A' && fallback[0] <= 'Z') {
+        fallback[0] = (char)(fallback[0] + ('a' - 'A'));
+    }
+    return fallback;
+}
+
+/*
+ * Builds "<operation> <path>: <reason>" as a GC-managed string. The path is the
+ * exact Kitten path bytes; no quotes are added, matching Go's os.ReadFile text.
+ */
+static const ktn_string *ktn_rt_path_error(const char *operation, const ktn_string *path, int error) {
+    char fallback[256];
+    const char *reason = ktn_rt_go_error_reason(error, fallback, sizeof(fallback));
+    size_t operation_length = strlen(operation);
+    size_t reason_length = strlen(reason);
+    size_t length = operation_length + 1 + (size_t)path->length + 2 + reason_length;
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    char *bytes = ktn_rt_string_bytes(result);
+    snprintf(bytes, length + 1, "%s %s: %s", operation, path->data, reason);
+    return result;
+}
+
+/* Returns a plain failure message string for a non-path condition. */
+static const ktn_string *ktn_rt_plain_error(const char *message) {
+    size_t length = strlen(message);
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    memcpy(ktn_rt_string_bytes(result), message, length);
+    return result;
+}
+
+bool ktn_rt_try_read_file(const ktn_string *path, const ktn_string **text, const ktn_string **message) {
+    if (text == NULL || message == NULL) {
+        ktn_rt_fail("try_read_file received a null result slot");
+    }
+    *text = NULL;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(path);
+    int descriptor = open(checked->data, O_RDONLY);
+    if (descriptor < 0) {
+        *message = ktn_rt_path_error("open", checked, errno);
+        return false;
+    }
+
+    struct stat information;
+    if (fstat(descriptor, &information) != 0) {
+        int error = errno;
+        close(descriptor);
+        *message = ktn_rt_path_error("stat", checked, error);
+        return false;
+    }
+
+    int64_t size = information.st_size < 0 ? 0 : (int64_t)information.st_size;
+    if ((uint64_t)size > KTN_RT_MAX_FILE_SIZE) {
+        close(descriptor);
+        *message = ktn_rt_plain_error("file is larger than the maximum supported size");
+        return false;
+    }
+
+    ktn_string *result = ktn_rt_string_allocate(size);
+    char *bytes = ktn_rt_string_bytes(result);
+    int64_t total = 0;
+    while (total < size) {
+        ssize_t count = read(descriptor, bytes + total, (size_t)(size - total));
+        if (count < 0) {
+            int error = errno;
+            close(descriptor);
+            *message = ktn_rt_path_error("read", checked, error);
+            return false;
+        }
+        if (count == 0) {
+            break;
+        }
+        total += (int64_t)count;
+    }
+    close(descriptor);
+    result->length = total;
+    bytes[total] = '\0';
+    *text = result;
+    return true;
 }
 
 const ktn_string *ktn_rt_read_file(const ktn_string *path) {
