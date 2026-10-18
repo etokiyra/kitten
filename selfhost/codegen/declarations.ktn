@@ -356,7 +356,11 @@ fn emit_all_prelude_helper_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(env_helper)) {
         return env_helper;
     }
-    return emit_capture_prelude_helper_section(emitter);
+    EmitStep capture_helper = emit_capture_prelude_helper_section(emitter);
+    if (!emit_ok(capture_helper)) {
+        return capture_helper;
+    }
+    return emit_file_info_prelude_helper_section(emitter);
 }
 
 // emit_read_file_prelude_helper_section emits the helper that turns the
@@ -792,6 +796,66 @@ fn emit_capture_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(close)) {
         return close;
     }
+    return emit_line(emitter, "");
+}
+
+// emit_file_info_prelude_helper_section emits the FileInfoResult helper.
+fn emit_file_info_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.builtins, "try_file_info")) {
+        return EmitStep.Ok;
+    }
+    if (!has(emitter.model.visible_types, "FileInfoResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared FileInfoResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["FileInfoResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared FileInfoResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, "try_file_info") + "(const ktn_string *ktn_path) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep is_file = emit_line(emitter, "bool ktn_is_file = false;");
+    if (!emit_ok(is_file)) { return is_file; }
+    EmitStep is_directory = emit_line(emitter, "bool ktn_is_directory = false;");
+    if (!emit_ok(is_directory)) { return is_directory; }
+    EmitStep is_symlink = emit_line(emitter, "bool ktn_is_symlink = false;");
+    if (!emit_ok(is_symlink)) { return is_symlink; }
+    EmitStep executable = emit_line(emitter, "bool ktn_executable = false;");
+    if (!emit_ok(executable)) { return executable; }
+    EmitStep size = emit_line(emitter, "int64_t ktn_size = 0;");
+    if (!emit_ok(size)) { return size; }
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) { return message; }
+    EmitStep call = emit_line(emitter, "int ktn_result = " + try_file_info_function() + "(ktn_path, &ktn_is_file, &ktn_is_directory, &ktn_is_symlink, &ktn_executable, &ktn_size, &ktn_message);");
+    if (!emit_ok(call)) { return call; }
+    EmitStep ok_if = emit_line(emitter, "if (ktn_result == KTN_RT_FILE_INFO_OK) {");
+    if (!emit_ok(ok_if)) { return ok_if; }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_is_file, ktn_is_directory, ktn_is_symlink, ktn_executable, ktn_size);");
+    if (!emit_ok(ok)) { return ok; }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_ok = emit_line(emitter, "}");
+    if (!emit_ok(close_ok)) { return close_ok; }
+    EmitStep missing_if = emit_line(emitter, "if (ktn_result == KTN_RT_FILE_INFO_MISSING) {");
+    if (!emit_ok(missing_if)) { return missing_if; }
+    emitter.indent = emitter.indent + 1;
+    EmitStep missing = emit_line(emitter, "return " + variant_constructor_name(union_type, "Missing") + "();");
+    if (!emit_ok(missing)) { return missing; }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_missing = emit_line(emitter, "}");
+    if (!emit_ok(close_missing)) { return close_missing; }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) { return failed; }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) { return close; }
     return emit_line(emitter, "");
 }
 

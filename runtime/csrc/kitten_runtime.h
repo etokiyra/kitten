@@ -564,6 +564,26 @@ bool ktn_rt_try_run_capture(const ktn_string *program,
                             const ktn_string **err,
                             const ktn_string **message);
 
+/* Result codes for ktn_rt_try_file_info. */
+#define KTN_RT_FILE_INFO_OK 0
+#define KTN_RT_FILE_INFO_MISSING 1
+#define KTN_RT_FILE_INFO_FAILED 2
+
+/*
+ * Reports file metadata without opening a file descriptor. lstat classifies the
+ * path itself; a symlink is followed by stat for is_file/is_directory/size, and
+ * access(X_OK) supplies executable. ENOENT/ENOTDIR from lstat is Missing; a
+ * dangling link is Ok with only is_symlink set. Other failures use lstat/stat
+ * path text. Sizes above INT64_MAX cannot occur.
+ */
+int ktn_rt_try_file_info(const ktn_string *path,
+                         bool *is_file,
+                         bool *is_directory,
+                         bool *is_symlink,
+                         bool *executable,
+                         int64_t *size,
+                         const ktn_string **message);
+
 /*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with

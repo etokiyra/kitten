@@ -134,6 +134,7 @@ public fn try_run_function() -> string { return "ktn_rt_try_run"; }
 public fn try_current_directory_function() -> string { return "ktn_rt_try_current_directory"; }
 public fn try_getenv_function() -> string { return "ktn_rt_try_getenv"; }
 public fn try_run_capture_function() -> string { return "ktn_rt_try_run_capture"; }
+public fn try_file_info_function() -> string { return "ktn_rt_try_file_info"; }
 public fn raw_load8_function() -> string { return "ktn_rt_raw_load8"; }
 public fn raw_store8_function() -> string { return "ktn_rt_raw_store8"; }
 public fn raw_load64_function() -> string { return "ktn_rt_raw_load64"; }

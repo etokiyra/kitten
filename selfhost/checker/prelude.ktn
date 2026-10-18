@@ -35,12 +35,13 @@ public struct PreludeUses {
     bool current_directory;
     bool environment;
     bool capture;
+    bool file_info;
 }
 
 // prelude_uses_any reports whether any prelude built-in is used.
 public fn prelude_uses_any(PreludeUses uses) -> bool {
     return uses.read_file || uses.write_file || uses.write_bytes ||
-        uses.create_directory || uses.remove || uses.list_directory || uses.run || uses.current_directory || uses.environment || uses.capture;
+        uses.create_directory || uses.remove || uses.list_directory || uses.run || uses.current_directory || uses.environment || uses.capture || uses.file_info;
 }
 
 // read_file_result_prelude, file_result_prelude, and
@@ -74,6 +75,10 @@ public fn captured_run_result_prelude() -> string {
     return "public union CapturedRunResult {\n    Ok { int status; string stdout; string stderr; }\n    Failed { string message; }\n}\n";
 }
 
+public fn file_info_result_prelude() -> string {
+    return "public union FileInfoResult {\n    Ok { bool is_file; bool is_directory; bool is_symlink; bool executable; int size; }\n    Missing\n    Failed { string message; }\n}\n";
+}
+
 // prelude_source assembles the fixed source in the same order and with the same
 // subset rule as the Go checker.
 public fn prelude_source(PreludeUses uses) -> string {
@@ -99,10 +104,13 @@ public fn prelude_source(PreludeUses uses) -> string {
     if (uses.capture) {
         source = source + captured_run_result_prelude();
     }
+    if (uses.file_info) {
+        source = source + file_info_result_prelude();
+    }
     return source;
 }
 
-// prelude_uses scans every module for syntactic calls to the ten prelude
+// prelude_uses scans every module for syntactic calls to the eleven prelude
 // built-ins. A user function with one of these names may inject the prelude
 // unused, but helpers are non-static and no semantic rule depends on it.
 public fn prelude_uses(Module[] modules, int module_count) -> PreludeUses {
@@ -116,7 +124,8 @@ public fn prelude_uses(Module[] modules, int module_count) -> PreludeUses {
         run = uses_callee(modules, module_count, "try_run"),
         current_directory = uses_callee(modules, module_count, "try_current_directory"),
         environment = uses_callee(modules, module_count, "try_getenv"),
-        capture = uses_callee(modules, module_count, "try_run_capture")
+        capture = uses_callee(modules, module_count, "try_run_capture"),
+        file_info = uses_callee(modules, module_count, "try_file_info")
     };
 }
 
@@ -320,6 +329,14 @@ public fn register_prelude_builtins(Checker checker, PreludeUses uses) -> StepRe
         Function function = prelude_builtin("try_run_capture", string_string_array_parameters(), checker.public_types["CapturedRunResult"], BuiltinKind.TryRunCapture);
         checker.builtins["try_run_capture"] = function;
         checker.model.builtins["try_run_capture"] = function;
+    }
+    if (uses.file_info) {
+        if (!has(checker.public_types, "FileInfoResult")) {
+            return missing_prelude_type("FileInfoResult");
+        }
+        Function function = prelude_builtin("try_file_info", one_string_parameters(), checker.public_types["FileInfoResult"], BuiltinKind.TryFileInfo);
+        checker.builtins["try_file_info"] = function;
+        checker.model.builtins["try_file_info"] = function;
     }
     return StepResult.Ok;
 }

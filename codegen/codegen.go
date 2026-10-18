@@ -570,7 +570,10 @@ func (g *generator) emitPreludeHelper() error {
 	if err := g.emitEnvPreludeHelper(); err != nil {
 		return err
 	}
-	return g.emitCapturePreludeHelper()
+	if err := g.emitCapturePreludeHelper(); err != nil {
+		return err
+	}
+	return g.emitFileInfoPreludeHelper()
 }
 
 // emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
@@ -785,6 +788,42 @@ func (g *generator) emitCapturePreludeHelper() error {
 	g.line("if (%s(ktn_program, ktn_args, &ktn_status, &ktn_stdout, &ktn_stderr, &ktn_message)) {", runtime.TryRunCaptureFunction)
 	g.indent++
 	g.line("return %s(ktn_status, ktn_stdout, ktn_stderr);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitFileInfoPreludeHelper emits the FileInfoResult helper.
+func (g *generator) emitFileInfoPreludeHelper() error {
+	if _, ok := g.checked.Builtins["try_file_info"]; !ok {
+		return nil
+	}
+	unionType, err := g.preludeUnionType("FileInfoResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_path) {", cStruct, preludeHelperName(unionType.Module, "try_file_info"))
+	g.indent++
+	g.line("bool ktn_is_file = false;")
+	g.line("bool ktn_is_directory = false;")
+	g.line("bool ktn_is_symlink = false;")
+	g.line("bool ktn_executable = false;")
+	g.line("int64_t ktn_size = 0;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("int ktn_result = %s(ktn_path, &ktn_is_file, &ktn_is_directory, &ktn_is_symlink, &ktn_executable, &ktn_size, &ktn_message);", runtime.TryFileInfoFunction)
+	g.line("if (ktn_result == KTN_RT_FILE_INFO_OK) {")
+	g.indent++
+	g.line("return %s(ktn_is_file, ktn_is_directory, ktn_is_symlink, ktn_executable, ktn_size);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("if (ktn_result == KTN_RT_FILE_INFO_MISSING) {")
+	g.indent++
+	g.line("return %s();", variantConstructorName(unionType, "Missing"))
 	g.indent--
 	g.line("}")
 	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))

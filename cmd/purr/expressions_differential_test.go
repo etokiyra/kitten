@@ -1145,6 +1145,16 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_file_info call and FileInfoResult match",
+		root: `fn main() {
+    match (try_file_info("x")) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { print(is_file, is_directory, is_symlink, executable, size); }
+        Missing { print("missing"); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "try_run_capture call and CapturedRunResult match",
 		root: `fn main() {
     match (try_run_capture("/bin/true", new string[0])) {

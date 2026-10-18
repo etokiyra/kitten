@@ -167,7 +167,8 @@ An unrecognized directive prints `unknown <directive>`.
   helpers, `try_run_function()` is the recoverable process-launch helper,
   `try_current_directory_function()` is the current-directory helper,
   `try_getenv_function()` is the environment helper,
-  `try_run_capture_function()` is the captured-process helper, and
+  `try_run_capture_function()` is the captured-process helper,
+  `try_file_info_function()` is the metadata helper, and
   `i64_add_assign_function()`,
   `i64_sub_assign_function()`, `i64_pre_inc_function()`,
   `i64_post_inc_function()`, `i64_pre_dec_function()`, and
@@ -733,7 +734,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/purr/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 894 string literals whose escaping and byte length match the reference
+- 911 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -756,8 +757,8 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/purr/` reports:
   declarations, two modules, identically named private declarations in different
   modules, declaration order, bodies with and without literals, a shared literal
   pool, many declarations of every kind, and wide field and parameter lists.
-- 71 corpus programs whose sections match byte for byte, over 2133 lines, and
-  1861 whose check error the probe reports exactly as the reference checker does.
+- 76 corpus programs whose sections match byte for byte, over 2497 lines, and
+  1869 whose check error the probe reports exactly as the reference checker does.
 - 57 corpus programs without an entry point, verified by deriving the reference
   section: prepending `fn main() {}` adds exactly one prototype line and nothing
   else, and removing it - together with the prototype block's blank line when the
@@ -780,7 +781,7 @@ so the emitter's failure message has no remaining kind to describe.
 
 Running `go test -count=1 -v -run TestKittenExpressions ./cmd/purr/` reports:
 
-- 239 of 1512 expected lines of the 37 targeted programs compared byte for byte,
+- 246 of 1528 expected lines of the 38 targeted programs compared byte for byte,
   covering every literal kind, both booleans, every unary and binary operator,
   precedence, associativity, redundant parentheses, nesting, mixed operand
   types, member access and qualified variant references, struct and variant
@@ -788,8 +789,8 @@ Running `go test -count=1 -v -run TestKittenExpressions ./cmd/purr/` reports:
   every compound operator, string append, map entry assignment, `try_read_file`,
   direct `ReadFileResult` construction, and the nested combinations of them. The lines that are not compared are the subexpressions
   of a compared expression, which the compared whole already validates.
-- 173 of 1793 expected lines of 69 corpus programs compared byte for byte, over
-  the checker corpus, and whose **122 pooled entries** are compared as well. The
+- 182 of 1877 expected lines of 74 corpus programs compared byte for byte, over
+  the checker corpus, and whose **130 pooled entries** are compared as well. The
   compared-line count falls because assignment now renders rather than reporting
   an unimplemented message, and an assignment that is a statement is not a print
   argument; the function and unit harnesses compare those assignments as part of
@@ -837,7 +838,7 @@ rather than being counted as a match.
 
 Running `go test -count=1 -v -run TestKittenFunctions ./cmd/purr/` reports:
 
-- 25 targeted programs over **65 functions and 654 lines** compared byte for byte:
+- 26 targeted programs over **67 functions and 693 lines** compared byte for byte:
   empty bodies, locals with and without initializers, expression statements,
   returns with and without values, `if`/`else`/`else if` chains, nested blocks and
   shadowed names, nested `while` loops, `for` loops with every combination of
@@ -846,7 +847,7 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/purr/` reports:
   initializer that is an expression, a union with a string payload, `match` inside
   loops, string literals in nested statements that keep the pool's order,
   `try_read_file` matching, and a second module.
-- 69 corpus programs over 1408 lines and 111 functions compared byte for byte.
+- 74 corpus programs over 1557 lines and 119 functions compared byte for byte.
 - Match temporaries numbered in emission order across a unit, checked directly.
 - 11 assignment programs over 85 lines compared byte for byte, covering an
   assignment statement, a field, an element, a compound assignment, a loop
@@ -867,7 +868,7 @@ driver's shape including the file, which only the entry point rule sets.
 
 Running `go test -count=1 -v -run TestKittenUnit ./cmd/purr/` reports:
 
-- **58 whole units identical over 3483 lines** in the targeted corpus: a minimal
+- **62 whole units identical over 3950 lines** in the targeted corpus: a minimal
   `main`; an `eprint` unit; an `exit` unit; a `main` that runs a loop, a string
   concatenation, and an `if`; several
   functions in declaration order; nested blocks and control flow; loops of every
@@ -880,8 +881,8 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/purr/` reports:
   and repeated literals; the pool's order when strings appear in different
   functions; strings inside nested statements; and two modules, one of which
   declares its own `main`.
-- **69 whole corpus units identical over 3883 lines**, plus **57 corpus programs whose
-  entry point failure is reported identically**, and 1861 check errors reported
+- **74 whole corpus units identical over 4426 lines**, plus **57 corpus programs whose
+  entry point failure is reported identically**, and 1869 check errors reported
   identically.
 - **4 targeted and 57 corpus entry point rejections**, covering a missing `main`,
   parameters, a return value, and an imported module that declares `main` but is not
@@ -904,7 +905,7 @@ and runs both generated programs and compares what they write.
 
 Running `go test -count=1 -v -run TestKittenCalls ./cmd/purr/` reports:
 
-- **27 whole units identical over 1036 lines**: `print` and `eprint` with every
+- **28 whole units identical over 1146 lines**: `print` and `eprint` with every
   primitive type and with several at once; `exit` with an int expression; user
   calls with zero, one, and several
   arguments; calls in

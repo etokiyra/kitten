@@ -3,10 +3,10 @@
 > **ADOPTED (plan); implementation in progress.**
 >
 > The human approved this plan on 2026-10-18. Implementation proceeds one commit
-> per step in the order below. The `try_getenv`/`EnvResult` and
-> `try_run_capture`/`CapturedRunResult` steps are implemented so far; no `purr`
-> command described here is implemented unless explicitly marked **already
-> implemented**.
+> per step in the order below. The `try_getenv`/`EnvResult`,
+> `try_run_capture`/`CapturedRunResult`, and `try_file_info`/`FileInfoResult`
+> steps are implemented so far; no `purr` command described here is implemented
+> unless explicitly marked **already implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -75,8 +75,8 @@ Implementation status:
 |---|---|
 | 1. `try_getenv` / `EnvResult` | **implemented in 9.1** |
 | 2. `try_run_capture` | **implemented in 9.2** |
-| 3. `try_file_info` | proposed, next |
-| 4. `try_create_temp_directory` | proposed |
+| 3. `try_file_info` | **implemented in 9.3** |
+| 4. `try_create_temp_directory` | proposed, next |
 | 5. Embedded runtime generation | proposed |
 | 6. TOML subset parser | proposed |
 | 7. `purr new` | proposed |
@@ -248,7 +248,7 @@ now.
 
 **Blocks:** `build` and `run` (compiler discovery); `new` does not need it.
 
-### 3.2 `try_file_info` (proposed; replaces `try_find_program`)
+### 3.2 `try_file_info` (implemented in 9.3; replaces `try_find_program`)
 
 **Design override:** the earlier `try_find_program` built-in is **dropped**.
 PATH search will be written in Kitten on top of `try_getenv("PATH")` plus this
@@ -258,7 +258,7 @@ implemented.
 **Needed for:** PATH search, project discovery, `purr new` existence checks,
 checking whether `target` is a directory, and future installer/`self` work.
 
-**Proposal.**
+**Implemented shape.**
 
 ```text
 try_file_info(string path) -> FileInfoResult
@@ -278,15 +278,34 @@ union FileInfoResult {
 }
 ```
 
-- `lstat` classifies the path itself; a symlink sets `is_symlink` and does not
-  claim to be the target's file/directory kind.
-- `executable` uses `access(path, X_OK)` and therefore follows symlinks; it is
-  the bit PATH search needs.
-- `size` is the regular file's byte size, or 0 for directories and symlinks.
-- `Missing` means `ENOENT`/`ENOTDIR`; other failures use the Go-compatible
-  `stat <path>: <reason>` style.
-- No `follow_symlinks` flag is needed in the first version; a caller that wants
-  target metadata can add it later without changing existing fields.
+- `lstat` classifies the path itself. `ENOENT` or `ENOTDIR` is `Missing`; any
+  other `lstat` failure is `Failed` with `lstat <path>: <reason>`.
+- `is_symlink` is true only when the path itself is a symbolic link. A symlink
+  is followed with `stat` for kind, size, and executable. A dangling target
+  (`ENOENT`/`ENOTDIR` from `stat`) is `Ok` with only `is_symlink` true, all other
+  booleans false, and size 0. Other `stat` failures (for example `ELOOP` or
+  `EACCES`) are `Failed` with `stat <path>: <reason>`.
+- `is_file` and `is_directory` describe the followed target; FIFOs, sockets, and
+  devices give both false. `size` is the regular-file target's byte size, else
+  0.
+- `executable` is `access(path, X_OK) == 0`, using the kernel's real-UID/GID
+  check. A directory with search permission is executable. PATH-style program
+  lookup must require `is_file && executable`.
+- No file descriptor is opened. The runtime ABI returns `0` for `Ok`, `1` for
+  `Missing`, and `2` for `Failed`, with named constants in the header:
+
+```c
+int ktn_rt_try_file_info(const ktn_string *path,
+                         bool *is_file,
+                         bool *is_directory,
+                         bool *is_symlink,
+                         bool *executable,
+                         int64_t *size,
+                         const ktn_string **message);
+```
+
+**Blocks:** PATH search and therefore `build`/`run`; `new` existence checks and
+project discovery also use it once project mode exists.
 
 **Blocks:** PATH search and therefore `build`/`run`; `new` existence checks and
 project discovery also use it once project mode exists.
@@ -877,9 +896,9 @@ design-only phase.
 2. **Capture primitive** (`try_run_capture` and `CapturedRunResult`) —
    implemented in 9.2. Acceptance: both pipes, start failure text, no deadlock,
    exact limits and statuses.
-3. **File information** (`try_file_info`) — proposed for 9.3; PATH search is
+3. **File information** (`try_file_info`) — implemented in 9.3; PATH search is
    then written in Kitten, with no `try_find_program` built-in.
-4. **Temp directory** (`try_create_temp_directory`) — mode/unique/cleanup.
+4. **Temp directory** (`try_create_temp_directory`) — next; mode/unique/cleanup.
    Acceptance: build/run temp trees and failure cleanup.
 5. **Embedded runtime generation** — generator, generated `purr/embedded.ktn`,
    drift test, MIT notice. Acceptance: regenerate byte-identical.

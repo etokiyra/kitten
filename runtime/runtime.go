@@ -133,6 +133,9 @@ const (
 	// TryRunCaptureFunction runs a program and captures stdout/stderr.
 	TryRunCaptureFunction = "ktn_rt_try_run_capture"
 
+	// TryFileInfoFunction reports file metadata without opening the file.
+	TryFileInfoFunction = "ktn_rt_try_file_info"
+
 	// Runtime-module raw-memory and syscall helpers.
 	RawLoad8Function   = "ktn_rt_raw_load8"
 	RawStore8Function  = "ktn_rt_raw_store8"

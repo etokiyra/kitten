@@ -87,6 +87,9 @@ const (
 	// BuiltinTryRunCapture runs a program and captures its streams.
 	BuiltinTryRunCapture
 
+	// BuiltinTryFileInfo reports file metadata without opening a file.
+	BuiltinTryFileInfo
+
 	// BuiltinRawLoad8, BuiltinRawStore8, BuiltinRawLoad64, and
 	// BuiltinRawStore64 are runtime-module memory intrinsics.
 	BuiltinRawLoad8

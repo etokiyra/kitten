@@ -486,6 +486,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "FileInfoResult parameters",
+		root: `fn describe(FileInfoResult result) -> int {
+    match (result) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { return size; }
+        Missing { return -1; }
+        Failed(message) { return -2; }
+    }
+}
+fn main() {
+    print(describe(try_file_info("x")));
+}
+`,
+	}, {
 		description: "CapturedRunResult parameters",
 		root: `fn describe(CapturedRunResult result) -> int {
     match (result) {

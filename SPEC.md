@@ -1036,12 +1036,12 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Twenty-two functions are provided by the language: `print`, `eprint`, `exit`,
+Twenty-three functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
 `try_list_directory`, `try_run`, `try_run_capture`, `try_current_directory`,
-`try_getenv`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
-`bytes_to_string`. All are represented in the semantic environment rather than
+`try_getenv`, `try_file_info`, `int_from_byte`, `byte_from_int`,
+`string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1210,6 +1210,12 @@ the same name shadows the built-in.
       Ok { int status; string stdout; string stderr; }
       Failed { string message; }
   }
+
+  union FileInfoResult {
+      Ok { bool is_file; bool is_directory; bool is_symlink; bool executable; int size; }
+      Missing
+      Failed { string message; }
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
@@ -1219,20 +1225,21 @@ the same name shadows the built-in.
   `CurrentDirectoryResult.Ok { path = ... }`,
   `CurrentDirectoryResult.Failed { message = ... }`,
   `EnvResult.Set { value = ... }`, `EnvResult.Unset`,
-  `CapturedRunResult.Ok { ... }`, and `CapturedRunResult.Failed { ... }` are
-  ordinary variant constructions.
-- The seven predeclared union names `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`, and
-  `CapturedRunResult` are reserved in **every** program: any user top-level
-  declaration with one of those names is an error, whether or not the
-  corresponding implicit type is introduced.
+  `CapturedRunResult.Ok { ... }`, `CapturedRunResult.Failed { ... }`,
+  `FileInfoResult.Ok { ... }`, `FileInfoResult.Missing`, and
+  `FileInfoResult.Failed { ... }` are ordinary variant constructions.
+- The eight predeclared union names `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
+  `CapturedRunResult`, and `FileInfoResult` are reserved in **every** program:
+  any user top-level declaration with one of those names is an error, whether or
+  not the corresponding implicit type is introduced.
 - `file` and `directory` built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
   `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
-  `CapturedRunResult`, with each union's fixed source text concatenated directly
-  (each block ends with its closing brace and newline). A program using
+  `CapturedRunResult`, `FileInfoResult`, with each union's fixed source text
+  concatenated directly (each block ends with its closing brace and newline). A program using
   only `try_read_file` therefore gets exactly the existing `ReadFileResult`
   prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
@@ -1240,7 +1247,8 @@ the same name shadows the built-in.
   by a user function) introduces `FileResult` and its generated helper; the same
   applies to the other new built-ins, including `try_run`/`RunResult`,
   `try_current_directory`/`CurrentDirectoryResult`,
-  `try_getenv`/`EnvResult`, and `try_run_capture`/`CapturedRunResult`. A program with no new built-in and no
+  `try_getenv`/`EnvResult`, `try_run_capture`/`CapturedRunResult`, and
+  `try_file_info`/`FileInfoResult`. A program with no new built-in and no
   `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
@@ -1391,6 +1399,36 @@ the same name shadows the built-in.
 - Calling it with the wrong number of arguments, a non-`string` program, or a
   non-`string[]` argument array is an error. Its return type is
   `CapturedRunResult`, and it is not variadic.
+
+**`try_file_info`**
+
+- `try_file_info(path)` takes exactly one `string` and returns
+  `FileInfoResult`:
+
+  ```kitten
+  union FileInfoResult {
+      Ok { bool is_file; bool is_directory; bool is_symlink; bool executable; int size; }
+      Missing
+      Failed { string message; }
+  }
+  ```
+
+- `lstat` classifies the path itself. `ENOENT` or `ENOTDIR` is `Missing`; any
+  other `lstat` failure is `Failed` with `lstat <path>: <reason>`.
+- `is_symlink` reports whether the path itself is a symbolic link. If it is,
+  `stat` follows it. A dangling target (`ENOENT`/`ENOTDIR` from `stat`) is
+  `Ok { is_symlink = true, all other booleans false, size = 0 }`. Any other
+  `stat` failure is `Failed` with `stat <path>: <reason>`.
+- `is_file` and `is_directory` describe the followed target (or the non-link
+  path): regular file and directory respectively. FIFOs, sockets, and devices
+  give both false. `size` is the followed target's byte size when it is a
+  regular file, otherwise 0.
+- `executable` is true when `access(path, X_OK)` succeeds. The kernel uses the
+  real UID/GID for this check. A directory with its search bit is executable.
+  PATH-style program lookup must therefore require `is_file && executable`, not
+  `executable` alone.
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error. Its return type is `FileInfoResult`, and it is not variadic.
 
 **`try_current_directory`**
 
@@ -1599,7 +1637,7 @@ is **deferred**.
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
   `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
   `ktn_rt_try_current_directory`, `ktn_rt_try_getenv`,
-  `ktn_rt_try_run_capture`, `ktn_rt_exit`, the
+  `ktn_rt_try_run_capture`, `ktn_rt_try_file_info`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -2137,6 +2175,10 @@ loader prefix.
   `try_run`, but with stdin from `/dev/null` and stdout/stderr captured into
   separate strings. It caps each stream at 16 MiB and rejects NUL bytes with the
   exact `run ...` messages above. A byte-array capture variant is deferred.
+- `try_file_info(path) -> FileInfoResult` reports the path's own symlink status
+  and the followed target's file/directory/executable/size facts. Missing paths,
+  dangling links, symlink loops, and permission failures use the exact shapes
+  above. It opens no file descriptor.
 
 Current-working-directory changes, recursive removal, atomic replacement, and
 file metadata beyond the operations above are **not** implemented.
@@ -2258,6 +2300,10 @@ The following are **not** implemented and must not be assumed:
 15. `try_run_capture` uses `try_run` execution semantics with `/dev/null` stdin
     and separate stdout/stderr strings, capped at 16 MiB per stream; NUL and
     over-limit results are `Failed`.
+16. `try_file_info` follows symlinks for kind/size/executable, reports the link
+    itself through `is_symlink`, treats dangling links as `Ok` with false facts,
+    and uses `lstat`/`stat` path errors. PATH lookup must require
+    `is_file && executable`.
 
 ---
 

@@ -320,6 +320,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "file info result through call arguments",
+		root: `fn inspect(FileInfoResult result) -> int {
+    match (result) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { return size; }
+        Missing { return -1; }
+        Failed(message) { return -2; }
+    }
+}
+fn main() {
+    print(inspect(try_file_info("x")));
+}
+`,
+	}, {
 		description: "captured run result through call arguments",
 		root: `fn inspect(CapturedRunResult result) -> int {
     match (result) {

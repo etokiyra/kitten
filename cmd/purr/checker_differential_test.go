@@ -486,6 +486,47 @@ fn main() {
     print(try_run_capture("x", new string[0]));
 }
 `)
+	add("try_file_info and FileInfoResult", `fn describe(FileInfoResult result) -> int {
+    match (result) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            int value = size;
+            if (is_file) { value++; }
+            if (is_directory) { value++; }
+            if (is_symlink) { value++; }
+            if (executable) { value++; }
+            return value;
+        }
+        Missing { return -1; }
+        Failed(message) { return -2; }
+    }
+}
+fn main() {
+    FileInfoResult direct_ok = FileInfoResult.Ok { is_file = true, is_directory = false, is_symlink = false, executable = true, size = 3 };
+    FileInfoResult direct_missing = FileInfoResult.Missing;
+    FileInfoResult direct_failed = FileInfoResult.Failed { message = "m" };
+    print(describe(try_file_info("x")), describe(direct_ok), describe(direct_missing), describe(direct_failed));
+}
+`)
+	add("try_file_info only", `fn main() {
+    match (try_file_info("x")) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { print(size); }
+        Missing { print("missing"); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_file_info with try_run_capture", `fn main() {
+    try_file_info("x");
+    try_run_capture("/bin/true", new string[0]);
+}
+`)
+	add("shadowed try_file_info still injects its prelude", `fn try_file_info(string path) -> int {
+    return 1;
+}
+fn main() {
+    print(try_file_info("x"));
+}
+`)
 	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
     return 1;
 }
@@ -748,6 +789,14 @@ fn main() {
 		"fn f() { try_run_capture(1, new string[0]); }\n",
 		"fn f() { try_run_capture(\"/bin/true\", \"x\"); }\n",
 		"fn f() { try_run_capture(\"/bin/true\", new int[0]); }\n",
+		"fn f() { match (try_file_info(\"x\")) { Ok(is_file, is_directory, is_symlink, executable, size) { } } }\n",
+		"fn f() { try_file_info(); }\n",
+		"fn f() { try_file_info(1); }\n",
+		"fn f() { try_file_info(\"x\", \"y\"); }\n",
+		"fn FileInfoResult() {}\n",
+		"struct FileInfoResult {}\n",
+		"enum FileInfoResult { A }\n",
+		"union FileInfoResult { A }\n",
 		"fn CapturedRunResult() {}\n",
 		"struct CapturedRunResult {}\n",
 		"enum CapturedRunResult { A }\n",
@@ -937,6 +986,18 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_file_info from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_file_info("x")));
+}
+`, `public fn classify(FileInfoResult result) -> int {
+    match (result) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { return size; }
+        Missing { return -1; }
+        Failed(message) { return -2; }
     }
 }
 `)

@@ -1099,6 +1099,54 @@ bool ktn_rt_try_run_capture(const ktn_string *program, const ktn_array *args,
     return true;
 }
 
+int ktn_rt_try_file_info(const ktn_string *path, bool *is_file, bool *is_directory,
+                         bool *is_symlink, bool *executable, int64_t *size,
+                         const ktn_string **message) {
+    if (is_file == NULL || is_directory == NULL || is_symlink == NULL ||
+        executable == NULL || size == NULL || message == NULL) {
+        ktn_rt_fail("try_file_info received a null result slot");
+    }
+    *is_file = false;
+    *is_directory = false;
+    *is_symlink = false;
+    *executable = false;
+    *size = 0;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(path);
+    struct stat link_info;
+    if (lstat(checked->data, &link_info) != 0) {
+        int error = errno;
+        if (error == ENOENT || error == ENOTDIR) {
+            return KTN_RT_FILE_INFO_MISSING;
+        }
+        *message = ktn_rt_path_error("lstat", checked, error);
+        return KTN_RT_FILE_INFO_FAILED;
+    }
+
+    bool link = S_ISLNK(link_info.st_mode);
+    *is_symlink = link;
+    struct stat followed = link_info;
+    if (link) {
+        if (stat(checked->data, &followed) != 0) {
+            int error = errno;
+            if (error == ENOENT || error == ENOTDIR) {
+                return KTN_RT_FILE_INFO_OK;
+            }
+            *message = ktn_rt_path_error("stat", checked, error);
+            return KTN_RT_FILE_INFO_FAILED;
+        }
+    }
+
+    *is_file = S_ISREG(followed.st_mode);
+    *is_directory = S_ISDIR(followed.st_mode);
+    if (*is_file) {
+        *size = (int64_t)followed.st_size;
+    }
+    *executable = access(checked->data, X_OK) == 0;
+    return KTN_RT_FILE_INFO_OK;
+}
+
 bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value) {
     if (value == NULL) {
         ktn_rt_fail("try_getenv received a null result slot");

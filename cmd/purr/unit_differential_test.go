@@ -792,6 +792,7 @@ fn main() {
     try_current_directory();
     try_getenv("PATH");
     try_run_capture("/bin/true", new string[0]);
+    try_file_info("x");
 }
 `,
 	}, {
@@ -954,6 +955,41 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_file_info with FileInfoResult",
+		root: `fn main() {
+    match (try_file_info("x")) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { print(is_file, is_directory, is_symlink, executable, size); }
+        Missing { print("missing"); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "direct FileInfoResult construction",
+		root: `fn main() {
+    try_file_info("x");
+    FileInfoResult ok = FileInfoResult.Ok { is_file = true, is_directory = false, is_symlink = false, executable = true, size = 3 };
+    FileInfoResult missing = FileInfoResult.Missing;
+    FileInfoResult failed = FileInfoResult.Failed { message = "m" };
+    match (ok) { Ok(is_file, is_directory, is_symlink, executable, size) { print(size); } Missing { print("missing"); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "try_file_info from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_file_info("x")));
+}
+`,
+		imported: `public fn classify(FileInfoResult result) -> int {
+    match (result) {
+        Ok(is_file, is_directory, is_symlink, executable, size) { return size; }
+        Missing { return -1; }
+        Failed(message) { return -2; }
+    }
+}
+`,
+	}, {
 		description: "a shadowed try_write_file still emits the prelude helper",
 		root: `fn try_write_file(string path, string text) -> int {
     return 1;
@@ -996,6 +1032,15 @@ fn main() {
 }
 fn main() {
     print(try_run_capture("x", new string[0]));
+}
+`,
+	}, {
+		description: "a shadowed try_file_info still emits the prelude helper",
+		root: `fn try_file_info(string path) -> int {
+    return 1;
+}
+fn main() {
+    print(try_file_info("x"));
 }
 `,
 	}, {
