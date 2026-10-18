@@ -91,14 +91,14 @@ fn integer_literal_text(string text) -> string {
     int value = 0;
     int index = 2;
     while (index < size) {
-        int byte = text[index];
+        int octet = text[index];
         int digit = 0;
-        if (byte >= 48 && byte <= 57) {
-            digit = byte - 48;
-        } else if (byte >= 97 && byte <= 102) {
-            digit = byte - 97 + 10;
-        } else if (byte >= 65 && byte <= 70) {
-            digit = byte - 65 + 10;
+        if (octet >= 48 && octet <= 57) {
+            digit = octet - 48;
+        } else if (octet >= 97 && octet <= 102) {
+            digit = octet - 97 + 10;
+        } else if (octet >= 65 && octet <= 70) {
+            digit = octet - 65 + 10;
         }
         value = value * base + digit;
         index++;

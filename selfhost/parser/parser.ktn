@@ -232,29 +232,29 @@ fn quote_string(string text) -> string {
     int size = length(text);
     int index = 0;
     while (index < size) {
-        int byte = text[index];
-        if (byte == 34) {
+        int octet = text[index];
+        if (octet == 34) {
             result += "\\\"";
-        } else if (byte == 92) {
+        } else if (octet == 92) {
             result += "\\\\";
-        } else if (byte == 7) {
+        } else if (octet == 7) {
             result += "\\a";
-        } else if (byte == 8) {
+        } else if (octet == 8) {
             result += "\\b";
-        } else if (byte == 9) {
+        } else if (octet == 9) {
             result += "\\t";
-        } else if (byte == 10) {
+        } else if (octet == 10) {
             result += "\\n";
-        } else if (byte == 11) {
+        } else if (octet == 11) {
             result += "\\v";
-        } else if (byte == 12) {
+        } else if (octet == 12) {
             result += "\\f";
-        } else if (byte == 13) {
+        } else if (octet == 13) {
             result += "\\r";
-        } else if (byte >= 32 && byte <= 126) {
+        } else if (octet >= 32 && octet <= 126) {
             result += substring(text, index, index + 1);
         } else {
-            result += "\\x" + hex_pair(byte);
+            result += "\\x" + hex_pair(octet);
         }
         index++;
     }
@@ -262,10 +262,10 @@ fn quote_string(string text) -> string {
 }
 
 // hex_pair returns the two lowercase hexadecimal digits of a byte.
-fn hex_pair(int byte) -> string {
+fn hex_pair(int octet) -> string {
     string digits = "0123456789abcdef";
-    int high = byte / 16;
-    int low = byte % 16;
+    int high = octet / 16;
+    int low = octet % 16;
     return substring(digits, high, high + 1) + substring(digits, low, low + 1);
 }
 
@@ -287,8 +287,8 @@ public fn decode_string(string literal) -> string {
     string result = "";
     int index = 1;
     while (index < size - 1) {
-        int byte = literal[index];
-        if (byte == 92 && index + 1 < size - 1) {
+        int octet = literal[index];
+        if (octet == 92 && index + 1 < size - 1) {
             int escaped = literal[index + 1];
             if (escaped == 110) {
                 result += substring("\n", 0, 1);

@@ -371,10 +371,10 @@ public fn c_string_literal(string kitten_literal) -> CStringLiteral {
 
 // octal_three renders one byte as a three-digit octal escape, which is what the
 // reference's %03o verb produces.
-fn octal_three(int byte) -> string {
+fn octal_three(int octet) -> string {
     string digits = "01234567";
-    int high = byte / 64;
-    int middle = (byte / 8) % 8;
-    int low = byte % 8;
+    int high = octet / 64;
+    int middle = (octet / 8) % 8;
+    int low = octet % 8;
     return substring(digits, high, high + 1) + substring(digits, middle, middle + 1) + substring(digits, low, low + 1);
 }

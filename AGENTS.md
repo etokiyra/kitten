@@ -223,8 +223,10 @@ literals above `INT64_MAX` are rejected with `integer literal out of range`;
 and generated C calls the MIT `ktn_rt_i64_*` helpers rather than evaluating
 signed overflow. Phase 8.2 added `& | ^ ~ << >>`, C#-style precedence and
 arithmetic shifts, checked shift counts, and lowercase `0x`/`0b` literals with
-64-bit bit-pattern semantics and identical lexical/checker errors. Phase 8.3
-(`byte`/`byte[]` and the `byte` identifier migration) is next. A SPEC cleanup
+64-bit bit-pattern semantics and identical lexical/checker errors. Phase 8.3a
+renamed every `byte` identifier in Kitten source, fixtures, and embedded test
+source to `octet`, with no language change; Phase 8.3b (`byte`/`byte[]` and the
+keyword) is next. A SPEC cleanup
 of Go/C-flavored wording remains a later candidate. Native backend, standard
 library, and file writing remain unauthorized.
 
@@ -328,7 +330,8 @@ authorization after the design is approved.
    checker and generator; Phase 5.5 closed loader read-error parity; Phase 8.1
    made integer arithmetic and decimal literal ranges defined in both pipelines
    and the C runtime; Phase 8.2 added bitwise/shift operators and hex/binary
-   literals).
+   literals; Phase 8.3a freed the `byte` identifier by renaming it to `octet`
+   in source and fixtures).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

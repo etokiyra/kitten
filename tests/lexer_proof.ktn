@@ -4,16 +4,16 @@
 // length, bounds-checked byte indexing, byte ranges for lexemes, and
 // end-of-input by comparing a position against the byte length.
 
-fn is_letter(int byte) -> bool {
-    return (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90);
+fn is_letter(int octet) -> bool {
+    return (octet >= 97 && octet <= 122) || (octet >= 65 && octet <= 90);
 }
 
-fn is_digit(int byte) -> bool {
-    return byte >= 48 && byte <= 57;
+fn is_digit(int octet) -> bool {
+    return octet >= 48 && octet <= 57;
 }
 
-fn is_space(int byte) -> bool {
-    return byte == 32 || byte == 9 || byte == 10;
+fn is_space(int octet) -> bool {
+    return octet == 32 || octet == 9 || octet == 10;
 }
 
 struct Counts {
@@ -27,18 +27,18 @@ fn scan(string source) -> Counts {
     int size = length(source);
     int position = 0;
     while (position < size) {
-        int byte = source[position];
-        if (is_letter(byte)) {
+        int octet = source[position];
+        if (is_letter(octet)) {
             while (position < size && (is_letter(source[position]) || is_digit(source[position]))) {
                 position++;
             }
             counts.identifiers++;
-        } else if (is_digit(byte)) {
+        } else if (is_digit(octet)) {
             while (position < size && is_digit(source[position])) {
                 position++;
             }
             counts.numbers++;
-        } else if (is_space(byte)) {
+        } else if (is_space(octet)) {
             position++;
         } else {
             position++;

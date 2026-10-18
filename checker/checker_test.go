@@ -372,8 +372,8 @@ fn main() {
 		},
 		{
 			name: "string bytes and ranges",
-			source: `fn is_digit(int byte) -> bool {
-    return byte >= 48 && byte <= 57;
+			source: `fn is_digit(int octet) -> bool {
+    return octet >= 48 && octet <= 57;
 }
 fn scan(string source) -> int {
     int size = length(source);

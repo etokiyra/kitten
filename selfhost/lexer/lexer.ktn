@@ -86,9 +86,9 @@ fn at_end(Scanner scanner) -> bool {
 // case, so a mistake would be a deterministic runtime error rather than an
 // out-of-bounds read.
 fn advance(Scanner scanner) -> int {
-    int byte = scanner.source[scanner.position];
+    int octet = scanner.source[scanner.position];
     scanner.position = scanner.position + 1;
-    if (byte == 10) {
+    if (octet == 10) {
         // Newlines advance the line counter and reset the column counter. Every
         // other byte, including a carriage return, advances the column only.
         scanner.line = scanner.line + 1;
@@ -96,12 +96,12 @@ fn advance(Scanner scanner) -> int {
     } else {
         scanner.column = scanner.column + 1;
     }
-    return byte;
+    return octet;
 }
 
 // is_digit reports whether byte is a decimal digit.
-fn is_digit(int byte) -> bool {
-    return byte >= 48 && byte <= 57; // '0'..'9'
+fn is_digit(int octet) -> bool {
+    return octet >= 48 && octet <= 57; // '0'..'9'
 }
 
 // is_identifier_start reports whether byte may begin an identifier.
@@ -109,14 +109,14 @@ fn is_digit(int byte) -> bool {
 // Only ASCII letters and the underscore qualify. A non-ASCII byte is not an
 // identifier byte, because this scanner does not decode UTF-8; the reference
 // lexer makes the same decision for every non-ASCII code point.
-fn is_identifier_start(int byte) -> bool {
-    return byte == 95 || (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90); // _ a-z A-Z
+fn is_identifier_start(int octet) -> bool {
+    return octet == 95 || (octet >= 97 && octet <= 122) || (octet >= 65 && octet <= 90); // _ a-z A-Z
 }
 
 // is_identifier_part reports whether byte may appear after the first byte of an
 // identifier.
-fn is_identifier_part(int byte) -> bool {
-    return is_identifier_start(byte) || is_digit(byte);
+fn is_identifier_part(int octet) -> bool {
+    return is_identifier_start(octet) || is_digit(octet);
 }
 
 // skip_line_comment consumes a // comment up to, but not including, the newline
@@ -139,10 +139,10 @@ fn skip_trivia(Scanner scanner) {
         if (at_end(scanner)) {
             scanning = false;
         } else {
-            int byte = peek(scanner);
-            if (byte == 32 || byte == 9 || byte == 13 || byte == 10) {
+            int octet = peek(scanner);
+            if (octet == 32 || octet == 9 || octet == 13 || octet == 10) {
                 advance(scanner);
-            } else if (byte == 47 && peek_at(scanner, 1) == 47) { // "//"
+            } else if (octet == 47 && peek_at(scanner, 1) == 47) { // "//"
                 skip_line_comment(scanner);
             } else {
                 scanning = false;
@@ -275,11 +275,11 @@ fn scan_prefixed_number(Scanner scanner, int start, int start_line, int start_co
 
 // is_digit_in_base reports whether byte is a digit of base 2 or 16. The lexer
 // only calls this for those two bases.
-fn is_digit_in_base(int byte, int base) -> bool {
+fn is_digit_in_base(int octet, int base) -> bool {
     if (base == 16) {
-        return is_digit(byte) || (byte >= 97 && byte <= 102) || (byte >= 65 && byte <= 70); // a-f A-F
+        return is_digit(octet) || (octet >= 97 && octet <= 102) || (octet >= 65 && octet <= 70); // a-f A-F
     }
-    return byte == 48 || byte == 49; // 0 1
+    return octet == 48 || octet == 49; // 0 1
 }
 
 // scan_string consumes a double-quoted string literal, validating escapes.
@@ -292,18 +292,18 @@ fn scan_string(Scanner scanner, int start_line, int start_column) -> ScanResult 
     advance(scanner); // opening quote
 
     while (!at_end(scanner)) {
-        int byte = peek(scanner);
-        if (byte == 34) { // closing quote
+        int octet = peek(scanner);
+        if (octet == 34) { // closing quote
             advance(scanner);
             return ok_token(scanner, start, TokenKind.String, start_line, start_column);
         }
-        if (byte == 10) {
+        if (octet == 10) {
             // The error points at the newline, which is not consumed, so its
             // line and column are the literal's own line and the column of the
             // offending byte.
             return failed(scanner.line, scanner.column, "newline in string literal");
         }
-        if (byte == 92) { // backslash
+        if (octet == 92) { // backslash
             advance(scanner); // the backslash
             if (at_end(scanner)) {
                 // A trailing backslash reaching end of input is an unterminated
@@ -442,10 +442,10 @@ fn scan_operator(Scanner scanner, int start_line, int start_column) -> ScanResul
 
 // hex_pair returns the two lowercase hexadecimal digits of a byte, the form Go
 // uses for the \xNN escape.
-fn hex_pair(int byte) -> string {
+fn hex_pair(int octet) -> string {
     string digits = "0123456789abcdef";
-    int high = byte / 16;
-    int low = byte % 16;
+    int high = octet / 16;
+    int low = octet % 16;
     return substring(digits, high, high + 1) + substring(digits, low, low + 1);
 }
 
@@ -458,20 +458,20 @@ fn hex_pair(int byte) -> string {
 // reference lexer would report the decoded code point instead. That difference
 // is recorded in README.md.
 fn quoted_byte(string source, int index) -> string {
-    int byte = source[index];
-    if (byte == 39) { return "'\\''"; } // '
-    if (byte == 92) { return "'\\\\'"; } // backslash
-    if (byte == 7) { return "'\\a'"; }
-    if (byte == 8) { return "'\\b'"; }
-    if (byte == 9) { return "'\\t'"; }
-    if (byte == 10) { return "'\\n'"; }
-    if (byte == 11) { return "'\\v'"; }
-    if (byte == 12) { return "'\\f'"; }
-    if (byte == 13) { return "'\\r'"; }
-    if (byte >= 32 && byte <= 126) {
+    int octet = source[index];
+    if (octet == 39) { return "'\\''"; } // '
+    if (octet == 92) { return "'\\\\'"; } // backslash
+    if (octet == 7) { return "'\\a'"; }
+    if (octet == 8) { return "'\\b'"; }
+    if (octet == 9) { return "'\\t'"; }
+    if (octet == 10) { return "'\\n'"; }
+    if (octet == 11) { return "'\\v'"; }
+    if (octet == 12) { return "'\\f'"; }
+    if (octet == 13) { return "'\\r'"; }
+    if (octet >= 32 && octet <= 126) {
         return "'" + substring(source, index, index + 1) + "'";
     }
-    return "'\\x" + hex_pair(byte) + "'";
+    return "'\\x" + hex_pair(octet) + "'";
 }
 
 // scan_token skips trivia and returns the next token, or the lexical error that

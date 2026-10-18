@@ -1092,12 +1092,12 @@ func TestLexerWorkflowInTemporaryProject(t *testing.T) {
 
 	project := t.TempDir()
 	writeSource(t, filepath.Join(project, "input.ktn"), "fn main() {\n    int x = 42;\n}\n")
-	mainPath := writeSource(t, filepath.Join(project, "scan.ktn"), `fn is_letter(int byte) -> bool {
-    return (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90);
+	mainPath := writeSource(t, filepath.Join(project, "scan.ktn"), `fn is_letter(int octet) -> bool {
+    return (octet >= 97 && octet <= 122) || (octet >= 65 && octet <= 90);
 }
 
-fn is_digit(int byte) -> bool {
-    return byte >= 48 && byte <= 57;
+fn is_digit(int octet) -> bool {
+    return octet >= 48 && octet <= 57;
 }
 
 fn count_words(string source) -> int {
@@ -1105,8 +1105,8 @@ fn count_words(string source) -> int {
     int position = 0;
     int words = 0;
     while (position < size) {
-        int byte = source[position];
-        if (is_letter(byte)) {
+        int octet = source[position];
+        if (is_letter(octet)) {
             while (position < size && (is_letter(source[position]) || is_digit(source[position]))) {
                 position++;
             }
