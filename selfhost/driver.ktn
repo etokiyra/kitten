@@ -1,0 +1,122 @@
+// main.ktn - the Kitten-written compiler driver.
+//
+// Usage:
+//
+//     kitten-selfhost <absolute-source.ktn>
+//
+// It loads the source and its imports with the Kitten-written loader, checks them
+// with the Kitten-written checker, emits the complete C translation unit with the
+// Kitten-written generator, and writes that C to standard output. Diagnostics go
+// to standard error. Exit status is 0 on success, 1 for a load, check, or
+// generation failure, and 2 for a usage error.
+//
+// The wrapper (kittenc.sh) makes the source path absolute, writes the emitted C
+// to a temporary file, copies the runtime, and invokes the C compiler. The
+// driver itself parses no options and invokes no other process.
+//
+// Missing or unreadable source files are fatal through read_file (SPEC.md
+// Section 22.2). Their diagnostics are not matched against the reference loader
+// until the postponed ReadFileResult work.
+
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
+import "codegen/errors.ktn";
+import "codegen/unit.ktn";
+import "loader/loader.ktn";
+
+// print_lines writes text one line at a time, so standard output holds it byte
+// for byte: print terminates every argument with a newline.
+fn print_lines(string text) {
+    int start = 0;
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        if (text[index] == 10) {
+            print(substring(text, start, index));
+            start = index + 1;
+        }
+        index++;
+    }
+    if (start < size) {
+        print(substring(text, start, size));
+    }
+}
+
+// report_load_error prints a loader failure in the reference loader's Error.Error
+// shape: path:line:column when a position exists, path otherwise.
+fn report_load_error(LoadError error) {
+    if (error.path != "" && error.line > 0) {
+        eprint(error.path + ":" + decimal(error.line) + ":" + decimal(error.column) + ": " + error.message);
+    } else if (error.path != "") {
+        eprint(error.path + ": " + error.message);
+    } else {
+        eprint(error.message);
+    }
+}
+
+// report_check_error prints a checker failure. The reference driver uses the
+// error's module path, or the root source path when the error carries none.
+fn report_check_error(string root, CheckError error) {
+    string file = error.file;
+    if (file == "") {
+        file = root;
+    }
+    eprint(file + ":" + decimal(error.line) + ":" + decimal(error.column) + ": " + error.message);
+}
+
+// report_generate_error prints a generator failure with the same file/position
+// fallback as the reference driver.
+fn report_generate_error(string root, GenerateError error) {
+    string file = error.file;
+    if (file == "") {
+        file = root;
+    }
+    eprint(file + ":" + decimal(error.line) + ":" + decimal(error.column) + ": " + error.message);
+}
+
+// usage_error reports a driver invocation error and exits with status 2.
+fn usage_error(string message) {
+    eprint("kitten-selfhost: " + message);
+    eprint("Usage: kitten-selfhost <absolute-source.ktn>");
+    exit(2);
+}
+
+fn main() {
+    string[] arguments = argv();
+    if (length(arguments) != 2) {
+        usage_error("expected exactly one absolute source path");
+    }
+
+    string root = arguments[1];
+    if (length(root) == 0 || root[0] != 47) {
+        usage_error("source path must be absolute: " + root);
+    }
+
+    match (load_program(root)) {
+        Failure(error) {
+            report_load_error(error);
+            exit(1);
+        }
+        Success(modules, module_count) {
+            match (check_modules(modules, module_count)) {
+                Failure(error) {
+                    report_check_error(root, error);
+                    exit(1);
+                }
+                Success(summary, model) {
+                    match (emit_translation_unit(model)) {
+                        Failure(error) {
+                            report_generate_error(root, error);
+                            exit(1);
+                        }
+                        Success(text, lines) {
+                            print_lines(text);
+                            exit(0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

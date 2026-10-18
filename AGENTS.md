@@ -173,10 +173,16 @@ flushes stderr, and the runtime fixture captures stdout and stderr separately th
 both pipelines. Phase 5.3 added `exit(status)` and one shared flush path:
 `ktn_rt_exit` flushes stdout then stderr and terminates, `ktn_rt_fail` routes through
 it while keeping its message and status 1, and the runtime fixture checks stdout,
-stderr, and the exact status, including POSIX low-eight-bit behavior. Phase 5.4
-(`try_read_file` and the predeclared `ReadFileResult` union) is next and is the
-type-system change; loader read-error parity, the driver, and the fixpoint remain
-future phases.
+stderr, and the exact status, including POSIX low-eight-bit behavior. Phase 5.6
+added the Kitten-written driver `selfhost/driver.ktn` and the temporary POSIX-sh
+wrapper `selfhost/driver/kittenc.sh`: the driver takes one absolute source path,
+emits byte-identical C on stdout, reports diagnostics on stderr, and uses exit
+statuses 0/1/2; the wrapper builds and runs fixtures and `tests/modules/` under
+GCC and Clang. The implementation order changed: `ReadFileResult`/`try_read_file`
+(5.4) and loader read-error parity (5.5) are postponed until after the fixpoint
+(5.7), whose design stays proposed and untouched. Until then a missing or
+unreadable file is fatal through `read_file` and its diagnostic is **not** matched
+against the reference loader. Phase 5.7, the two-stage fixpoint, is next.
 
 ### Adding a built-in
 
@@ -212,13 +218,14 @@ or the Go and Kitten pipelines stop agreeing:
 
 None of the self-hosted components is part of the production pipeline: `kitten
 build` and `kitten run` still use the Go lexer, parser, checker, generator, and
-loader, which remain authoritative. Their deliberate differences (byte-oriented
-positions, no program-selected exit status, an absolute-root Kitten loader with
-fatal missing-file reads, and no production driver integration) are documented in
-SPEC.md
-Sections 25 to 28, `selfhost/lexer/README.md`, `selfhost/parser/README.md`,
-`selfhost/checker/README.md`, `selfhost/codegen/README.md`, and
-`selfhost/loader/README.md`.
+loader, which remain authoritative. The Kitten-written driver and its POSIX
+wrapper are test infrastructure for the fixpoint, not the production CLI. Their
+deliberate differences (byte-oriented positions, an absolute-root Kitten loader
+with fatal missing-file reads, and no production driver integration) are
+documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
+`selfhost/parser/README.md`, `selfhost/checker/README.md`,
+`selfhost/codegen/README.md`, `selfhost/loader/README.md`, and
+`selfhost/driver/README.md`.
 
 Self-hosting, a native backend, a complete standard library, and file writing
 are still intentionally unimplemented: do not start them without explicit
@@ -259,7 +266,11 @@ authorization.
    added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point;
    Phase 5.2 added `eprint(...)`, the flushing stderr helpers, and separate-stream
    runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,
-   and exact status/stream runtime coverage).
+   and exact status/stream runtime coverage; Phase 5.6 added the Kitten-written
+   driver and temporary POSIX-shell wrapper, with byte-identical C and native
+   fixture execution under GCC and Clang. The order for the remaining driver work
+   is now 5.7 fixpoint first, then the postponed 5.4/5.5 read-result and loader
+   parity work).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

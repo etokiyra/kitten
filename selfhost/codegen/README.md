@@ -18,8 +18,9 @@ being built one at a time:
   assembly of the whole unit.
 
 A module loader now exists under `selfhost/loader`, and the `selfhost/loadunit.ktn`
-driver uses it to feed this generator; a pipeline that writes and builds the output
-does not exist yet.
+driver uses it to feed this generator. `selfhost/driver.ktn` and the temporary
+`selfhost/driver/kittenc.sh` wrapper use the same path to write C to stdout and
+build a native executable; they are test infrastructure, not the production CLI.
 
 The reference is the Go generator in `codegen/`, which remains the production
 backend. `kitten build` and `kitten run` are unchanged and do not use anything

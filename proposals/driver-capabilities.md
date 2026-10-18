@@ -3,10 +3,13 @@
 > **ADOPTED in principle; implementation is staged.**
 >
 > The human approved the eight decisions below. Phases 5.1 (`argv`), 5.2
-> (`eprint`), and 5.3 (`exit`) are implemented; `try_read_file`, the loader
-> read-error parity, the driver, and the fixpoint remain future phases.
+> (`eprint`), 5.3 (`exit`), and 5.6 (the Kitten driver and wrapper) are
+> implemented. The order was revised in Phase 5.6: `try_read_file` and the loader
+> read-error parity are postponed until after the 5.7 fixpoint. Until then a
+> missing/unreadable file is fatal through `read_file` and is not matched.
 >
-> Status: adopted, Phase 5.0 proposal; Phase 5.3 done. Date: 2026-10-18.
+> Status: adopted, Phase 5.0 proposal; Phase 5.6 done; 5.7 fixpoint next. Date:
+> 2026-10-18.
 >
 > **Adopted decisions**
 >
@@ -17,8 +20,8 @@
 >    must not be Go, and is replaced by `purr` later. The Kitten compiler writes C
 >    to stdout, diagnostics to stderr, and status via `exit`; the wrapper owns
 >    `-o`, temporary files, `cc`, and `run`.
-> 4. Read-error parity (4E.2) is completed before the driver and before any
->    README self-hosting claim.
+> 4. Read-error parity (4E.2) is completed before any README self-hosting claim.
+>    **Order revised in Phase 5.6:** it is postponed until after the fixpoint.
 > 5. Parity covers the common errnos (not found, permission denied,
 >    is-a-directory) plus a generic fallback, with a Go-compatible errno mapping.
 > 6. `argv`, `eprint`, `exit`, and `try_read_file` are permanent built-ins.
@@ -551,9 +554,10 @@ to the bootstrap.
 
 ## 4. Proposed implementation order
 
-Each step is one coherent commit with its own acceptance checks. Steps 1–4 are
-language/runtime capabilities; step 5 is the Kitten driver; step 6 is the
-fixpoint proof.
+The order was revised in Phase 5.6. `argv`, `eprint`, `exit`, and the Kitten
+driver are implemented. `try_read_file`/`ReadFileResult` and loader read-error
+parity are **postponed until after the fixpoint**; the fixpoint is next. Each step
+is one coherent commit with its own acceptance checks.
 
 1. **`argv()` and the argument-carrying entry point.**
    - Runtime `ktn_rt_set_args`/`ktn_rt_argv`; Go and Kitten checkers/code
@@ -575,7 +579,9 @@ fixpoint proof.
      flushed before exit; stderr is flushed; the existing fatal-error tests still
      pass.
 
-4. **`try_read_file` and `ReadFileResult`.**
+4. **POSTPONED — `try_read_file` and `ReadFileResult`.** The design in
+   `proposals/read-file-result.md` stays proposed and untouched until after the
+   fixpoint.
    - Predeclared type in both checkers/generators; runtime result object and
      Go-compatible error formatting; existing `read_file` untouched.
    - Acceptance: the Phase 4E loader harness gains missing, unreadable, and
@@ -583,18 +589,18 @@ fixpoint proof.
      including `cannot read source file: open <path>: no such file or directory`;
      the full suite passes under both compilers.
 
-5. **Kitten compiler driver.**
-   - A driver that reads `argv()`, requires an absolute root, loads/checks/emits,
-     writes diagnostics with `eprint`, and uses `exit`; no file writing or C
-     compiler invocation.
-   - Add a POSIX-shell wrapper for temp files, runtime copying, C compiler
+5. **DONE — Kitten compiler driver.**
+   - `selfhost/driver.ktn` reads `argv()`, requires an absolute root,
+     loads/checks/emits, writes diagnostics with `eprint`, and uses `exit`; it
+     does no file writing or C compiler invocation.
+   - `selfhost/driver/kittenc.sh` owns temp files, runtime copying, C compiler
      discovery/`CC`/GC flags, output path, and run-status propagation.
-   - Acceptance: the wrapper builds and runs `tests/modules/` through the
-     Kitten driver; the emitted C is byte-identical to the Go reference; the
-     wrapper's stdout/stderr/status match `kitten build`/`kitten run` for the
-     corpus; the wrapper itself contains no Go.
+   - Acceptance: the wrapper builds and runs every fixture and `tests/modules/`;
+     the emitted C is byte-identical to the Go reference; the wrapper's
+     stdout/stderr/status match `kitten build`/`kitten run` for the corpus; the
+     wrapper itself contains no Go.
 
-6. **Fixpoint proof.**
+6. **NEXT — Fixpoint proof.**
    - Compile the Kitten compiler's source with the Go compiler (stage 0), then
      with the Kitten driver/wrapper (stage 1), then stage 1 compiles its own
      source (stage 2).

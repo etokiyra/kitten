@@ -355,7 +355,8 @@ It is also the only way a self-hosting claim means anything.
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
-| Generated programs executed | 43 program runs under GCC and Clang, outputs compared |
+| Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
+| Generated programs executed | 55 program runs under GCC and Clang, outputs compared |
 
 </details>
 
@@ -373,10 +374,15 @@ diagnostics to standard error with the same formatting as `print`; the runtime
 fixture captures stdout and stderr separately through both pipelines. Phase 5.3
 added `exit(status)`, which flushes stdout and then stderr before terminating; the
 runtime fixture checks stdout, stderr, and the exact status, including POSIX
-low-eight-bit behavior. Two loader limits remain: a missing or unreadable file
-is still fatal because SPEC.md defers recoverable file input, and a relative root needs
-a working-directory primitive. Those are the 4E.2 decision and the driver phase, not
-open generator questions.
+low-eight-bit behavior. Phase 5.6 added the Kitten-written compiler driver at
+`selfhost/driver.ktn` and the temporary POSIX-shell wrapper
+`selfhost/driver/kittenc.sh`: stage 1 emits byte-identical C for all nine fixtures and
+`tests/modules/`, and the wrapper builds and runs them under GCC and Clang. Missing or
+unreadable imports are **not** matched yet: they are fatal through `read_file`, and
+the postponed `ReadFileResult`/`try_read_file` work is scheduled after the fixpoint.
+Relative source paths are made absolute by the wrapper; the driver itself requires an
+absolute path. The two-stage fixpoint is the next phase, not an open generator
+question.
 
 The Go compiler remains the bootstrap and the only pipeline the CLI uses. Kitten is
 **not** self-hosting yet, and this README will not say it is until a Kitten-built compiler
@@ -402,8 +408,9 @@ tests/         .ktn fixtures with their expected program output
 ```
 
 `selfhost/` mirrors the compiler stage by stage: a lexer, a parser, a checker, a semantic
-model, a module loader, and a C code generator, each with a driver that prints what it
-produced so the Go-side harnesses can compare it with the reference.
+model, a module loader, a compiler driver with a temporary POSIX wrapper, and a C code
+generator, each with a driver that prints what it produced so the Go-side harnesses can
+compare it with the reference.
 
 ## Testing
 
@@ -414,10 +421,10 @@ CC=clang go test ./...
 ```
 
 The suite includes both ordinary unit tests and the differential harnesses described
-above: the Kitten-written lexer, parser, checker, semantic model, module loader, code
-generator, and translation-unit emitter are each compared against the Go implementation
-over a large corpus, and every fixture is compiled, executed, and compared against its
-expected output under both GCC and Clang.
+above: the Kitten-written lexer, parser, checker, semantic model, module loader, compiler
+driver, and code generator are each compared against the Go implementation over a large
+corpus, and every fixture is compiled, executed, and compared against its expected output
+under both GCC and Clang.
 
 ## How the project is developed
 
