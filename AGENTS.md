@@ -202,12 +202,19 @@ remain `.ktn`, and generated C, runtime file names, `ktn_` identifiers, and
 `#include "kitten_runtime.h"` are unchanged.
 
 Phase 5.4b implemented the adopted `ReadFileResult`/`try_read_file` design in the
-C runtime and the Go pipeline only: the predeclared union and on-use prelude,
-the Go checker/generator, Go-compatible errno text, and Go-only tests. No
-`selfhost/` or loader behavior changed. Phase 5.4c (Kitten checker/generator)
-is next, then 5.5 (loader read-error parity). A SPEC cleanup of Go/C-flavored
-wording remains a later candidate. Native backend, standard library, and file
-writing remain unauthorized.
+C runtime and the Go pipeline: the predeclared union and on-use prelude, the Go
+checker/generator, and Go-compatible errno text. Phase 5.4c mirrored it in the
+Kitten-written checker, semantic model, and generator: the checker appends the
+fixed prelude as module `n` on a syntactic trigger, reserves `ReadFileResult`,
+and registers the builtin after collecting the type; the generator emits the
+normal union and a non-static helper and lowers the call to it. The shared
+checker, semantic, expression, function, unit, declarations, and loader corpora
+grew, and a both-pipeline runtime fixture covers existing, empty, missing,
+directory, and unreadable paths under both compilers. The loader was deliberately
+untouched and still calls fatal `read_file`. Phase 5.5 (loader read-error parity)
+is next, using `try_read_file` and the `cannot read source file: ` prefix. A SPEC
+cleanup of Go/C-flavored wording remains a later candidate. Native backend,
+standard library, and file writing remain unauthorized.
 
 ### Adding a built-in
 
@@ -297,8 +304,9 @@ authorization after the design is approved.
    runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,
    and exact status/stream runtime coverage; Phase 5.6 added the Kitten-written
    driver and temporary POSIX-shell wrapper, with byte-identical C and native
-   fixture execution under GCC and Clang; Phase 5.7 reached the C-level fixpoint.
-   The postponed 5.4/5.5 read-result and loader parity work remains next).
+   fixture execution under GCC and Clang; Phase 5.7 reached the C-level fixpoint;
+   Phase 5.4c brought `try_read_file` and `ReadFileResult` to the Kitten-written
+   checker and generator. The loader read-error parity (5.5) remains next).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

@@ -158,7 +158,7 @@ func renderReferenceCheck(root, imported string) (string, error) {
 			checkerKindName(semantic.Kind), semantic.File, semantic.Line, semantic.Column, semantic.Message), nil
 	}
 
-	types, functions := countDeclarations(modules)
+	types, functions := countDeclarations(result.Modules)
 	return fmt.Sprintf("ok modules %d types %d functions %d bodies %d\n",
 		len(result.Modules), types, functions, functions), nil
 }
@@ -244,6 +244,32 @@ func checkerCorpus(t *testing.T) []checkerCase {
 	add("string operations", "fn main() {\n    string s = \"hello\";\n    int n = length(s);\n    int b = s[0];\n    string t = substring(s, 1, 2);\n    bool same = s == \"hello\";\n}\n")
 	add("builtins", "fn main() {\n    print(1, 2.5, true, \"x\");\n    eprint(1, 2.5, true, \"x\");\n    print(length(new int[1]));\n    print(read_file(\"x\") == \"\");\n    print(length(argv()), argv()[0]);\n}\n")
 	add("exit built-in", "fn stop(int code) {\n    exit(code);\n    exit(1 + 2);\n}\nfn main() {\n}\n")
+	add("try_read_file match on both variants", `fn main() {
+    match (try_read_file("x")) {
+        Ok(text) { print(text); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_read_file direct variant construction", `fn trigger() {
+    try_read_file("x");
+}
+fn main() {
+    ReadFileResult ok = ReadFileResult.Ok { text = "x" };
+    ReadFileResult failed = ReadFileResult.Failed { message = "y" };
+}
+`)
+	add("shadowed try_read_file still injects the prelude", `fn try_read_file(string path) -> int {
+    return 1;
+}
+fn main() {
+    print(try_read_file("x"));
+}
+`)
+	add("try_read_file spelling in a string is not a trigger", `fn main() {
+    print("try_read_file(");
+}
+`)
 	add("control flow", "fn main() {\n    int i = 0;\n    if (i == 0) {\n        i = 1;\n    } else if (i == 1) {\n        i = 2;\n    } else {\n        i = 3;\n    }\n    while (i > 0) {\n        i--;\n    }\n    for (int j = 0; j < 3; j++) {\n        i += j;\n    }\n    for (;;) {\n    }\n}\n")
 	add("nested blocks and shadowing", "fn main() {\n    int x = 1;\n    {\n        int x = 2;\n        {\n            int x = 3;\n        }\n    }\n    if (true) {\n        int x = 4;\n    }\n}\n")
 	add("forward references", "fn main() {\n    print(later());\n    Point p = make();\n}\nfn later() -> int {\n    return 1;\n}\nstruct Point { int x; }\nfn make() -> Point {\n    return Point { x = 1 };\n}\n")
@@ -374,6 +400,13 @@ func checkerCorpus(t *testing.T) []checkerCase {
 		"fn f() { exit(1.5); }\n",
 		"fn f() { exit(true); }\n",
 		"fn f() -> int { exit(1); }\n",
+		"fn ReadFileResult() {}\n",
+		"struct ReadFileResult {}\n",
+		"enum ReadFileResult { A }\n",
+		"union ReadFileResult { A }\n",
+		"fn f() { match (try_read_file(\"x\")) { Ok(text) { } } }\n",
+		"fn f() { try_read_file(); }\n",
+		"fn f() { try_read_file(1); }\n",
 
 		// Indexing.
 		"fn f() { int x = 1; int y = x[0]; }\n",
@@ -531,6 +564,17 @@ func checkerCorpus(t *testing.T) []checkerCase {
 		"struct Hidden { int x; }\npublic fn make() -> int {\n    Hidden h = Hidden { x = 1 };\n    return h.x;\n}\n")
 	addModules("map of imported type", "import \"input2.txt\";\nfn main() {\n    map[string]P table = new map[string]P;\n    table[\"a\"] = P { x = 1 };\n}\n",
 		"public struct P {\n    int x;\n}\n")
+	addModules("try_read_file from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_read_file("x")));
+}
+`, `public fn classify(ReadFileResult result) -> int {
+    match (result) {
+        Ok(text) { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+`)
 	addModules("imported malformed module", "fn main() {}\n", "fn broken( {\n")
 	addModules("root malformed with valid import", "fn broken( {\n", "fn ok() {}\n")
 
@@ -555,6 +599,7 @@ func checkerCorpus(t *testing.T) []checkerCase {
 		filepath.Join("..", "..", "selfhost", "checker", "state.ktn"),
 		filepath.Join("..", "..", "selfhost", "checker", "expr.ktn"),
 		filepath.Join("..", "..", "selfhost", "checker", "stmt.ktn"),
+		filepath.Join("..", "..", "selfhost", "checker", "prelude.ktn"),
 		filepath.Join("..", "..", "selfhost", "checker", "checker.ktn"),
 		filepath.Join("..", "..", "selfhost", "codegen.ktn"),
 		filepath.Join("..", "..", "selfhost", "codegen", "names.ktn"),

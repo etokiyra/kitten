@@ -120,7 +120,7 @@ func referenceModel(root, imported string) (string, error) {
 			checkerKindName(semantic.Kind), semantic.File, semantic.Line, semantic.Column, semantic.Message), nil
 	}
 
-	types, functions := countDeclarations(modules)
+	types, functions := countDeclarations(result.Modules)
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "ok modules %d types %d functions %d bodies %d\n", len(result.Modules), types, functions, functions)
 
@@ -190,6 +190,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "ReadFile"
 	case checker.BuiltinArgv:
 		return "Argv"
+	case checker.BuiltinTryReadFile:
+		return "TryReadFile"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

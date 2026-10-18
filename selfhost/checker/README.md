@@ -16,6 +16,7 @@ the language, and no language feature was added to make the checker easier.
 | `state.ktn` | symbols, functions, scopes, the checker state, name and type resolution, diagnostics |
 | `expr.ktn` | expression checking |
 | `stmt.ktn` | statement checking and the conservative control-flow analysis |
+| `prelude.ktn` | the fixed `ReadFileResult` source, its syntactic trigger, and its builtin registration |
 | `checker.ktn` | the five passes and the public entry points |
 
 The driver is `../check.ktn`, one directory up, rather than `main.ktn` here. The
@@ -201,6 +202,37 @@ The reference resolves a declaration by AST node identity, in maps keyed by the
 declaration pointer. Kitten has no map keyed by object identity, so a declaration
 is looked up by its module and name, which duplicate detection makes exact.
 
+## Implicit ReadFileResult prelude
+
+A syntactic call whose callee is the identifier `try_read_file` causes
+`check_modules` to append one synthetic module after every loaded module, at
+`id = module_count` and path `<prelude>`. The module is the fixed source
+
+```kitten
+public union ReadFileResult {
+    Ok { string text; }
+    Failed { string message; }
+}
+```
+
+parsed with the ordinary Kitten lexer and parser and checked by the ordinary
+passes, so the prelude is a real public union with the same registration, field,
+and variant rules as a user declaration. The loaded module ids and every mangled
+name do not change. A program with no such call gets no extra module and no
+extra type.
+
+The trigger is deliberately syntactic: a user function named `try_read_file`
+still injects the prelude, and the generated helper is non-static and may be
+unused. `try_read_file` remains shadowable. The prelude type name
+`ReadFileResult` is reserved against every user top-level declaration, whether or
+not the program has a trigger, with the reference's exact diagnostic. The
+builtin itself is registered only after the prelude type has been collected, so
+its return type is the prelude's resolved type.
+
+The loader does **not** inject the prelude; this is the checker's responsibility,
+exactly as in the Go reference. Loader read-error parity is still deferred to
+5.5, where the loader will use `try_read_file` without involving this prelude.
+
 ## Coverage
 
 Every rule the reference enforces is implemented, with the same diagnostics at
@@ -212,7 +244,8 @@ construction, `match` exhaustiveness, duplicate and unknown bindings, local
 variables and shadowing, assignment and compound assignment, every unary and
 binary operator with its operand rules, array creation, indexing and length, maps
 and `has`, strings and `substring`, `print`'s variadic argument rule, conditions,
-`return`, and the conservative return-path analysis.
+`return`, the conservative return-path analysis, and the implicit
+`try_read_file`/`ReadFileResult` prelude with its reserved name.
 
 The reference's nil-guards (`"a module contains a nil struct declaration"`,
 `"identifier is nil"`, `"unsupported expression %T"`, `"function %q has no
@@ -222,15 +255,14 @@ the reference too. Absence that *is* reachable — a missing initializer, a bare
 `return`, an empty `for` clause, a function without a return type — is modelled
 explicitly and handled.
 
-## What is not produced
+## What is produced
 
 The reference builds a `Result` for a later code generator: resolved types per
 expression and per type reference, variant references, resolved symbols, and
-visible type and function tables. Nothing that decides whether a program is valid
-reads any of it, and this phase has no code generator, so the checker computes
-those types and discards them. Exposing them again is the natural next milestone,
-and is **deferred** (SPEC.md 27.6); a future code generator would need either
-per-node annotation or a new result API.
+visible type and function tables. The Kitten checker produces the equivalent
+`SemanticModel` and returns it from both entry points; `selfhost/codegen` reads
+it rather than repeating name resolution or type inference. Nothing that decides
+whether a program is valid reads those annotations.
 
 The language has no built-in integer-to-string conversion, so a checker that must
 embed a position or a count in a message performs one (`decimal` in `state.ktn`).
@@ -240,7 +272,7 @@ conversion remains deferred.
 ## Differential testing
 
 `cmd/purr/checker_differential_test.go` builds the checker once and runs it over
-a corpus of **1873 inputs**, comparing its rendering with the reference
+a corpus of **1886 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
@@ -254,7 +286,7 @@ every target type (3 × 100); a matrix of every indexable type indexed by every
 index type; name resolution and forward references; scoping, shadowing, and
 duplicate declarations; enum, union, variant, and `match` rules; arrays, maps, and
 built-ins; lexical and syntax failures, which must be distinguished from semantic
-ones; deeply nested and generated larger inputs; sixteen cross-module cases
+ones; deeply nested and generated larger inputs; seventeen cross-module cases
 covering public and private functions and types, duplicate public declarations,
 imported types in fields and maps, and a malformed imported module; and every
 fixture and every self-hosted source, including the checker's own and the code
@@ -262,7 +294,7 @@ generator's. A self-hosted source that declares `import` statements is checked a
 a one-module program, so the corpus exercises the reference's undefined-name
 diagnostics on them rather than checking them cleanly.
 
-**All 1873 inputs render byte-identically**, so this is exact parity on
+**All 1886 inputs render byte-identically**, so this is exact parity on
 success/failure, error category, position, message, and the declaration counts
 reported on success. `TestKittenCheckerOutputFormat` additionally pins the
 rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
@@ -283,8 +315,8 @@ the same corpus. The rendering is one line per declaration and per annotated nod
 in a fixed walk order — the node's kind and position, its resolved type, its
 resolved symbol with the declaration position it denotes, and its variant — with
 types rendered structurally and named types carrying their module. It covers the
-annotations themselves rather than success counts: **1873 inputs, all identical,
-4805 annotated lines of which 4579 carry a fact** (the remainder are the callee
+annotations themselves rather than success counts: **1886 inputs, all identical,
+4869 annotated lines of which 4632 carry a fact** (the remainder are the callee
 nodes and type names that the reference leaves unannotated).
 
 `TestKittenSemanticsOutputFormat` pins the rendering, and

@@ -485,6 +485,18 @@ fn inside(Kind kind, int limit) -> int {
 fn main() {
 }
 `,
+	}, {
+		description: "try_read_file result matching",
+		root: `fn describe(ReadFileResult result) -> int {
+    match (result) {
+        Ok(text) { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+fn main() {
+    print(describe(try_read_file("x")));
+}
+`,
 	}}
 }
 

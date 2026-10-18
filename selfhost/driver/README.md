@@ -96,12 +96,12 @@ generator failures, including the file/line/column shape and the no-position
 loader form (`<path>: import resolves outside the root directory <root>`).
 Usage status is 2; compilation failures are status 1.
 
-**Missing/unreadable files are not matched.** Until the postponed
-`ReadFileResult`/`try_read_file` work lands, the Kitten loader calls the fatal
-`read_file` built-in (SPEC.md Section 22.2). A missing import therefore
-terminates the process with the runtime's fatal message rather than the Go
-loader's `cannot read source file: ...` diagnostic. Missing-import parity is
-explicitly out of scope for 5.6 and is not tested for text.
+**Missing/unreadable files are not matched.** The checker and generator now
+support `try_read_file` and `ReadFileResult` (5.4c), but the Kitten loader still
+calls the fatal `read_file` built-in (SPEC.md Section 22.2). A missing import
+therefore terminates the process with the runtime's fatal message rather than
+the Go loader's `cannot read source file: ...` diagnostic. Loader parity is 5.5
+and is not tested for text yet.
 
 A relative path is accepted by the wrapper, which makes it absolute, matching the
 Go CLI. The driver itself rejects a relative path with status 2 because it has no

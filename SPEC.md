@@ -2799,11 +2799,11 @@ produce its expected output when compiled and run.
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
 - **Recoverable file input in the Kitten-written pipeline and relative root
-  paths.** The Go pipeline now implements `try_read_file`; the Kitten-written
-  checker, generator, and loader parity is pending 5.4c/5.5. The Kitten-written
-  loader still requires an absolute root and calls the fatal `read_file`, so a
-  missing or unreadable file is fatal rather than a loader diagnostic. The
-  self-hosted runtime has no working directory (Sections 22.2 and 22.4).
+  paths.** The Go pipeline and the Kitten-written checker and generator implement
+  `try_read_file`; loader parity is pending 5.5. The Kitten-written loader still
+  requires an absolute root and calls the fatal `read_file`, so a missing or
+  unreadable file is fatal rather than a loader diagnostic. The self-hosted
+  runtime has no working directory (Sections 22.2 and 22.4).
 - File writing, directory operations, and process launch, none of which the
   self-hosted runtime offers.
 

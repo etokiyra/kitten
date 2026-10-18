@@ -249,7 +249,11 @@ fn emit_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(struct_constructors)) {
         return struct_constructors;
     }
-    return emit_union_constructor_section(emitter);
+    EmitStep union_constructors = emit_union_constructor_section(emitter);
+    if (!emit_ok(union_constructors)) {
+        return union_constructors;
+    }
+    return emit_prelude_helper_section(emitter);
 }
 
 // --- Sections ----------------------------------------------------------------
@@ -326,6 +330,59 @@ fn emit_struct_constructor_section(DeclarationEmitter emitter) -> EmitStep {
 // function per union variant.
 fn emit_union_constructor_section(DeclarationEmitter emitter) -> EmitStep {
     return for_each_union(emitter, DeclarationPhase.UnionConstructor);
+}
+
+// emit_prelude_helper_section emits the helper that turns the runtime's
+// non-fatal read result into the predeclared ReadFileResult union. It appears
+// after union constructors and only when the checker registered the prelude.
+fn emit_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.visible_types, "ReadFileResult")) {
+        return EmitStep.Ok;
+    }
+    Type union_type = emitter.model.visible_types["ReadFileResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared ReadFileResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_try_read_file_helper_name(union_type.module) + "(const ktn_string *ktn_path) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep text = emit_line(emitter, "const ktn_string *ktn_text = NULL;");
+    if (!emit_ok(text)) {
+        return text;
+    }
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) {
+        return message;
+    }
+    EmitStep call = emit_line(emitter, "if (" + try_read_file_function() + "(ktn_path, &ktn_text, &ktn_message)) {");
+    if (!emit_ok(call)) {
+        return call;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_text);");
+    if (!emit_ok(ok)) {
+        return ok;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) {
+        return close_if;
+    }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) {
+        return failed;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) {
+        return close;
+    }
+    return emit_line(emitter, "");
 }
 
 // --- Walks -------------------------------------------------------------------

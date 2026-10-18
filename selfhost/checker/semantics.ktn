@@ -67,6 +67,7 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         Length { return "Length"; }
         ReadFile { return "ReadFile"; }
         Argv { return "Argv"; }
+        TryReadFile { return "TryReadFile"; }
         MapHas { return "MapHas"; }
         Substring { return "Substring"; }
     }

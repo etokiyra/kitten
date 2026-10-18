@@ -36,7 +36,9 @@ public fn load_program(string root_path) -> LoadResult
 
 `Module` is the checker's existing parsed-module type: canonical path, id, parsed
 program, and the parser's expression and type-reference counts. The loader feeds
-it to `check_modules` and the emitters unchanged.
+it to `check_modules` and the emitters unchanged. The loader never injects the
+`ReadFileResult` prelude; the checker appends it at `id = module_count` when a
+module contains a syntactic `try_read_file` call.
 
 `canonical_path`, `clean_path`, `parent_directory`, `join_path`, and
 `within_directory` are public because they are the complete lexical path model
@@ -136,7 +138,7 @@ same absolute root:
   separators, absolute-looking imports, dot-prefixed filenames, and lexical and
   syntax errors in imported modules;
 - **`tests/modules/`**, the real nested fixture, with its actual canonical paths;
-- **14 multi-file checker corpus programs**, materialized as `input.txt` and
+- **15 multi-file checker corpus programs**, materialized as `input.txt` and
   `input2.txt`, including malformed modules;
 - **the full path** over `tests/modules/`: load, check, and emit with the
   Kitten-written stages, compare the unit with the Go reference, then compile,

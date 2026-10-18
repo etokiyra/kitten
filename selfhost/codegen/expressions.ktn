@@ -139,7 +139,7 @@ public fn emit_expression(ExpressionContext context, Expr expression) -> Express
             return assign_expression(context, operator, target, value);
         }
         Call(node_id, open_paren, callee, arguments, argument_count) {
-            return call_expression(context, callee, arguments, argument_count);
+            return call_expression(context, node_id, callee, arguments, argument_count);
         }
         Member(node_id, dot, receiver, member) {
             return member_expression(context, node_id, receiver, member);
@@ -704,7 +704,7 @@ union HelperResult {
 // others are one runtime call with their arguments in order. Anything else is a
 // call to the function the checker resolved for the callee, named by the module
 // that declared it.
-fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+fn call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
     BuiltinKind builtin = callee_builtin_kind(context, callee);
     if (builtin == BuiltinKind.Print) {
         return print_expression(context, arguments, argument_count);
@@ -730,7 +730,35 @@ fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int
     if (builtin == BuiltinKind.Argv) {
         return ExpressionResult.Ok { text = argv_function() + "()" };
     }
+    if (builtin == BuiltinKind.TryReadFile) {
+        return try_read_file_expression(context, node_id, callee, arguments, argument_count);
+    }
     return user_call_expression(context, callee, arguments, argument_count);
+}
+
+// try_read_file_expression lowers try_read_file(path) to the generated helper
+// that builds the predeclared ReadFileResult from the runtime primitive.
+fn try_read_file_expression(ExpressionContext context, int node_id, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    if (argument_count < 1) {
+        return wrong_builtin_arity(callee, "try_read_file", argument_count);
+    }
+    match (expression_info(module_model(context.model, context.module_index), node_id).type) {
+        Absent {
+            return missing_expression_type(callee);
+        }
+        Present(result_type) {
+            match (emit_expression(context, arguments[0])) {
+                Failed(error) {
+                    return ExpressionResult.Failed { error = error };
+                }
+                Ok(rendered) {
+                    return ExpressionResult.Ok {
+                        text = prelude_try_read_file_helper_name(result_type.module) + "(" + rendered + ")"
+                    };
+                }
+            }
+        }
+    }
 }
 
 // callee_builtin_kind reports which built-in a callee resolves to, or NotBuiltin

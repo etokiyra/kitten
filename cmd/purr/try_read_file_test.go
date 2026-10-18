@@ -105,3 +105,79 @@ func TestTryReadFileRuntime(t *testing.T) {
 		failure(t, path)
 	})
 }
+
+// TestTryReadFileKittenRuntime compiles the fixture through the Kitten-written
+// pipeline, checks that its C is byte-identical to the Go generator's, and runs
+// both executables over the same existing, empty, missing, directory, and
+// unreadable paths. It compares stdout, stderr, and the exit status exactly.
+func TestTryReadFileKittenRuntime(t *testing.T) {
+	requireToolchain(t)
+
+	unitExecutable := buildKittenUnit(t)
+	probeDirectory := t.TempDir()
+	kittenText, err := runKittenUnit(unitExecutable, probeDirectory, tryReadFileSource, "")
+	if err != nil {
+		t.Fatalf("generating try_read_file C with the Kitten pipeline: %v", err)
+	}
+	_, _, referenceText, ok := checkProgram(t, "try_read_file runtime", tryReadFileSource, "")
+	if !ok {
+		return
+	}
+	if difference := unitDifference(kittenText, referenceText); difference != "" {
+		t.Fatalf("the try_read_file translation unit differs: %s", difference)
+	}
+
+	goExecutable, _ := buildTryReadFileProgram(t, t.TempDir())
+	compiler, err := discoverCompiler()
+	if err != nil {
+		t.Fatalf("discovering the C compiler: %v", err)
+	}
+	compileFlags, linkFlags := gcBuildFlags()
+
+	directory := t.TempDir()
+	writeFile := func(name, content string) string {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+		return path
+	}
+	existing := writeFile("existing.txt", "hello\nworld\n")
+	empty := writeFile("empty.txt", "")
+	unreadable := writeFile("unreadable.txt", "secret")
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("chmod unreadable.txt: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"existing file", existing},
+		{"empty file", empty},
+		{"missing file", filepath.Join(directory, "missing.txt")},
+		{"directory", directory},
+	}
+	if os.Geteuid() != 0 {
+		cases = append(cases, struct {
+			name string
+			path string
+		}{"permission denied", unreadable})
+	}
+
+	for index, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			want := runExternal(t, goExecutable, []string{testCase.path}, directory, nil)
+			buildDirectory := t.TempDir()
+			got, err := buildAndRunProgramWithArgs(t, compiler, compileFlags, linkFlags, buildDirectory, kittenText, index, []string{testCase.path})
+			if err != nil {
+				t.Fatalf("building and running the Kitten-generated program: %v", err)
+			}
+			if got.status != want.status || got.stderr != want.stderr || got.stdout != want.stdout {
+				t.Errorf("Kitten pipeline: status %d, stderr %q, stdout %q; Go pipeline: status %d, stderr %q, stdout %q",
+					got.status, got.stderr, got.stdout, want.status, want.stderr, want.stdout)
+			}
+		})
+	}
+}

@@ -347,17 +347,18 @@ It is also the only way a self-hosting claim means anything.
 | --- | --- |
 | Lexer | 772 inputs |
 | Parser + AST | 262 inputs |
-| Checker + semantic model | 1,873 inputs, byte-identical |
+| Checker + semantic model | 1,886 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 83 whole units, 3,122 lines |
-| Module loader | 20 targeted trees, 14 multi-file corpus programs, `tests/modules/` |
+| Entry point and translation-unit assembly | 90 whole units, 3,541 lines |
+| Module loader | 20 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 65 program runs under GCC and Clang, outputs compared |
+| Generated programs executed | 75 program runs under GCC and Clang, outputs compared |
+| `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 
 </details>
 
@@ -373,10 +374,10 @@ the Go reference's generated C byte for byte.**
 **What is still not independent.** Go still builds stage 1; the bootstrap has not
 left the pipeline. A C compiler and the temporary POSIX wrapper
 (`selfhost/driver/purr-bootstrap.sh`) are still required, and the runtime is still C.
-Missing or unreadable imports are **not** matched yet: the Go pipeline now has
-`try_read_file`, but the Kitten-written checker/generator parity (5.4c) and the
-loader's read-error parity (5.5) are still pending, so the Kitten loader's
-failures remain fatal through `read_file`. Relative source paths are made
+Missing or unreadable imports are **not** matched yet: the Go pipeline and the
+Kitten-written checker and generator now agree on `try_read_file` and
+`ReadFileResult` (5.4c), but the loader's read-error parity (5.5) is still
+pending, so the Kitten loader's failures remain fatal through `read_file`. Relative source paths are made
 absolute by the wrapper; the driver itself requires an absolute path. Goal 2 (no
 C) and Goal 3 (the `purr` ecosystem) have not started.
 

@@ -107,6 +107,13 @@ public fn string_length_function() -> string { return "ktn_rt_string_length"; }
 public fn substring_function() -> string { return "ktn_rt_substring"; }
 public fn map_has_function() -> string { return "ktn_rt_map_has"; }
 public fn read_file_function() -> string { return "ktn_rt_read_file"; }
+public fn try_read_file_function() -> string { return "ktn_rt_try_read_file"; }
+
+// prelude_try_read_file_helper_name is the generated helper that builds the
+// predeclared ReadFileResult from the runtime's non-fatal read primitive.
+public fn prelude_try_read_file_helper_name(int module) -> string {
+    return "ktn_prelude_" + decimal(module) + "_try_read_file";
+}
 
 // string_at_function reads one byte of a string, array_new_function and
 // array_at_function create an array and access one bounds-checked element, and

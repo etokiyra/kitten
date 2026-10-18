@@ -266,6 +266,7 @@ public enum BuiltinKind {
     Length,
     ReadFile,
     Argv,
+    TryReadFile,
     MapHas,
     Substring
 }

@@ -570,6 +570,31 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_read_file with the implicit prelude and helper",
+		root: `fn describe(ReadFileResult result) -> int {
+    match (result) {
+        Ok(text) { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+fn inspect() -> int {
+    ReadFileResult result = ReadFileResult.Ok { text = "x" };
+    return describe(result);
+}
+fn main() {
+    print(describe(try_read_file("x")));
+}
+`,
+	}, {
+		description: "a shadowed try_read_file still emits the prelude helper",
+		root: `fn try_read_file(string path) -> int {
+    return 1;
+}
+fn main() {
+    print(try_read_file("x"));
+}
+`,
+	}, {
 		description: "nested literals and recursive variants",
 		root: `union Expression {
     IntegerLiteral { int value; }

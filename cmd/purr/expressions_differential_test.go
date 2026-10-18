@@ -1144,6 +1144,13 @@ fn main() {
     }
 }
 `,
+	}, {
+		description: "try_read_file call and direct variant construction",
+		root: `fn main() {
+    try_read_file("x");
+    ReadFileResult result = ReadFileResult.Ok { text = "x" };
+}
+`,
 	}}
 }
 

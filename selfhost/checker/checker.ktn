@@ -21,6 +21,7 @@ import "../lexer/tokens.ktn";
 import "../parser/ast.ktn";
 import "expr.ktn";
 import "model.ktn";
+import "prelude.ktn";
 import "state.ktn";
 import "stmt.ktn";
 
@@ -37,6 +38,36 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
         return CheckResult.Failure {
             error = CheckError { kind = ErrorKind.InvalidType, file = "", line = 1, column = 1, message = "cannot check a program with no modules" }
         };
+    }
+
+    bool prelude_needed = uses_try_read_file(modules, module_count);
+    if (prelude_needed) {
+        match (parse_read_file_result_prelude()) {
+            Failed(line, column, message) {
+                return CheckResult.Failure {
+                    error = CheckError {
+                        kind = ErrorKind.InvalidType,
+                        file = prelude_module_path(),
+                        line = line,
+                        column = column,
+                        message = message
+                    }
+                };
+            }
+            Ok(prelude_module) {
+                Module[] extended = new Module[module_count + 1];
+                int copy_index = 0;
+                while (copy_index < module_count) {
+                    extended[copy_index] = modules[copy_index];
+                    copy_index++;
+                }
+                Module prelude = prelude_module;
+                prelude.id = module_count;
+                extended[module_count] = prelude;
+                modules = extended;
+                module_count = module_count + 1;
+            }
+        }
     }
 
     Checker checker = Checker {
@@ -101,6 +132,22 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
     StepResult collected = collect_declarations(checker);
     if (!step_ok(collected)) {
         return CheckResult.Failure { error = step_error(collected) };
+    }
+    if (prelude_needed) {
+        if (!has(checker.public_types, "ReadFileResult")) {
+            return CheckResult.Failure {
+                error = CheckError {
+                    kind = ErrorKind.InvalidType,
+                    file = prelude_module_path(),
+                    line = 1,
+                    column = 1,
+                    message = "the ReadFileResult prelude was not registered"
+                }
+            };
+        }
+        Function try_function = try_read_file_builtin(checker.public_types["ReadFileResult"]);
+        checker.builtins["try_read_file"] = try_function;
+        checker.model.builtins["try_read_file"] = try_function;
     }
     StepResult structs = resolve_structs(checker);
     if (!step_ok(structs)) {
@@ -170,6 +217,21 @@ fn collect_declarations(Checker checker) -> StepResult {
 
 // collect_declaration registers one top-level declaration.
 fn collect_declaration(Checker checker, int module_index, Module module, Decl declaration) -> StepResult {
+    match (declaration_name(declaration)) {
+        Present(named) {
+            if (module.path != prelude_module_path() && named.name == "ReadFileResult") {
+                return StepResult.Failed {
+                    error = error_at(
+                        checker,
+                        ErrorKind.DuplicateDeclaration,
+                        named.at,
+                        "cannot declare \"ReadFileResult\": the name is reserved for the predeclared type"
+                    )
+                };
+            }
+        }
+        Absent { }
+    }
     match (declaration) {
         Import(keyword, path) {
             // An import declaration carries no language declarations; the module

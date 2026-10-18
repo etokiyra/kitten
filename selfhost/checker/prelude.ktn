@@ -1,0 +1,325 @@
+// prelude.ktn - the implicit ReadFileResult prelude.
+//
+// It mirrors checker/prelude.go: a fixed source text, a syntactic scan for
+// try_read_file calls, and the late registration of the builtin after the
+// prelude type has been collected. The loader never injects this module; the
+// checker appends it after every loaded module, with id equal to the loaded
+// module count.
+
+import "../lexer/lexer.ktn";
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "../parser/parser.ktn";
+import "state.ktn";
+
+// prelude_module_path is the synthetic module's identity.
+public fn prelude_module_path() -> string {
+    return "<prelude>";
+}
+
+// read_file_result_prelude is byte-identical to the Go checker's fixed source.
+public fn read_file_result_prelude() -> string {
+    return "public union ReadFileResult {\n    Ok { string text; }\n    Failed { string message; }\n}\n";
+}
+
+// PreludeResult is the parsed prelude module or the impossible frontend failure.
+public union PreludeResult {
+    Ok { Module module; }
+    Failed { int line; int column; string message; }
+}
+
+// parse_read_file_result_prelude parses the fixed prelude with the ordinary
+// Kitten lexer and parser. The module id is assigned by the caller.
+public fn parse_read_file_result_prelude() -> PreludeResult {
+    match (lex(read_file_result_prelude())) {
+        Failure(line, column, message) {
+            return PreludeResult.Failed { line = line, column = column, message = message };
+        }
+        Success(tokens, token_count) {
+            match (parse(tokens, token_count)) {
+                Failure(error) {
+                    return PreludeResult.Failed {
+                        line = error.line,
+                        column = error.column,
+                        message = error.message
+                    };
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreludeResult.Ok {
+                        module = Module {
+                            path = prelude_module_path(),
+                            id = 0,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// try_read_file_parameter_types returns the builtin's one string parameter.
+public fn try_read_file_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+// try_read_file_builtin builds the builtin against the collected prelude type.
+public fn try_read_file_builtin(Type result_type) -> Function {
+    return Function {
+        name = "try_read_file",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = try_read_file_parameter_types(),
+        return_type = result_type,
+        module = 0,
+        builtin = BuiltinKind.TryReadFile,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+}
+
+// uses_try_read_file reports whether any module contains a syntactic call whose
+// callee is the identifier try_read_file.
+public fn uses_try_read_file(Module[] modules, int module_count) -> bool {
+    int index = 0;
+    while (index < module_count) {
+        Module module = modules[index];
+        int declaration_index = 0;
+        while (declaration_index < module.program.declaration_count) {
+            if (declaration_uses_try_read_file(module.program.declarations[declaration_index])) {
+                return true;
+            }
+            declaration_index++;
+        }
+        index++;
+    }
+    return false;
+}
+
+// declaration_uses_try_read_file scans a top-level declaration. Only a function
+// body can contain an expression.
+fn declaration_uses_try_read_file(Decl declaration) -> bool {
+    match (declaration) {
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+            return statement_uses_try_read_file(body);
+        }
+        Struct(at, visibility, name, fields, field_count) { return false; }
+        Enum(at, visibility, name, cases, case_count) { return false; }
+        Union(at, visibility, name, variants, variant_count) { return false; }
+        Import(keyword, path) { return false; }
+    }
+}
+
+// statement_uses_try_read_file scans a statement and its children.
+fn statement_uses_try_read_file(Stmt statement) -> bool {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            int index = 0;
+            while (index < statement_count) {
+                if (statement_uses_try_read_file(statements[index])) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        VarDecl(type_ref, name, initializer) {
+            match (initializer) {
+                Present(expression) { return expression_uses_try_read_file(expression); }
+                Absent { return false; }
+            }
+        }
+        Expression(expression) {
+            return expression_uses_try_read_file(expression);
+        }
+        If(at, condition, then_branch, else_branch) {
+            if (expression_uses_try_read_file(condition)) {
+                return true;
+            }
+            if (statement_uses_try_read_file(then_branch)) {
+                return true;
+            }
+            match (else_branch) {
+                Present(statement_value) { return statement_uses_try_read_file(statement_value); }
+                Absent { return false; }
+            }
+        }
+        While(at, condition, body) {
+            return expression_uses_try_read_file(condition) || statement_uses_try_read_file(body);
+        }
+        For(at, initializer, condition, increment, body) {
+            match (initializer) {
+                Present(statement_value) {
+                    if (statement_uses_try_read_file(statement_value)) {
+                        return true;
+                    }
+                }
+                Absent { }
+            }
+            match (condition) {
+                Present(expression) {
+                    if (expression_uses_try_read_file(expression)) {
+                        return true;
+                    }
+                }
+                Absent { }
+            }
+            match (increment) {
+                Present(expression) {
+                    if (expression_uses_try_read_file(expression)) {
+                        return true;
+                    }
+                }
+                Absent { }
+            }
+            return statement_uses_try_read_file(body);
+        }
+        Return(at, value) {
+            match (value) {
+                Present(expression) { return expression_uses_try_read_file(expression); }
+                Absent { return false; }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            if (expression_uses_try_read_file(scrutinee)) {
+                return true;
+            }
+            int index = 0;
+            while (index < arm_count) {
+                if (statement_uses_try_read_file(arms[index].body)) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+    }
+}
+
+// expression_uses_try_read_file scans an expression and its children.
+fn expression_uses_try_read_file(Expr expression) -> bool {
+    match (expression) {
+        Integer(node_id, token) { return false; }
+        Float(node_id, token) { return false; }
+        Boolean(node_id, token, value) { return false; }
+        String(node_id, token) { return false; }
+        Identifier(node_id, token) { return false; }
+        Unary(node_id, operator, operand, postfix) {
+            return expression_uses_try_read_file(operand);
+        }
+        Binary(node_id, operator, left, right) {
+            return expression_uses_try_read_file(left) || expression_uses_try_read_file(right);
+        }
+        Assign(node_id, operator, target, value) {
+            return expression_uses_try_read_file(target) || expression_uses_try_read_file(value);
+        }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            match (callee) {
+                Identifier(callee_id, token) {
+                    if (token.text == "try_read_file") {
+                        return true;
+                    }
+                }
+                Integer(callee_id, token) { }
+                Float(callee_id, token) { }
+                Boolean(callee_id, token, value) { }
+                String(callee_id, token) { }
+                Unary(callee_id, operator, operand, postfix) { }
+                Binary(callee_id, operator, left, right) { }
+                Assign(callee_id, operator, target, value) { }
+                Call(callee_id, inner_open, inner_callee, inner_arguments, inner_count) { }
+                Member(callee_id, dot, receiver, member) { }
+                StructLiteral(callee_id, type_ref, open_brace, fields, field_count) { }
+                VariantLiteral(callee_id, type_ref, variant, open_brace, fields, field_count) { }
+                NewArray(callee_id, at, element, length) { }
+                NewMap(callee_id, at, map_type) { }
+                Index(callee_id, bracket, target, index) { }
+            }
+            if (expression_uses_try_read_file(callee)) {
+                return true;
+            }
+            int index = 0;
+            while (index < argument_count) {
+                if (expression_uses_try_read_file(arguments[index])) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        Member(node_id, dot, receiver, member) {
+            return expression_uses_try_read_file(receiver);
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                if (expression_uses_try_read_file(fields[index].value)) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                if (expression_uses_try_read_file(fields[index].value)) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        NewArray(node_id, at, element, length) {
+            return expression_uses_try_read_file(length);
+        }
+        NewMap(node_id, at, map_type) { return false; }
+        Index(node_id, bracket, target, index) {
+            return expression_uses_try_read_file(target) || expression_uses_try_read_file(index);
+        }
+    }
+}
+
+// NamedDeclaration is the name and position of a top-level declaration.
+public struct NamedDeclaration {
+    string name;
+    Position at;
+}
+
+// OptionalNamedDeclaration is a named declaration or the absence of a name.
+public union OptionalNamedDeclaration {
+    Absent
+    Present { NamedDeclaration declaration; }
+}
+
+// declaration_name returns a top-level declaration's name and position.
+public fn declaration_name(Decl declaration) -> OptionalNamedDeclaration {
+    match (declaration) {
+        Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+            return OptionalNamedDeclaration.Present {
+                declaration = NamedDeclaration { name = name.text, at = position_of_token(at) }
+            };
+        }
+        Struct(at, visibility, name, fields, field_count) {
+            return OptionalNamedDeclaration.Present {
+                declaration = NamedDeclaration { name = name.text, at = position_of_token(at) }
+            };
+        }
+        Enum(at, visibility, name, cases, case_count) {
+            return OptionalNamedDeclaration.Present {
+                declaration = NamedDeclaration { name = name.text, at = position_of_token(at) }
+            };
+        }
+        Union(at, visibility, name, variants, variant_count) {
+            return OptionalNamedDeclaration.Present {
+                declaration = NamedDeclaration { name = name.text, at = position_of_token(at) }
+            };
+        }
+        Import(keyword, path) { return OptionalNamedDeclaration.Absent; }
+    }
+}
