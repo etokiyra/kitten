@@ -661,7 +661,7 @@ outcome here.
   reference checker by a differential test. It also is not part of the production
   pipeline (Section 27).
 - Self-hosting, a native (LLVM or assembly) backend, and the standard library
-  are not implemented (Section 19.8).
+  are not implemented (Section 19.9).
 
 ---
 
@@ -1613,7 +1613,53 @@ targets the host platform; cross-compilation and Windows are **not** supported.
 - Code generation returns an error, rather than panicking, when the syntax tree
   is inconsistent with the checked result.
 
-### 19.8 Limitations and provisional decisions
+### 19.8 The compiler-reserved `<runtime>` module
+
+- `<runtime>` is a compiler-reserved synthetic module, separate from
+  `<prelude>`. It is never loadable from disk, cannot be imported by user code,
+  and is never injected by `purr build` or `purr run`. An explicit Go/Kitten
+  harness hook supplies its source text; the production CLI cannot reach that
+  hook.
+- The hook parses the supplied source with the ordinary lexer and parser and
+  appends it after every loaded module and after `<prelude>` if that module
+  exists. Its path is `<runtime>` and its id is the current module count. A
+  program using both synthetic modules therefore has loaded modules, then
+  `<prelude>`, then `<runtime>`; a program using neither has no synthetic
+  module.
+- Intrinsic names resolve only while checking `<runtime>`. In every other
+  module they are ordinary names: an undeclared intrinsic call is the ordinary
+  undefined-function error, a user may declare a function with that name, and
+  no intrinsic name is reserved. The intrinsic names are:
+
+  ```text
+  raw_load8(int address) -> byte
+  raw_store8(int address, byte value)
+  raw_load64(int address) -> int
+  raw_store64(int address, int value)
+  raw_copy(int destination, int source, int count)
+  raw_zero(int address, int count)
+  address_of(byte[] data) -> int
+  address_of(string value) -> int
+  syscall(int number, int a, int b, int c, int d, int e, int f) -> int
+  ```
+
+  `address_of` is the one overloaded intrinsic; its argument type selects the
+  byte-array or string data pointer. `raw_alloc` and `stack_bounds` are
+  **deferred** to the GC phase.
+- Raw memory operations are trusted code. They do not validate addresses and
+  cannot uphold the language's no-undefined-behavior guarantee; that guarantee
+  applies to every module reachable from user source, where the intrinsics are
+  unreachable. A negative size passed to `raw_copy` or `raw_zero` is a fatal
+  runtime error with `negative size <n>`.
+- Generated C lowers raw loads/stores with `memcpy` on an `unsigned char *`
+  cast of the address, raw copy/zero with `memmove`/`memset`, `address_of` to a
+  data-pointer cast to `int64_t`, and `syscall` to the C library `syscall()`
+  with `long` casts. The helpers are static inline `ktn_rt_raw_*` and
+  `ktn_rt_syscall` in the MIT runtime header.
+- The runtime module source lives under `runtime/ktn/` with the MIT notice. Its
+  public functions live in that module under the ordinary public/private rules.
+
+### 19.9 Limitations and provisional decisions
 
 1. Struct values are GC-managed references with pointer-copy assignment.
 2. `int` is `int64_t` and `float` is `double`.

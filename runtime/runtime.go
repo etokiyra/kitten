@@ -127,6 +127,15 @@ const (
 	// TryCurrentDirectoryFunction returns the absolute current directory.
 	TryCurrentDirectoryFunction = "ktn_rt_try_current_directory"
 
+	// Runtime-module raw-memory and syscall helpers.
+	RawLoad8Function   = "ktn_rt_raw_load8"
+	RawStore8Function  = "ktn_rt_raw_store8"
+	RawLoad64Function  = "ktn_rt_raw_load64"
+	RawStore64Function = "ktn_rt_raw_store64"
+	RawCopyFunction    = "ktn_rt_raw_copy"
+	RawZeroFunction    = "ktn_rt_raw_zero"
+	SyscallFunction    = "ktn_rt_syscall"
+
 	// StringToBytesFunction returns a string's bytes as a byte array.
 	StringToBytesFunction = "ktn_rt_string_to_bytes"
 

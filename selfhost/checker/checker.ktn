@@ -34,6 +34,12 @@ import "stmt.ktn";
 // declaration is public only when it is marked public, so private declarations
 // are never visible to other modules.
 public fn check_modules(Module[] modules, int module_count) -> CheckResult {
+    return check_modules_with_runtime(modules, module_count, "");
+}
+
+// check_modules_with_runtime is the harness hook for the synthetic <runtime>
+// module. Production callers use check_modules and supply no runtime source.
+public fn check_modules_with_runtime(Module[] modules, int module_count, string runtime_source) -> CheckResult {
     if (module_count == 0) {
         return CheckResult.Failure {
             error = CheckError { kind = ErrorKind.InvalidType, file = "", line = 1, column = 1, message = "cannot check a program with no modules" }
@@ -64,6 +70,34 @@ public fn check_modules(Module[] modules, int module_count) -> CheckResult {
                 Module prelude = prelude_module;
                 prelude.id = module_count;
                 extended[module_count] = prelude;
+                modules = extended;
+                module_count = module_count + 1;
+            }
+        }
+    }
+
+    if (runtime_source != "") {
+        match (parse_runtime_module(runtime_source)) {
+            Failed(line, column, message) {
+                return CheckResult.Failure {
+                    error = CheckError {
+                        kind = ErrorKind.InvalidType,
+                        file = runtime_module_path(),
+                        line = line,
+                        column = column,
+                        message = message
+                    }
+                };
+            }
+            Ok(runtime_module) {
+                Module[] extended = new Module[module_count + 1];
+                int copy_index = 0;
+                while (copy_index < module_count) {
+                    extended[copy_index] = modules[copy_index];
+                    copy_index++;
+                }
+                runtime_module.id = module_count;
+                extended[module_count] = runtime_module;
                 modules = extended;
                 module_count = module_count + 1;
             }
@@ -209,7 +243,7 @@ fn collect_declarations(Checker checker) -> StepResult {
 fn collect_declaration(Checker checker, int module_index, Module module, Decl declaration) -> StepResult {
     match (declaration_name(declaration)) {
         Present(named) {
-            if (module.path != prelude_module_path() &&
+            if (!is_synthetic_module_path(module.path) &&
                 (named.name == "ReadFileResult" || named.name == "FileResult" || named.name == "ListDirectoryResult" || named.name == "RunResult" || named.name == "CurrentDirectoryResult")) {
                 return StepResult.Failed {
                     error = error_at(

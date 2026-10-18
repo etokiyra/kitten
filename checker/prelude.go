@@ -44,10 +44,26 @@ const (
 `
 )
 
-// preludeModulePath identifies the synthetic module. A user source file cannot
-// normally have this path; the only consequence is that reserved-name checks
-// skip the prelude itself.
-const preludeModulePath = "<prelude>"
+// preludeModulePath and runtimeModulePath identify the two compiler-reserved
+// synthetic modules. User source files cannot normally have these paths; the
+// only consequence is that reserved-name and intrinsic checks treat them as
+// synthetic.
+const (
+	preludeModulePath = "<prelude>"
+	runtimeModulePath = "<runtime>"
+)
+
+// syntheticModulePaths is the table of compiler-reserved module paths. It is
+// deliberately closed: adding a synthetic module requires naming it here.
+var syntheticModulePaths = map[string]bool{
+	preludeModulePath: true,
+	runtimeModulePath: true,
+}
+
+// isSyntheticModulePath reports whether path names a compiler-reserved module.
+func isSyntheticModulePath(path string) bool {
+	return syntheticModulePaths[path]
+}
 
 // preludeUses records which prelude built-ins a program calls syntactically.
 type preludeUses struct {
@@ -93,6 +109,11 @@ func preludeSource(uses preludeUses) string {
 // parsePrelude parses assembled prelude source into a module with ID 0. The
 // caller assigns the final ID when appending it.
 func parsePrelude(source string) (*parser.Module, error) {
+	return parseSyntheticModule(preludeModulePath, source)
+}
+
+// parseSyntheticModule parses source for one compiler-reserved module.
+func parseSyntheticModule(path, source string) (*parser.Module, error) {
 	tokens, err := lexer.Lex(source)
 	if err != nil {
 		return nil, fmt.Errorf("parsing the prelude: %w", err)
@@ -101,7 +122,7 @@ func parsePrelude(source string) (*parser.Module, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing the prelude: %w", err)
 	}
-	return &parser.Module{Path: preludeModulePath, Program: program}, nil
+	return &parser.Module{Path: path, Program: program}, nil
 }
 
 // scanPreludeUses scans every module for syntactic calls to the eight prelude

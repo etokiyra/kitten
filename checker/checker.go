@@ -202,6 +202,21 @@ func Check(program *parser.Program) (*Result, error) {
 	return CheckModules([]*parser.Module{{ID: 0, Program: program}})
 }
 
+// CheckOptions carries harness-only compiler hooks. It is reachable only from
+// Go code; the CLI, the loader, and source syntax cannot set it.
+type CheckOptions struct {
+	// RuntimeSource, when non-empty, is parsed as the synthetic <runtime>
+	// module and appended after all loaded modules and after <prelude>.
+	RuntimeSource string
+}
+
+// CheckModulesWithRuntime is the harness hook for the synthetic <runtime>
+// module. A production caller uses CheckModules, which supplies no runtime
+// source and therefore adds no runtime module.
+func CheckModulesWithRuntime(modules []*parser.Module, runtimeSource string) (*Result, error) {
+	return CheckModulesWithOptions(modules, CheckOptions{RuntimeSource: runtimeSource})
+}
+
 // CheckModules performs semantic analysis and type checking on a program that
 // may span several modules. The first module is the root module; the others are
 // imported.
@@ -211,6 +226,12 @@ func Check(program *parser.Program) (*Result, error) {
 // declaration is public only when it is marked public, so private declarations
 // are never visible to other modules.
 func CheckModules(modules []*parser.Module) (*Result, error) {
+	return CheckModulesWithOptions(modules, CheckOptions{})
+}
+
+// CheckModulesWithOptions is CheckModules plus harness-only synthetic-module
+// injection.
+func CheckModulesWithOptions(modules []*parser.Module, options CheckOptions) (*Result, error) {
 	if len(modules) == 0 {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "cannot check a program with no modules"}
 	}
@@ -225,6 +246,18 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 		extended := make([]*parser.Module, len(modules)+1)
 		copy(extended, modules)
 		extended[len(modules)] = prelude
+		modules = extended
+	}
+
+	if options.RuntimeSource != "" {
+		runtimeModule, err := parseSyntheticModule(runtimeModulePath, options.RuntimeSource)
+		if err != nil {
+			return nil, err
+		}
+		runtimeModule.ID = len(modules)
+		extended := make([]*parser.Module, len(modules)+1)
+		copy(extended, modules)
+		extended[len(modules)] = runtimeModule
 		modules = extended
 	}
 
@@ -375,7 +408,7 @@ func (c *checker) collectDeclarations() error {
 	for index, module := range c.modules {
 		c.current = module
 		for _, declaration := range c.result.Modules[index].Program.Declarations {
-			if module.path != preludeModulePath {
+			if !isSyntheticModulePath(module.path) {
 				if name, at, ok := declarationName(declaration); ok && preludeReservedNames[name] {
 					return c.errorAt(DuplicateDeclaration, at, "cannot declare %q: the name is reserved for the predeclared type", name)
 				}

@@ -357,13 +357,14 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 180 program runs under GCC and Clang, outputs compared |
+| Generated programs executed | 183 program runs under GCC and Clang, outputs compared |
 | Defined arithmetic/bitwise/byte runtime | wrapping, shifts, byte arrays, conversions, and failures through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 | File/directory runtime | writes, bytes, truncation, mkdir, remove, sorted listing, Go-identical errors, and permission paths through both pipelines |
 | Descriptor leak check | 2,000 failing writes under a 16-descriptor limit |
 | `try_run` runtime | statuses, signals, inherited environment/cwd/fds, argument preservation, ordering, and start failures through both pipelines; a 2,000-run leak loop and zombie check |
 | `try_current_directory` runtime | real, symlinked, deep, deleted, and `$PWD`-misleading cases through both pipelines |
+| Compiler-reserved `<runtime>` | harness-only injection, runtime-only intrinsics, raw memory, syscall, helper source, and C lowering through both pipelines |
 
 </details>
 

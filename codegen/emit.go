@@ -578,6 +578,45 @@ func (g *generator) structLiteral(expression *parser.StructLiteral) (string, err
 	return fmt.Sprintf("%s(%s)", constructorName(structType.Name, structType.Module), strings.Join(arguments, ", ")), nil
 }
 
+// intrinsicCall renders a runtime-module intrinsic as one runtime helper call.
+func (g *generator) intrinsicCall(expression *parser.CallExpr, function string, expected int) (string, error) {
+	arguments := make([]string, 0, expected)
+	for _, argument := range expression.Arguments {
+		rendered, err := g.expression(argument)
+		if err != nil {
+			return "", err
+		}
+		arguments = append(arguments, rendered)
+	}
+	if len(arguments) != expected {
+		return "", &Error{Line: expression.OpenParen.Line, Column: expression.OpenParen.Column, Message: fmt.Sprintf("intrinsic %s expects %d argument(s), got %d", function, expected, len(arguments))}
+	}
+	return fmt.Sprintf("%s(%s)", function, strings.Join(arguments, ", ")), nil
+}
+
+// addressOfExpression lowers the overloaded address_of intrinsic.
+func (g *generator) addressOfExpression(expression *parser.CallExpr) (string, error) {
+	if len(expression.Arguments) != 1 {
+		return "", &Error{Line: expression.OpenParen.Line, Column: expression.OpenParen.Column, Message: "address_of expects one argument"}
+	}
+	argumentType, err := g.expressionType(expression.Arguments[0])
+	if err != nil {
+		return "", err
+	}
+	rendered, err := g.expression(expression.Arguments[0])
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case argumentType == checker.StringType:
+		return fmt.Sprintf("((int64_t)(uintptr_t)(((const ktn_string *)(%s))->data))", rendered), nil
+	case argumentType.Kind == checker.KindArray && argumentType.Element == checker.ByteType:
+		return fmt.Sprintf("((int64_t)(uintptr_t)(((ktn_array *)(%s))->data))", rendered), nil
+	default:
+		return "", &Error{Line: expression.Arguments[0].Pos().Line, Column: expression.Arguments[0].Pos().Column, Message: fmt.Sprintf("address_of does not accept %s", argumentType)}
+	}
+}
+
 // preludeCall lowers a file or directory built-in call to its generated prelude
 // helper. The checker guarantees the argument count and types; this reports a
 // malformed tree rather than emitting a partial call.
@@ -692,6 +731,22 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		return g.preludeCall(expression, "try_run", 2)
 	case checker.BuiltinTryCurrentDirectory:
 		return g.preludeCall(expression, "try_current_directory", 0)
+	case checker.BuiltinRawLoad8:
+		return g.intrinsicCall(expression, runtime.RawLoad8Function, 1)
+	case checker.BuiltinRawStore8:
+		return g.intrinsicCall(expression, runtime.RawStore8Function, 2)
+	case checker.BuiltinRawLoad64:
+		return g.intrinsicCall(expression, runtime.RawLoad64Function, 1)
+	case checker.BuiltinRawStore64:
+		return g.intrinsicCall(expression, runtime.RawStore64Function, 2)
+	case checker.BuiltinRawCopy:
+		return g.intrinsicCall(expression, runtime.RawCopyFunction, 3)
+	case checker.BuiltinRawZero:
+		return g.intrinsicCall(expression, runtime.RawZeroFunction, 2)
+	case checker.BuiltinAddressOf:
+		return g.addressOfExpression(expression)
+	case checker.BuiltinSyscall:
+		return g.intrinsicCall(expression, runtime.SyscallFunction, 7)
 	case checker.BuiltinIntFromByte:
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {

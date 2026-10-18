@@ -660,6 +660,9 @@ fn check_call(Checker checker, Token open_paren, Expr callee, Expr[] arguments, 
     }
     Function function = function_value(callee_result);
 
+    if (function.builtin == BuiltinKind.AddressOf) {
+        return check_address_of_call(checker, open_paren, arguments, argument_count, function, scope);
+    }
     if (function.builtin == BuiltinKind.Print) {
         return check_variadic_call(checker, open_paren, arguments, argument_count, function, scope);
     }
@@ -718,6 +721,14 @@ fn resolve_callee(Checker checker, Expr callee, Scope scope) -> FunctionResult {
                 }
             }
             match (lookup_function(checker, identifier.text)) {
+                Present(function) {
+                    record_expression_symbol(checker, node_id, function_symbol(function, position_of_token(identifier)));
+                    return FunctionResult.Ok { function = function };
+                }
+                Absent {
+                }
+            }
+            match (lookup_runtime_intrinsic(checker, identifier.text)) {
                 Present(function) {
                     record_expression_symbol(checker, node_id, function_symbol(function, position_of_token(identifier)));
                     return FunctionResult.Ok { function = function };
@@ -800,6 +811,26 @@ fn cannot_call(Checker checker, Expr callee) -> FunctionResult {
 // check_variadic_call checks a call to a variadic built-in such as print. It
 // requires at least one argument, and every argument must be one of the
 // built-in's allowed types.
+fn check_address_of_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
+    if (argument_count != 1) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.BadCall, position_of_token(open_paren), "function " + quoted(function.name) + " expects 1 argument(s), got " + decimal(argument_count))
+        };
+    }
+    TypeResult argument_result = check_expr(checker, arguments[0], scope);
+    if (!type_ok(argument_result)) {
+        return argument_result;
+    }
+    Type argument_type = type_value(argument_result);
+    if (argument_type.kind == TypeKind.String ||
+        (argument_type.kind == TypeKind.Array && element_of(argument_type).kind == TypeKind.Byte)) {
+        return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+    }
+    return TypeResult.Failed {
+        error = error_at(checker, ErrorKind.TypeMismatch, expr_position(arguments[0]), "argument 1 of " + quoted(function.name) + " expected byte[] or string, found " + type_string(argument_type))
+    };
+}
+
 fn check_variadic_call(Checker checker, Token open_paren, Expr[] arguments, int argument_count, Function function, Scope scope) -> TypeResult {
     if (argument_count == 0) {
         return TypeResult.Failed {

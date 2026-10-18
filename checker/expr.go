@@ -513,6 +513,10 @@ func (c *checker) checkCall(expression *parser.CallExpr, scope *Scope) (*Type, e
 		return nil, err
 	}
 
+	if function.Builtin == BuiltinAddressOf {
+		return c.checkAddressOfCall(expression, function, scope)
+	}
+
 	switch function.Builtin {
 	case BuiltinPrint:
 		return c.checkVariadicCall(expression, function, scope)
@@ -557,6 +561,10 @@ func (c *checker) resolveCallee(callee parser.Expr, scope *Scope) (*Function, er
 		return nil, c.errorAt(BadCall, identifier.At, "%q is a variable, not a function", identifier.Name)
 	}
 	if function, ok := c.lookupFunction(identifier.Name); ok {
+		c.result.Symbols[identifier] = functionSymbol(function, identifier.At)
+		return function, nil
+	}
+	if function, ok := c.lookupRuntimeIntrinsic(identifier.Name); ok {
 		c.result.Symbols[identifier] = functionSymbol(function, identifier.At)
 		return function, nil
 	}

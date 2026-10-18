@@ -236,10 +236,14 @@ text, and the generalized on-use prelude. Phase 8.5 added the recoverable
 and signal reporting, and pre-fork stream flushing. Phase 8.6 added the
 recoverable `try_current_directory` built-in and its `CurrentDirectoryResult`
 prelude union, using the kernel's `getcwd` path, ignoring `$PWD`, and growing its
-buffer on `ERANGE`. Phase 8.7 (the synthetic `<runtime>` module) is next; the
-Kitten loader/driver can now accept relative roots in a separate later change.
-File writing now unblocks `purr new` and process launch makes `purr run`-style
-tooling writable in Kitten, both as separate later phases. A SPEC cleanup
+buffer on `ERANGE`. Phase 8.7 added the compiler-reserved `<runtime>` synthetic
+module and its harness-only injection hook, runtime-only intrinsics, C lowering,
+and the MIT `runtime/ktn/memory.ktn` helper source. The primitive checklist is
+complete. The next candidates are designing `purr` in Kitten with an
+environment-variable primitive, or the native-backend design slice. The Kitten
+loader/driver can now accept relative roots in a separate later change. File
+writing now unblocks `purr new` and process launch makes `purr run`-style tooling
+writable in Kitten, both as separate later phases. A SPEC cleanup
 of Go/C-flavored wording remains a later candidate. The native backend and a
 standard library remain unauthorized.
 
@@ -279,6 +283,11 @@ A **prelude built-in** additionally changes `checker/prelude.go` and
 `selfhost/checker/prelude.ktn` (source blocks, syntactic trigger, late
 registration, and reserved names), both generators' helper emission, and the
 prelude subset and whole-unit corpora.
+
+A **runtime intrinsic** additionally changes the synthetic-module table and
+`<runtime>` hook in both checkers, the runtime-only resolution gate, both
+generators' lowering, the MIT `runtime/csrc` header helpers, and the runtime
+module fixture. Intrinsic names are never reserved in user modules.
 
 For a new **operator or primitive type**, this built-in checklist is not enough:
 also update both lexers' token kinds and scans, both parsers' precedence or type
@@ -353,7 +362,8 @@ authorization after the design is approved.
    explicit byte/string conversions; Phase 8.4 added recoverable file and
    directory operations and their on-use result unions; Phase 8.5 added
    recoverable process launch and `RunResult`; Phase 8.6 added the current
-   directory query and `CurrentDirectoryResult`).
+   directory query and `CurrentDirectoryResult`; Phase 8.7 added the
+   compiler-reserved `<runtime>` module and its intrinsic mechanism).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

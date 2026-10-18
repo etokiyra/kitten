@@ -17,6 +17,12 @@ public fn prelude_module_path() -> string {
     return "<prelude>";
 }
 
+// is_synthetic_module_path reports whether a path names a compiler-reserved
+// module. Reserved-name checks skip both synthetic modules.
+public fn is_synthetic_module_path(string path) -> bool {
+    return path == prelude_module_path() || path == runtime_module_path();
+}
+
 // PreludeUses records which prelude built-ins a program calls syntactically.
 public struct PreludeUses {
     bool read_file;
@@ -122,6 +128,37 @@ public fn parse_prelude(string source) -> PreludeResult {
                     return PreludeResult.Ok {
                         module = Module {
                             path = prelude_module_path(),
+                            id = 0,
+                            program = program,
+                            expression_count = expression_count,
+                            type_ref_count = type_ref_count
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
+// parse_runtime_module parses the harness-supplied <runtime> source.
+public fn parse_runtime_module(string source) -> PreludeResult {
+    match (lex(source)) {
+        Failure(line, column, message) {
+            return PreludeResult.Failed { line = line, column = column, message = message };
+        }
+        Success(tokens, token_count) {
+            match (parse(tokens, token_count)) {
+                Failure(error) {
+                    return PreludeResult.Failed {
+                        line = error.line,
+                        column = error.column,
+                        message = error.message
+                    };
+                }
+                Success(program, expression_count, type_ref_count) {
+                    return PreludeResult.Ok {
+                        module = Module {
+                            path = runtime_module_path(),
                             id = 0,
                             program = program,
                             expression_count = expression_count,

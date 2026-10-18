@@ -22,6 +22,7 @@ import "lexer/lexer.ktn";
 import "lexer/tokens.ktn";
 import "parser/ast.ktn";
 import "parser/parser.ktn";
+import "probe_runtime.ktn";
 
 // PreparedModule is a parsed module or the report that it could not be prepared.
 union PreparedModule {
@@ -87,7 +88,7 @@ fn main() {
     }
 
     if (module_count == 2) {
-        match (check_modules(modules, 2)) {
+        match (check_modules_with_runtime(modules, 2, read_runtime_source())) {
             Success(summary, model) {
                 print("ok modules", summary.module_count, "types", summary.type_count, "functions", summary.function_count, "bodies", summary.body_count);
                 print_semantic_model(model);

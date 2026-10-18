@@ -91,6 +91,12 @@ func runKittenSemantics(executable, directory, root, imported string) (string, e
 // referenceModel renders the reference checker's result in the Kitten driver's
 // format.
 func referenceModel(root, imported string) (string, error) {
+	return referenceModelWithRuntime(root, imported, "")
+}
+
+// referenceModelWithRuntime is referenceModel with the harness-only synthetic
+// runtime module.
+func referenceModelWithRuntime(root, imported, runtimeSource string) (string, error) {
 	rootProgram, failure, err := prepareReferenceModule(root, "input.txt")
 	if err != nil {
 		return "", err
@@ -110,7 +116,7 @@ func referenceModel(root, imported string) (string, error) {
 		{Path: "input.txt", ID: 0, Program: rootProgram},
 		{Path: "input2.txt", ID: 1, Program: importedProgram},
 	}
-	result, checkError := checker.CheckModules(modules)
+	result, checkError := checker.CheckModulesWithRuntime(modules, runtimeSource)
 	if checkError != nil {
 		var semantic *checker.Error
 		if !errors.As(checkError, &semantic) {
@@ -206,6 +212,22 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "TryRun"
 	case checker.BuiltinTryCurrentDirectory:
 		return "TryCurrentDirectory"
+	case checker.BuiltinRawLoad8:
+		return "RawLoad8"
+	case checker.BuiltinRawStore8:
+		return "RawStore8"
+	case checker.BuiltinRawLoad64:
+		return "RawLoad64"
+	case checker.BuiltinRawStore64:
+		return "RawStore64"
+	case checker.BuiltinRawCopy:
+		return "RawCopy"
+	case checker.BuiltinRawZero:
+		return "RawZero"
+	case checker.BuiltinAddressOf:
+		return "AddressOf"
+	case checker.BuiltinSyscall:
+		return "Syscall"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

@@ -128,6 +128,12 @@ func checkerKindName(kind checker.ErrorKind) string {
 // renderReferenceCheck lexes, parses, and checks a two-module program with the
 // reference implementation and renders the same line the Kitten driver produces.
 func renderReferenceCheck(root, imported string) (string, error) {
+	return renderReferenceCheckWithRuntime(root, imported, "")
+}
+
+// renderReferenceCheckWithRuntime is renderReferenceCheck with the harness-only
+// synthetic runtime module.
+func renderReferenceCheckWithRuntime(root, imported, runtimeSource string) (string, error) {
 	rootProgram, failure, err := prepareReferenceModule(root, "input.txt")
 	if err != nil {
 		return "", err
@@ -148,7 +154,7 @@ func renderReferenceCheck(root, imported string) (string, error) {
 		{Path: "input2.txt", ID: 1, Program: importedProgram},
 	}
 
-	result, checkError := checker.CheckModules(modules)
+	result, checkError := checker.CheckModulesWithRuntime(modules, runtimeSource)
 	if checkError != nil {
 		var semantic *checker.Error
 		if !errors.As(checkError, &semantic) {

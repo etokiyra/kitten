@@ -76,6 +76,14 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         TryListDirectory { return "TryListDirectory"; }
         TryRun { return "TryRun"; }
         TryCurrentDirectory { return "TryCurrentDirectory"; }
+        RawLoad8 { return "RawLoad8"; }
+        RawStore8 { return "RawStore8"; }
+        RawLoad64 { return "RawLoad64"; }
+        RawStore64 { return "RawStore64"; }
+        RawCopy { return "RawCopy"; }
+        RawZero { return "RawZero"; }
+        AddressOf { return "AddressOf"; }
+        Syscall { return "Syscall"; }
         MapHas { return "MapHas"; }
         Substring { return "Substring"; }
         IntFromByte { return "IntFromByte"; }

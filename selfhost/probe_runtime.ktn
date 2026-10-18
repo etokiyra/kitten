@@ -1,0 +1,12 @@
+// probe_runtime.ktn - read the harness-supplied runtime module source.
+//
+// This file is test infrastructure, not part of the production driver. The
+// differential probes read runtime.txt in their working directory; an absent
+// file means that the harness did not request the synthetic <runtime> module.
+
+public fn read_runtime_source() -> string {
+    match (try_read_file("runtime.txt")) {
+        Ok(text) { return text; }
+        Failed(message) { return ""; }
+    }
+}

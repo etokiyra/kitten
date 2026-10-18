@@ -795,6 +795,30 @@ fn call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] a
     if (builtin == BuiltinKind.TryCurrentDirectory) {
         return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_current_directory", 0);
     }
+    if (builtin == BuiltinKind.RawLoad8) {
+        return builtin_call_expression(context, callee, raw_load8_function(), "raw_load8", arguments, argument_count, 1);
+    }
+    if (builtin == BuiltinKind.RawStore8) {
+        return builtin_call_expression(context, callee, raw_store8_function(), "raw_store8", arguments, argument_count, 2);
+    }
+    if (builtin == BuiltinKind.RawLoad64) {
+        return builtin_call_expression(context, callee, raw_load64_function(), "raw_load64", arguments, argument_count, 1);
+    }
+    if (builtin == BuiltinKind.RawStore64) {
+        return builtin_call_expression(context, callee, raw_store64_function(), "raw_store64", arguments, argument_count, 2);
+    }
+    if (builtin == BuiltinKind.RawCopy) {
+        return builtin_call_expression(context, callee, raw_copy_function(), "raw_copy", arguments, argument_count, 3);
+    }
+    if (builtin == BuiltinKind.RawZero) {
+        return builtin_call_expression(context, callee, raw_zero_function(), "raw_zero", arguments, argument_count, 2);
+    }
+    if (builtin == BuiltinKind.AddressOf) {
+        return address_of_expression(context, callee, arguments, argument_count);
+    }
+    if (builtin == BuiltinKind.Syscall) {
+        return builtin_call_expression(context, callee, syscall_function(), "syscall", arguments, argument_count, 7);
+    }
     if (builtin == BuiltinKind.IntFromByte) {
         return int_from_byte_expression(context, callee, arguments, argument_count);
     }
@@ -854,6 +878,35 @@ fn try_read_file_expression(ExpressionContext context, int node_id, Expr callee,
                 Ok(rendered) {
                     return ExpressionResult.Ok {
                         text = prelude_try_read_file_helper_name(result_type.module) + "(" + rendered + ")"
+                    };
+                }
+            }
+        }
+    }
+}
+
+// address_of_expression lowers the overloaded address_of intrinsic.
+fn address_of_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    if (argument_count != 1) {
+        return wrong_builtin_arity(callee, "address_of", argument_count);
+    }
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (expression_info(module, expr_node_id(arguments[0])).type) {
+        Absent {
+            return missing_expression_type(arguments[0]);
+        }
+        Present(argument_type) {
+            match (emit_expression(context, arguments[0])) {
+                Failed(error) { return ExpressionResult.Failed { error = error }; }
+                Ok(rendered) {
+                    if (argument_type.kind == TypeKind.String) {
+                        return ExpressionResult.Ok { text = "((int64_t)(uintptr_t)(((const ktn_string *)(" + rendered + "))->data))" };
+                    }
+                    if (argument_type.kind == TypeKind.Array && element_of(argument_type).kind == TypeKind.Byte) {
+                        return ExpressionResult.Ok { text = "((int64_t)(uintptr_t)(((ktn_array *)(" + rendered + "))->data))" };
+                    }
+                    return ExpressionResult.Failed {
+                        error = generate_error(expr_position(arguments[0]).line, expr_position(arguments[0]).column, "address_of does not accept " + type_string(argument_type))
                     };
                 }
             }

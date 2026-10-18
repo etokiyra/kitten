@@ -10,11 +10,10 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1/8.2/8.3/8.4/8.5/8.6 status:** Section 2 (defined integer arithmetic),
-> Section 3 (bitwise/shift operators and hex/binary literals), Section 4
-> (`byte` and `byte[]`), Section 5 (explicit conversions), Section 6
-> (recoverable file, directory, and process APIs), and Section 7 (current
-> directory) are **ADOPTED**. Section 8 remains **PROPOSED, not adopted**.
+> **Phase 8.1 through 8.7 status:** Sections 2 through 7 and the reserved
+> `<runtime>` module mechanism in Section 8 are **ADOPTED**. The GC-phase
+> intrinsics `raw_alloc` and `stack_bounds` and the native backend remain
+> **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -820,7 +819,7 @@ and canonicalization semantics; current wrapper contract; relative-path
 diagnostics. Alternative: return `Failed` through a file-style union (chosen);
 a total `cwd()` string (rejected because `getcwd` can fail).
 
-## 8. Compiler-reserved runtime module and intrinsics
+## 8. Compiler-reserved runtime module and intrinsics (ADOPTED in Phase 8.7, mechanism only)
 
 ### 8.1 Boundary
 
@@ -837,39 +836,35 @@ MIT and its notice must travel with any embedded copy, exactly as
 
 ### 8.2 Intrinsics visible only in `<runtime>`
 
-Proposed intrinsics:
+Adopted intrinsics:
 
 ```text
-raw_alloc(int size) -> int
-raw_load8(int address) -> int
-raw_load16(int address) -> int
-raw_load32(int address) -> int
+raw_load8(int address) -> byte
+raw_store8(int address, byte value)
 raw_load64(int address) -> int
-raw_store8(int address, int value)
-raw_store16(int address, int value)
-raw_store32(int address, int value)
 raw_store64(int address, int value)
 raw_copy(int destination, int source, int count)
-raw_zero(int destination, int count)
+raw_zero(int address, int count)
+address_of(byte[] data) -> int
+address_of(string value) -> int
 syscall(int number, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5) -> int
-address_of(T value) -> int
-stack_bounds() -> int[]
 ```
 
+`raw_load16`, `raw_load32`, `raw_store16`, `raw_store32`, `raw_alloc`, and
+`stack_bounds` are **not** adopted; `raw_alloc` and `stack_bounds` are deferred
+to the GC phase.
+
 - Addresses are `int` values only inside `<runtime>`; there is no user-facing
-  pointer type and no `unsafe` block. `address_of` is type-directed: it accepts
-  an lvalue or reference value and returns its address; the checker permits it
-  only in `<runtime>`.
-- `raw_alloc` returns a zeroed allocation; failure is fatal. `raw_*` access is
-  unchecked by design
-  and is only reachable from audited runtime code.
+  pointer type and no `unsafe` block. `address_of` is type-directed and accepts
+  a `byte[]` or `string`; the checker permits it only in `<runtime>`.
+- Raw access is unchecked by design and is only reachable from audited runtime
+  code. `raw_alloc` and `stack_bounds` remain deferred to the GC phase.
 - `syscall` is the Linux x86-64 syscall ABI; all six argument slots are always
   supplied, with `0` for unused slots. It returns the raw syscall result.
-- `stack_bounds()` returns a two-element `int[]` `[low, high]` for the
-  conservative collector.
-- User code that names any intrinsic in any other module receives the
-  diagnostic `intrinsic "<name>" is only available in the compiler runtime
-  module`. The names are not ordinary built-ins.
+- In every other module the intrinsic names are ordinary names: an undeclared
+  call is the ordinary undefined-function error, a user may declare a function
+  with the same name, and no intrinsic name is reserved. The runtime module’s
+  own declarations follow ordinary public/private rules.
 
 The compiler and native backend may call runtime functions, but only the
 `<runtime>` module may use the intrinsic names. The C pipeline is unaffected;
@@ -878,13 +873,13 @@ libgc.
 
 ### 8.3 Files and risks
 
-Files: new `runtime/ktn/` MIT sources, native backend/checker gate, loader
-identity handling, and native tests. The C runtime and C generator do not use
-`<runtime>`. Risks: bypassing the gate, leaking addresses into user values,
-auditing unsafe code, licensing the embedded source, and bootstrapping an
-allocator before the GC exists. Alternatives: user-facing `unsafe` (rejected),
-intrinsics as ordinary built-ins (rejected), a separate package registry
-(rejected for the bootstrap).
+Files: `runtime/ktn/memory.ktn` under MIT, both checkers' synthetic-module and
+intrinsic gates, both C generators, the MIT header helpers, and harness-only
+probe drivers. The production loader and CLI never inject `<runtime>`. Risks:
+bypassing the gate, leaking addresses into user values, auditing unsafe code,
+and bootstrapping an allocator before the GC exists. Alternatives: user-facing
+`unsafe` (rejected), intrinsics as ordinary built-ins (rejected), a separate
+package registry (rejected for the bootstrap).
 
 ## 9. Ordered implementation plan
 
@@ -919,10 +914,10 @@ for byte.
 7. **`try_current_directory` and `CurrentDirectoryResult`** (Section 7).
    Acceptance: absolute path, failure shape, relative-path driver test, and
    no-trigger C unchanged.
-8. **Reserved `<runtime>` module and intrinsics** (Section 8). Acceptance:
-   user-code rejection, runtime-module compile, license/notice check, and the
-   native backend's first use. This step does not affect existing C output; it
-   is the gate for Goal 2 implementation.
+8. **Reserved `<runtime>` module and intrinsics** (Section 8). **Done in Phase
+   8.7 as mechanism only**: hook injection, runtime-only resolution, C lowering,
+   MIT source/header helpers, and differential/runtime tests. The native
+   backend still has to use the mechanism.
 
 ### 9.1 Interleaving with Goal 3
 

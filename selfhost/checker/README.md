@@ -235,6 +235,22 @@ diagnostic. A builtin itself is registered only after its result type has been
 collected, so its return type is the prelude's resolved type. The loader does
 **not** inject the prelude; this is the checker's responsibility.
 
+## Compiler-reserved `<runtime>` module
+
+The checker accepts a harness-only runtime source string. It parses that source
+with the ordinary lexer and parser, appends it after every loaded module and
+after `<prelude>` when present, and gives it path `<runtime>` and the current
+module id. Production callers use `check_modules`, which supplies no source and
+therefore adds no runtime module; the loader and CLI cannot inject one.
+
+The intrinsic names `raw_load8`, `raw_store8`, `raw_load64`, `raw_store64`,
+`raw_copy`, `raw_zero`, `address_of`, and `syscall` resolve only while checking
+`<runtime>`. In every other module they are ordinary names: an undeclared call
+is the usual undefined-function error, a user may declare a function with the
+same name, and none of the names is reserved. `address_of` is checked
+syntactically: its one argument must be `byte[]` or `string`. `raw_alloc` and
+`stack_bounds` are deferred.
+
 ## Coverage
 
 Every rule the reference enforces is implemented, with the same diagnostics at

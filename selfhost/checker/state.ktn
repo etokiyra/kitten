@@ -274,6 +274,14 @@ public enum BuiltinKind {
     TryListDirectory,
     TryRun,
     TryCurrentDirectory,
+    RawLoad8,
+    RawStore8,
+    RawLoad64,
+    RawStore64,
+    RawCopy,
+    RawZero,
+    AddressOf,
+    Syscall,
     MapHas,
     Substring,
     IntFromByte,
@@ -653,6 +661,87 @@ public fn builtin_functions() -> map[string]Function {
     return builtins;
 }
 
+// runtime_intrinsics returns the functions that resolve only while checking the
+// synthetic <runtime> module. A declaration in that module with the same name
+// wins because lookup_function runs first.
+public fn runtime_intrinsics() -> map[string]Function {
+    map[string]Function intrinsics = new map[string]Function;
+    intrinsics["raw_load8"] = intrinsic_function("raw_load8", int_one_types(), primitive_type(TypeKind.Byte, "byte"), BuiltinKind.RawLoad8);
+    intrinsics["raw_store8"] = intrinsic_function("raw_store8", int_byte_types(), primitive_type(TypeKind.Void, "void"), BuiltinKind.RawStore8);
+    intrinsics["raw_load64"] = intrinsic_function("raw_load64", int_one_types(), primitive_type(TypeKind.Int, "int"), BuiltinKind.RawLoad64);
+    intrinsics["raw_store64"] = intrinsic_function("raw_store64", int_two_types(), primitive_type(TypeKind.Void, "void"), BuiltinKind.RawStore64);
+    intrinsics["raw_copy"] = intrinsic_function("raw_copy", int_three_types(), primitive_type(TypeKind.Void, "void"), BuiltinKind.RawCopy);
+    intrinsics["raw_zero"] = intrinsic_function("raw_zero", int_two_types(), primitive_type(TypeKind.Void, "void"), BuiltinKind.RawZero);
+    intrinsics["address_of"] = intrinsic_function("address_of", int_one_types(), primitive_type(TypeKind.Int, "int"), BuiltinKind.AddressOf);
+    intrinsics["syscall"] = intrinsic_function("syscall", int_seven_types(), primitive_type(TypeKind.Int, "int"), BuiltinKind.Syscall);
+    return intrinsics;
+}
+
+fn intrinsic_function(string name, Type[] parameter_types, Type return_type, BuiltinKind kind) -> Function {
+    return Function {
+        name = name,
+        parameter_names = new string[1],
+        parameter_count = length(parameter_types),
+        parameter_types = parameter_types,
+        return_type = return_type,
+        module = 0,
+        builtin = kind,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+}
+
+fn int_one_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    return types;
+}
+
+fn int_two_types() -> Type[] {
+    Type[] types = new Type[2];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    types[1] = primitive_type(TypeKind.Int, "int");
+    return types;
+}
+
+fn int_three_types() -> Type[] {
+    Type[] types = new Type[3];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    types[1] = primitive_type(TypeKind.Int, "int");
+    types[2] = primitive_type(TypeKind.Int, "int");
+    return types;
+}
+
+fn int_seven_types() -> Type[] {
+    Type[] types = new Type[7];
+    int index = 0;
+    while (index < 7) {
+        types[index] = primitive_type(TypeKind.Int, "int");
+        index++;
+    }
+    return types;
+}
+
+fn int_byte_types() -> Type[] {
+    Type[] types = new Type[2];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    types[1] = primitive_type(TypeKind.Byte, "byte");
+    return types;
+}
+
+// lookup_runtime_intrinsic resolves an intrinsic only in the runtime module.
+public fn lookup_runtime_intrinsic(Checker checker, string name) -> OptionalFunction {
+    if (checker.current < 0 || checker.modules[checker.current].path != runtime_module_path()) {
+        return OptionalFunction.Absent;
+    }
+    map[string]Function intrinsics = runtime_intrinsics();
+    if (!has(intrinsics, name)) {
+        return OptionalFunction.Absent;
+    }
+    return OptionalFunction.Present { function = intrinsics[name] };
+}
+
 fn byte_parameter_types() -> Type[] {
     Type[] types = new Type[1];
     types[0] = primitive_type(TypeKind.Byte, "byte");
@@ -757,6 +846,11 @@ public fn lookup_type(Checker checker, string name) -> OptionalResolvedType {
         return OptionalResolvedType.Present { type = checker.public_types[name] };
     }
     return OptionalResolvedType.Absent;
+}
+
+// runtime_module_path is the compiler-reserved runtime module's identity.
+public fn runtime_module_path() -> string {
+    return "<runtime>";
 }
 
 // lookup_function resolves a function name in the current module's declarations

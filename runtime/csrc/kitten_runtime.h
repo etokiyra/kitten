@@ -40,6 +40,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+#if defined(__linux__)
+extern long syscall(long number, ...);
+#endif
 
 /*
  * Boehm-Demers-Weiser conservative garbage collector. Accept either the
@@ -277,6 +282,61 @@ int64_t ktn_rt_map_length(const ktn_map *map);
  * fail-fast default case do not warn about falling off the end of a function.
  */
 _Noreturn void ktn_rt_fail(const char *message);
+
+/*
+ * Raw-memory and syscall intrinsics for the trusted <runtime> module. These
+ * helpers deliberately bypass Kitten's ordinary safety guarantees: addresses
+ * are trusted and never validated. They are static inline so generated code
+ * needs no extra object, and the explicit memcpy/memmove/memset operations avoid
+ * alignment and strict-aliasing undefined behavior in the generated C.
+ */
+static inline void ktn_rt_raw_check_size(int64_t size) {
+    if (size < 0) {
+        char message[64];
+        snprintf(message, sizeof(message), "negative size %lld", (long long)size);
+        ktn_rt_fail(message);
+    }
+}
+
+static inline uint8_t ktn_rt_raw_load8(int64_t address) {
+    uint8_t value;
+    memcpy(&value, (const void *)(uintptr_t)address, sizeof(value));
+    return value;
+}
+
+static inline void ktn_rt_raw_store8(int64_t address, uint8_t value) {
+    memcpy((void *)(uintptr_t)address, &value, sizeof(value));
+}
+
+static inline int64_t ktn_rt_raw_load64(int64_t address) {
+    int64_t value;
+    memcpy(&value, (const void *)(uintptr_t)address, sizeof(value));
+    return value;
+}
+
+static inline void ktn_rt_raw_store64(int64_t address, int64_t value) {
+    memcpy((void *)(uintptr_t)address, &value, sizeof(value));
+}
+
+static inline void ktn_rt_raw_copy(int64_t destination, int64_t source, int64_t size) {
+    ktn_rt_raw_check_size(size);
+    memmove((void *)(uintptr_t)destination, (const void *)(uintptr_t)source, (size_t)size);
+}
+
+static inline void ktn_rt_raw_zero(int64_t address, int64_t size) {
+    ktn_rt_raw_check_size(size);
+    memset((void *)(uintptr_t)address, 0, (size_t)size);
+}
+
+static inline int64_t ktn_rt_syscall(int64_t number, int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f) {
+#if defined(__linux__)
+    long result = syscall((long)number, (long)a, (long)b, (long)c, (long)d, (long)e, (long)f);
+    return (int64_t)result;
+#else
+    (void)number; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
+    ktn_rt_fail("syscall is not supported on this platform");
+#endif
+}
 
 /*
  * Defined 64-bit integer arithmetic. Kitten's int is a signed 64-bit

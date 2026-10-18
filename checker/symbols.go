@@ -81,6 +81,23 @@ const (
 	// BuiltinTryCurrentDirectory returns the absolute current directory.
 	BuiltinTryCurrentDirectory
 
+	// BuiltinRawLoad8, BuiltinRawStore8, BuiltinRawLoad64, and
+	// BuiltinRawStore64 are runtime-module memory intrinsics.
+	BuiltinRawLoad8
+	BuiltinRawStore8
+	BuiltinRawLoad64
+	BuiltinRawStore64
+
+	// BuiltinRawCopy and BuiltinRawZero are runtime-module bulk operations.
+	BuiltinRawCopy
+	BuiltinRawZero
+
+	// BuiltinAddressOf returns the first-byte address of a byte array or string.
+	BuiltinAddressOf
+
+	// BuiltinSyscall invokes the host system call primitive.
+	BuiltinSyscall
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 
