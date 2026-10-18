@@ -214,9 +214,16 @@ directory, and unreadable paths under both compilers. Phase 5.5 completed loader
 read-error parity: the Kitten loader uses `try_read_file`, returns the canonical
 path with no position and the `cannot read source file: ` prefix, keeps the
 outside-root check before the read, and matches the Go loader byte for byte,
-including through stage 1 and stage 2. A SPEC cleanup of Go/C-flavored wording
-remains a later candidate. Native backend, standard library, and file writing
-remain unauthorized.
+including through stage 1 and stage 2. Phase 8.1 implemented the adopted
+defined-integer-arithmetic design in both pipelines and the C runtime:
+`+ - *`, unary `-`, `+=`, `-=`, `++`, and `--` wrap modulo 2^64; `/` and `%`
+have defined truncation/remainder rules; zero divisors fail with
+`integer division by zero`; `INT64_MIN / -1` wraps and `% -1` is zero; decimal
+literals above `INT64_MAX` are rejected with `integer literal out of range`;
+and generated C calls the MIT `ktn_rt_i64_*` helpers rather than evaluating
+signed overflow. Phase 8.2 (bitwise and shift operators) is next. A SPEC cleanup
+of Go/C-flavored wording remains a later candidate. Native backend, standard
+library, and file writing remain unauthorized.
 
 ### Adding a built-in
 
@@ -249,6 +256,13 @@ or the Go and Kitten pipelines stop agreeing:
    observable, and `selfhost/codegen/README.md` counts.
 10. **Documentation** — `README.md`, `AGENTS.md`, and the relevant
     `selfhost/*/README.md`; update measured counts, never invent them.
+
+For a new **operator or primitive type**, this built-in checklist is not enough:
+also update both lexers' token kinds and scans, both parsers' precedence or type
+grammar, both checker type tables and operator rules, both code generators' C
+type/operator lowering, the semantic-model type rendering, and the lexer,
+parser, checker, semantic, expression, function, unit, and call corpora. A
+prelude type follows the prelude rows above in addition to these.
 
 None of the self-hosted components is part of the production pipeline: `purr
 build` and `purr run` still use the Go lexer, parser, checker, generator, and
@@ -308,7 +322,9 @@ authorization after the design is approved.
    driver and temporary POSIX-shell wrapper, with byte-identical C and native
    fixture execution under GCC and Clang; Phase 5.7 reached the C-level fixpoint;
    Phase 5.4c brought `try_read_file` and `ReadFileResult` to the Kitten-written
-   checker and generator; Phase 5.5 closed loader read-error parity).
+   checker and generator; Phase 5.5 closed loader read-error parity; Phase 8.1
+   made integer arithmetic and decimal literal ranges defined in both pipelines
+   and the C runtime).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

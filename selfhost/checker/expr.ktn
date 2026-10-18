@@ -30,6 +30,11 @@ fn check_expression(Checker checker, Expr expression, Scope scope) -> TypeResult
             return check_identifier(checker, node_id, token, scope);
         }
         Integer(node_id, token) {
+            if (!integer_literal_in_range(token.text)) {
+                return TypeResult.Failed {
+                    error = error_at(checker, ErrorKind.InvalidExpression, position_of_token(token), "integer literal out of range")
+                };
+            }
             return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
         }
         Float(node_id, token) {

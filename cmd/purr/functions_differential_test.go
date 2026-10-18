@@ -486,6 +486,20 @@ fn main() {
 }
 `,
 	}, {
+		description: "defined integer arithmetic and compound forms",
+		root: `fn arithmetic(int value) -> int {
+    int maximum = 9223372036854775807;
+    int minimum = -9223372036854775807 - 1;
+    value += maximum;
+    value -= 1;
+    value++;
+    --value;
+    return value + 1;
+}
+fn main() {
+}
+`,
+	}, {
 		description: "try_read_file result matching",
 		root: `fn describe(ReadFileResult result) -> int {
     match (result) {

@@ -133,6 +133,52 @@ type unitCase struct {
 	rejected string
 }
 
+// definedArithmeticSource exercises every defined integer arithmetic form,
+// including compound targets that must be evaluated once.
+const definedArithmeticSource = `struct Counter {
+    int value;
+}
+fn index_of(int[] counter) -> int {
+    counter[0] += 1;
+    return counter[0] - 1;
+}
+fn main() {
+    int maximum = 9223372036854775807;
+    int minimum = -9223372036854775807 - 1;
+    print(maximum + 1);
+    print(minimum - 1);
+    print(maximum * 2);
+    print(-minimum);
+    print(minimum / -1);
+    print(minimum % -1);
+    int value = 1;
+    value += maximum;
+    value -= 1;
+    value++;
+    --value;
+    int pre_increment = ++value;
+    int post_decrement = value--;
+    print(value, pre_increment, post_decrement);
+    int[] counter = new int[1];
+    int[] values = new int[2];
+    values[0] = 1;
+    values[index_of(counter)] += 5;
+    values[index_of(counter)]++;
+    print(counter[0], values[0], values[1]);
+    map[string]int counts = new map[string]int;
+    counts["k"] = 1;
+    counts["k"] += 2;
+    counts["k"]--;
+    counts["k"]++;
+    print(counts["k"]);
+    Counter box = Counter { value = 1 };
+    box.value += 2;
+    box.value--;
+    box.value++;
+    print(box.value);
+}
+`
+
 func unitCases() []unitCase {
 	return []unitCase{{
 		description: "a minimal main",
@@ -570,6 +616,9 @@ fn main() {
 }
 `,
 	}, {
+		description: "defined integer arithmetic and target evaluation",
+		root:        definedArithmeticSource,
+	}, {
 		description: "try_read_file with the implicit prelude and helper",
 		root: `fn describe(ReadFileResult result) -> int {
     match (result) {
@@ -977,6 +1026,10 @@ fn main() {
 }
 `,
 		expected: "15\nab\n1 5\n3\n",
+	}, {
+		description: "defined integer arithmetic and target evaluation",
+		root:        definedArithmeticSource,
+		expected:    "-9223372036854775808\n9223372036854775807\n-2\n-9223372036854775808\n-9223372036854775808\n0\n9223372036854775807 -9223372036854775808 -9223372036854775808\n2 6 1\n3\n3\n",
 	}}
 }
 

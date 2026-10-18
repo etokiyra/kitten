@@ -30,6 +30,23 @@ const (
 	// AllocFunction allocates a zeroed, GC-managed object.
 	AllocFunction = "ktn_rt_alloc"
 
+	// I64AddFunction, I64SubFunction, I64MulFunction, I64NegFunction,
+	// I64DivFunction, and I64ModFunction implement defined two's-complement
+	// arithmetic. The assignment and increment helpers take the address of the
+	// target exactly once.
+	I64AddFunction       = "ktn_rt_i64_add"
+	I64SubFunction       = "ktn_rt_i64_sub"
+	I64MulFunction       = "ktn_rt_i64_mul"
+	I64NegFunction       = "ktn_rt_i64_neg"
+	I64DivFunction       = "ktn_rt_i64_div"
+	I64ModFunction       = "ktn_rt_i64_mod"
+	I64AddAssignFunction = "ktn_rt_i64_add_assign"
+	I64SubAssignFunction = "ktn_rt_i64_sub_assign"
+	I64PreIncFunction    = "ktn_rt_i64_pre_inc"
+	I64PostIncFunction   = "ktn_rt_i64_post_inc"
+	I64PreDecFunction    = "ktn_rt_i64_pre_dec"
+	I64PostDecFunction   = "ktn_rt_i64_post_dec"
+
 	// StringEqualFunction compares two Kitten strings by value.
 	StringEqualFunction = "ktn_rt_string_equal"
 

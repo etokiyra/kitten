@@ -182,6 +182,13 @@ Integer literals are sequences of decimal digits, for example `0`, `123`, `42`.
 A leading minus sign is not part of the literal; it is the unary minus operator.
 An `int` value is a signed 64-bit integer (Section 18.1).
 
+A decimal integer literal must not denote a value greater than `INT64_MAX`
+(`9223372036854775807`). A larger decimal literal is a checker error with the
+message `integer literal out of range`, positioned at the literal. `INT64_MIN`
+cannot be written as one decimal literal because the magnitude is not
+representable; it is written with arithmetic, such as
+`-9223372036854775807 - 1`.
+
 Not supported in this revision (and therefore not to be added without a
 specification change): hexadecimal, binary, and octal forms; digit separators;
 numeric suffixes; exponent notation.
@@ -503,9 +510,9 @@ outcome here.
 **Types and numbers**
 
 - Exact bit widths of `int` and `float` are now provisionally fixed as signed
-  64-bit and IEEE 754 binary64 (Section 18.1). Integer overflow behavior and
-  runtime rounding remain **deferred** to the code-generation and runtime
-  phases.
+  64-bit and IEEE 754 binary64 (Section 18.1). Integer arithmetic is defined by
+  two's-complement wraparound (Section 18.3); runtime floating-point rounding
+  remains **deferred**.
 - Numeric conversions and promotion rules: **no implicit conversions** exist
   (Section 18.2). Explicit conversion syntax is **deferred**; there are no casts
   yet.
@@ -836,9 +843,10 @@ reports the first error it finds and stops. Every diagnostic carries a one-based
 | `void` | No value. Permitted only as a function return type. |
 
 `int` and `float` widths are provisional language semantics, not a commitment
-about the runtime representation. Integer overflow behavior and floating-point
-rounding are **deferred**. `void` is never the type of a variable, parameter, or
-struct field; using it there is an error.
+about the runtime representation. `int` uses two's-complement 64-bit arithmetic,
+defined in Section 18.3; floating-point rounding remains **deferred**. `void` is
+never the type of a variable, parameter, or struct field; using it there is an
+error.
 
 ### 18.2 Type compatibility
 
@@ -885,8 +893,14 @@ Notes:
   not evaluated once `position < size` is false.
 - Indexing is defined for arrays, maps, and strings. A string index is an `int`
   (a byte), not a one-character `string`; see Section 20.6.
-- The checker does not diagnose constant division by zero and does not guarantee
-  overflow behavior; those are **deferred**.
+- `int` arithmetic is defined by two's-complement 64-bit wraparound. The
+  operations `+`, `-`, `*`, unary `-`, `+=`, `-=`, `++`, and `--` produce the
+  unique result modulo 2^64 interpreted as a signed two's-complement 64-bit
+  integer; overflow wraps and is not a runtime failure.
+- `/` truncates toward zero. `%` is the remainder with the sign of the dividend.
+  A zero divisor is a fatal runtime error with the message
+  `integer division by zero`. `INT64_MIN / -1` is `INT64_MIN` and
+  `INT64_MIN % -1` is `0`; neither is undefined.
 
 ### 18.4 Variables and assignment
 
@@ -1170,7 +1184,9 @@ are expected to evolve.
 
 Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
 header, so no C integer-width assumption is made and no undefined behavior is
-relied upon.
+relied upon. Integer arithmetic is emitted through the runtime's
+`ktn_rt_i64_*` helpers, which use unsigned bit patterns and explicit division
+checks; generated C never evaluates signed overflow or division by zero.
 
 ### 19.2 Struct representation and reference semantics
 
@@ -1215,8 +1231,8 @@ is **deferred**.
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
-  `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_exit`, and the built-in
-  print and eprint helpers.
+  `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_exit`, the
+  `ktn_rt_i64_*` integer helpers, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element

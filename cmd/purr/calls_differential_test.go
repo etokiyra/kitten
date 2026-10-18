@@ -320,6 +320,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "integer arithmetic through a call argument",
+		root: `fn print_value(int value) {
+    print(value);
+}
+fn main() {
+    int maximum = 9223372036854775807;
+    int minimum = -9223372036854775807 - 1;
+    print_value(maximum + 1);
+    print_value(minimum / -1);
+    print_value(maximum % 7);
+}
+`,
+	}, {
 		description: "a call to a callee that is not a function",
 		root: `fn main() {
     int value = 1;

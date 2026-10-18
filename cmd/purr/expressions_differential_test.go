@@ -1145,6 +1145,21 @@ fn main() {
 }
 `,
 	}, {
+		description: "defined integer wrapping, division, and remainder",
+		root: `fn main() {
+    int maximum = 9223372036854775807;
+    int minimum = -9223372036854775807 - 1;
+    print(maximum + 1);
+    print(minimum - 1);
+    print(maximum * 2);
+    print(-minimum);
+    print(minimum / -1);
+    print(minimum % -1);
+    print(maximum / 7);
+    print(-maximum % 7);
+}
+`,
+	}, {
 		description: "try_read_file call and direct variant construction",
 		root: `fn main() {
     try_read_file("x");
@@ -1549,9 +1564,9 @@ func TestKittenExpressionsReportFormat(t *testing.T) {
 	}
 	want := expectedProbeOutput([]string{
 		"expr 2 13 int 1",
-		"expr 3 5 call (ktn_rt_print_int((ktn_var_a + 2)), ktn_rt_print_newline())",
+		"expr 3 5 call (ktn_rt_print_int(ktn_rt_i64_add(ktn_var_a, 2)), ktn_rt_print_newline())",
 		"expr 3 5 ident ktn_var_print",
-		"expr 3 11 binary (ktn_var_a + 2)",
+		"expr 3 11 binary ktn_rt_i64_add(ktn_var_a, 2)",
 		"expr 3 11 ident ktn_var_a",
 		"expr 3 15 int 2",
 		probeSeparator,

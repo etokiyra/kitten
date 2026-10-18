@@ -267,8 +267,11 @@ func (g *generator) expression(expression parser.Expr) (string, error) {
 	}
 }
 
-// unaryExpression renders prefix and postfix unary operations. Kitten and C
-// agree on the operators, so they map directly.
+// unaryExpression renders prefix and postfix unary operations. Integer
+// arithmetic uses the defined runtime helpers; float operations keep their C
+// spelling. Increment and decrement take the address of the target so the
+// target is evaluated exactly once, and the helper returns the old value for
+// postfix and the new value for prefix.
 func (g *generator) unaryExpression(expression *parser.UnaryExpr) (string, error) {
 	if expression == nil || expression.Operand == nil {
 		return "", &Error{Line: 1, Column: 1, Message: "incomplete unary expression"}
@@ -276,6 +279,26 @@ func (g *generator) unaryExpression(expression *parser.UnaryExpr) (string, error
 	operand, err := g.expression(expression.Operand)
 	if err != nil {
 		return "", err
+	}
+	operandType, err := g.expressionType(expression.Operand)
+	if err != nil {
+		return "", err
+	}
+	if operandType == checker.IntType {
+		switch expression.Operator {
+		case "-":
+			return fmt.Sprintf("%s(%s)", runtime.I64NegFunction, operand), nil
+		case "++":
+			if expression.Postfix {
+				return fmt.Sprintf("%s(&(%s))", runtime.I64PostIncFunction, operand), nil
+			}
+			return fmt.Sprintf("%s(&(%s))", runtime.I64PreIncFunction, operand), nil
+		case "--":
+			if expression.Postfix {
+				return fmt.Sprintf("%s(&(%s))", runtime.I64PostDecFunction, operand), nil
+			}
+			return fmt.Sprintf("%s(&(%s))", runtime.I64PreDecFunction, operand), nil
+		}
 	}
 	if expression.Postfix {
 		return fmt.Sprintf("(%s%s)", operand, expression.Operator), nil
@@ -315,6 +338,25 @@ func (g *generator) binaryExpression(expression *parser.BinaryExpr) (string, err
 			default: // "!="
 				return fmt.Sprintf("!%s(%s, %s)", runtime.StringEqualFunction, left, right), nil
 			}
+		}
+	}
+
+	operandType, err := g.expressionType(expression)
+	if err != nil {
+		return "", err
+	}
+	if operandType == checker.IntType {
+		switch expression.Operator {
+		case "+":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64AddFunction, left, right), nil
+		case "-":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64SubFunction, left, right), nil
+		case "*":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64MulFunction, left, right), nil
+		case "/":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64DivFunction, left, right), nil
+		case "%":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64ModFunction, left, right), nil
 		}
 	}
 
@@ -373,13 +415,20 @@ func (g *generator) assignExpression(expression *parser.AssignExpr) (string, err
 		return "", err
 	}
 
-	if expression.Operator == "+=" {
+	if expression.Operator == "+=" || expression.Operator == "-=" {
 		targetType, err := g.expressionType(expression.Target)
 		if err != nil {
 			return "", err
 		}
-		if targetType == checker.StringType {
+		if targetType == checker.StringType && expression.Operator == "+=" {
 			return fmt.Sprintf("%s(&(%s), %s)", runtime.StringAppendFunction, target, value), nil
+		}
+		if targetType == checker.IntType {
+			helper := runtime.I64AddAssignFunction
+			if expression.Operator == "-=" {
+				helper = runtime.I64SubAssignFunction
+			}
+			return fmt.Sprintf("%s(&(%s), %s)", helper, target, value), nil
 		}
 	}
 

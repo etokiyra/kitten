@@ -212,7 +212,7 @@ func TestArrayCreationAndIndexing(t *testing.T) {
 `)
 	assertContains(t, generated, "ktn_rt_array_new(3, sizeof(int64_t))")
 	assertContains(t, generated, "(*((int64_t *)ktn_rt_array_at(ktn_var_values, 0))) = 1")
-	assertContains(t, generated, "(*((int64_t *)ktn_rt_array_at(ktn_var_values, 1))) += 2")
+	assertContains(t, generated, "ktn_rt_i64_add_assign(&((*((int64_t *)ktn_rt_array_at(ktn_var_values, 1)))), 2)")
 	assertContains(t, generated, "ktn_rt_array_length(ktn_var_values)")
 }
 
@@ -332,7 +332,7 @@ func TestControlFlowEmission(t *testing.T) {
 	assertContains(t, generated, "if (ktn_var_total > 0) {")
 	assertContains(t, generated, "else {")
 	assertContains(t, generated, "while (ktn_var_total != 5) {")
-	assertContains(t, generated, "for (int64_t ktn_var_index = 0; (ktn_var_index < 3); (ktn_var_index++)) {")
+	assertContains(t, generated, "for (int64_t ktn_var_index = 0; (ktn_var_index < 3); ktn_rt_i64_post_inc(&(ktn_var_index))) {")
 }
 
 func TestCompoundAssignmentAndIncrement(t *testing.T) {
@@ -344,10 +344,10 @@ func TestCompoundAssignmentAndIncrement(t *testing.T) {
     --value;
 }
 `)
-	assertContains(t, generated, "(ktn_var_value += 2)")
-	assertContains(t, generated, "(ktn_var_value -= 1)")
-	assertContains(t, generated, "(ktn_var_value++)")
-	assertContains(t, generated, "(--ktn_var_value)")
+	assertContains(t, generated, "ktn_rt_i64_add_assign(&(ktn_var_value), 2)")
+	assertContains(t, generated, "ktn_rt_i64_sub_assign(&(ktn_var_value), 1)")
+	assertContains(t, generated, "ktn_rt_i64_post_inc(&(ktn_var_value))")
+	assertContains(t, generated, "ktn_rt_i64_pre_dec(&(ktn_var_value))")
 }
 
 func TestEmptyBlocksAndVoidFunctions(t *testing.T) {
@@ -931,7 +931,7 @@ func TestMapGeneration(t *testing.T) {
 `)
 	assertContains(t, generated, "ktn_map * ktn_var_table = ktn_rt_map_new(sizeof(int64_t))")
 	assertContains(t, generated, `ktn_rt_map_set(ktn_var_table, `+literalRef(t, generated, `"a"`)+`, &(int64_t){ 1 })`)
-	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, `+literalRef(t, generated, `"b"`)+`))) += 2`)
+	assertContains(t, generated, `ktn_rt_i64_add_assign(&((*((int64_t *)ktn_rt_map_at(ktn_var_table, `+literalRef(t, generated, `"b"`)+`)))), 2)`)
 	assertContains(t, generated, `(*((int64_t *)ktn_rt_map_at(ktn_var_table, `+literalRef(t, generated, `"a"`)+`)))`)
 	assertContains(t, generated, `ktn_rt_map_has(ktn_var_table, `+literalRef(t, generated, `"z"`)+`)`)
 	assertContains(t, generated, "ktn_rt_map_length(ktn_var_table)")

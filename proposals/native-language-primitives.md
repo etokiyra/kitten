@@ -9,6 +9,10 @@
 >
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
+>
+> **Phase 8.1 status:** Section 2 (defined integer arithmetic) and the approved
+> arithmetic decisions are **ADOPTED**. Sections 3 through 8 remain
+> **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -241,7 +245,7 @@ need generics:
 - The loader does not change: preludes remain a checker concern and are never
   loaded from disk.
 
-## 2. Defined integer arithmetic (land first)
+## 2. Defined integer arithmetic (ADOPTED in Phase 8.1)
 
 ### 2.1 Need
 
@@ -295,11 +299,17 @@ int64_t ktn_rt_i64_div(int64_t a, int64_t b);
 int64_t ktn_rt_i64_mod(int64_t a, int64_t b);
 int64_t ktn_rt_i64_add_assign(int64_t *slot, int64_t b);
 int64_t ktn_rt_i64_sub_assign(int64_t *slot, int64_t b);
+int64_t ktn_rt_i64_pre_inc(int64_t *slot);
+int64_t ktn_rt_i64_post_inc(int64_t *slot);
+int64_t ktn_rt_i64_pre_dec(int64_t *slot);
+int64_t ktn_rt_i64_post_dec(int64_t *slot);
 ```
 
 `add`, `sub`, `mul`, and `neg` operate on `uint64_t` bit patterns and convert
 the result back to `int64_t` using a `memcpy` bit reinterpretation (or an
-equivalent target-ABI-defined conversion); they contain no signed overflow.
+equivalent target-ABI-defined conversion); they contain no signed overflow. The
+pre/post helpers return the new and old values respectively, as prefix and
+postfix require.
 `div` and `mod` check zero, special-case `INT64_MIN / -1` as above, and otherwise
 use the now-defined C division. `add_assign` and `sub_assign` take the address of the
 target so an index or field expression is evaluated once, preserving the

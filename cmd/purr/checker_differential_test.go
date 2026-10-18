@@ -244,6 +244,32 @@ func checkerCorpus(t *testing.T) []checkerCase {
 	add("string operations", "fn main() {\n    string s = \"hello\";\n    int n = length(s);\n    int b = s[0];\n    string t = substring(s, 1, 2);\n    bool same = s == \"hello\";\n}\n")
 	add("builtins", "fn main() {\n    print(1, 2.5, true, \"x\");\n    eprint(1, 2.5, true, \"x\");\n    print(length(new int[1]));\n    print(read_file(\"x\") == \"\");\n    print(length(argv()), argv()[0]);\n}\n")
 	add("exit built-in", "fn stop(int code) {\n    exit(code);\n    exit(1 + 2);\n}\nfn main() {\n}\n")
+	add("defined integer arithmetic", `fn main() {
+    int maximum = 9223372036854775807;
+    int minimum = -9223372036854775807 - 1;
+    int sum = maximum + 1;
+    int difference = minimum - 1;
+    int product = maximum * 2;
+    int negated = -minimum;
+    sum += 1;
+    sum -= 1;
+    sum++;
+    ++sum;
+    sum--;
+    --sum;
+    int[] values = new int[1];
+    values[0] += 1;
+    values[0]--;
+    map[string]int counts = new map[string]int;
+    counts["k"] = 1;
+    counts["k"] += 2;
+    counts["k"]--;
+    int quotient = minimum / -1;
+    int remainder = minimum % -1;
+    int zero_divisor = 0;
+    int by_zero = 1 / zero_divisor;
+}
+`)
 	add("try_read_file match on both variants", `fn main() {
     match (try_read_file("x")) {
         Ok(text) { print(text); }
@@ -400,6 +426,7 @@ fn main() {
 		"fn f() { exit(1.5); }\n",
 		"fn f() { exit(true); }\n",
 		"fn f() -> int { exit(1); }\n",
+		"fn f() { int x = 9223372036854775808; }\n",
 		"fn ReadFileResult() {}\n",
 		"struct ReadFileResult {}\n",
 		"enum ReadFileResult { A }\n",

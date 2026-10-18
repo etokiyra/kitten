@@ -336,16 +336,25 @@ fn assign_expression(ExpressionContext context, Token operator, Expr target, Exp
     string target_text = expression_text(rendered_target);
     string value_text_rendered = expression_text(rendered_value);
 
-    if (operator.text == "+=") {
+    if (operator.text == "+=" || operator.text == "-=") {
         ModuleModel module = module_model(context.model, context.module_index);
         match (expression_info(module, expr_node_id(target)).type) {
             Absent {
                 return missing_expression_type(target);
             }
             Present(target_type) {
-                if (target_type.kind == TypeKind.String) {
+                if (target_type.kind == TypeKind.String && operator.text == "+=") {
                     return ExpressionResult.Ok {
                         text = string_append_function() + "(&(" + target_text + "), " + value_text_rendered + ")"
+                    };
+                }
+                if (target_type.kind == TypeKind.Int) {
+                    string helper = i64_add_assign_function();
+                    if (operator.text == "-=") {
+                        helper = i64_sub_assign_function();
+                    }
+                    return ExpressionResult.Ok {
+                        text = helper + "(&(" + target_text + "), " + value_text_rendered + ")"
                     };
                 }
             }
@@ -1085,13 +1094,40 @@ fn missing_expression_type(Expr expression) -> ExpressionResult {
     };
 }
 
-// unary_expression renders a prefix or postfix unary operation. Kitten and C
-// agree on the operators, so they map directly, and the reference parenthesizes
-// the result, so this does too.
+// unary_expression renders a prefix or postfix unary operation. Integer
+// arithmetic uses defined runtime helpers; float operations keep their C
+// spelling. Increment and decrement take the address of the target so it is
+// evaluated exactly once, and the helper returns the old value for postfix and
+// the new value for prefix.
 fn unary_expression(ExpressionContext context, Token operator, Expr operand, bool postfix) -> ExpressionResult {
     ExpressionResult rendered = emit_expression(context, operand);
     if (!expression_ok(rendered)) {
         return rendered;
+    }
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (expression_info(module, expr_node_id(operand)).type) {
+        Absent {
+            return missing_expression_type(operand);
+        }
+        Present(operand_type) {
+            if (operand_type.kind == TypeKind.Int) {
+                if (operator.text == "-") {
+                    return ExpressionResult.Ok { text = i64_neg_function() + "(" + expression_text(rendered) + ")" };
+                }
+                if (operator.text == "++") {
+                    if (postfix) {
+                        return ExpressionResult.Ok { text = i64_post_inc_function() + "(&(" + expression_text(rendered) + "))" };
+                    }
+                    return ExpressionResult.Ok { text = i64_pre_inc_function() + "(&(" + expression_text(rendered) + "))" };
+                }
+                if (operator.text == "--") {
+                    if (postfix) {
+                        return ExpressionResult.Ok { text = i64_post_dec_function() + "(&(" + expression_text(rendered) + "))" };
+                    }
+                    return ExpressionResult.Ok { text = i64_pre_dec_function() + "(&(" + expression_text(rendered) + "))" };
+                }
+            }
+        }
     }
     if (postfix) {
         return ExpressionResult.Ok { text = "(" + expression_text(rendered) + operator.text + ")" };
@@ -1133,6 +1169,32 @@ fn binary_expression(ExpressionContext context, Token operator, Expr left, Expr 
             NotString { }
             Missing(error) {
                 return ExpressionResult.Failed { error = error };
+            }
+        }
+    }
+
+    ModuleModel module = module_model(context.model, context.module_index);
+    match (expression_info(module, expr_node_id(left)).type) {
+        Absent {
+            return missing_expression_type(left);
+        }
+        Present(operand_type) {
+            if (operand_type.kind == TypeKind.Int) {
+                if (operator.text == "+") {
+                    return ExpressionResult.Ok { text = i64_add_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "-") {
+                    return ExpressionResult.Ok { text = i64_sub_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "*") {
+                    return ExpressionResult.Ok { text = i64_mul_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "/") {
+                    return ExpressionResult.Ok { text = i64_div_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "%") {
+                    return ExpressionResult.Ok { text = i64_mod_function() + "(" + left_text + ", " + right_text + ")" };
+                }
             }
         }
     }

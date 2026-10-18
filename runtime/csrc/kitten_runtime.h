@@ -38,6 +38,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /*
  * Boehm-Demers-Weiser conservative garbage collector. Accept either the
@@ -260,6 +261,95 @@ int64_t ktn_rt_map_length(const ktn_map *map);
  * fail-fast default case do not warn about falling off the end of a function.
  */
 _Noreturn void ktn_rt_fail(const char *message);
+
+/*
+ * Defined 64-bit integer arithmetic. Kitten's int is a signed 64-bit
+ * two's-complement value, and these helpers compute with unsigned bit patterns
+ * so generated C never evaluates signed overflow. Division by zero is a fatal
+ * runtime error; INT64_MIN / -1 wraps to INT64_MIN and INT64_MIN % -1 is zero.
+ * The assignment helpers take the address of the target so the target is
+ * evaluated exactly once. These are static inline because every generated unit
+ * that does integer arithmetic includes this header.
+ */
+static inline int64_t ktn_rt_i64_from_bits(uint64_t bits) {
+    int64_t value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+static inline uint64_t ktn_rt_i64_bits(int64_t value) {
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+static inline int64_t ktn_rt_i64_add(int64_t left, int64_t right) {
+    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) + ktn_rt_i64_bits(right));
+}
+
+static inline int64_t ktn_rt_i64_sub(int64_t left, int64_t right) {
+    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) - ktn_rt_i64_bits(right));
+}
+
+static inline int64_t ktn_rt_i64_mul(int64_t left, int64_t right) {
+    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) * ktn_rt_i64_bits(right));
+}
+
+static inline int64_t ktn_rt_i64_neg(int64_t value) {
+    return ktn_rt_i64_from_bits(UINT64_C(0) - ktn_rt_i64_bits(value));
+}
+
+static inline int64_t ktn_rt_i64_div(int64_t left, int64_t right) {
+    if (right == 0) {
+        ktn_rt_fail("integer division by zero");
+    }
+    if (left == INT64_MIN && right == -1) {
+        return INT64_MIN;
+    }
+    return left / right;
+}
+
+static inline int64_t ktn_rt_i64_mod(int64_t left, int64_t right) {
+    if (right == 0) {
+        ktn_rt_fail("integer division by zero");
+    }
+    if (left == INT64_MIN && right == -1) {
+        return 0;
+    }
+    return left % right;
+}
+
+static inline int64_t ktn_rt_i64_add_assign(int64_t *slot, int64_t value) {
+    *slot = ktn_rt_i64_add(*slot, value);
+    return *slot;
+}
+
+static inline int64_t ktn_rt_i64_sub_assign(int64_t *slot, int64_t value) {
+    *slot = ktn_rt_i64_sub(*slot, value);
+    return *slot;
+}
+
+static inline int64_t ktn_rt_i64_pre_inc(int64_t *slot) {
+    *slot = ktn_rt_i64_add(*slot, 1);
+    return *slot;
+}
+
+static inline int64_t ktn_rt_i64_post_inc(int64_t *slot) {
+    int64_t previous = *slot;
+    *slot = ktn_rt_i64_add(previous, 1);
+    return previous;
+}
+
+static inline int64_t ktn_rt_i64_pre_dec(int64_t *slot) {
+    *slot = ktn_rt_i64_sub(*slot, 1);
+    return *slot;
+}
+
+static inline int64_t ktn_rt_i64_post_dec(int64_t *slot) {
+    int64_t previous = *slot;
+    *slot = ktn_rt_i64_sub(previous, 1);
+    return previous;
+}
 
 /*
  * Flushes standard output and then standard error and terminates the process

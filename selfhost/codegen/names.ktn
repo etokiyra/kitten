@@ -74,6 +74,21 @@ public fn string_append_function() -> string { return "ktn_rt_string_append"; }
 // reference.
 public fn fail_function() -> string { return "ktn_rt_fail"; }
 
+// The i64 helpers implement defined two's-complement integer arithmetic. The
+// assignment and increment helpers take the address of the target once.
+public fn i64_add_function() -> string { return "ktn_rt_i64_add"; }
+public fn i64_sub_function() -> string { return "ktn_rt_i64_sub"; }
+public fn i64_mul_function() -> string { return "ktn_rt_i64_mul"; }
+public fn i64_neg_function() -> string { return "ktn_rt_i64_neg"; }
+public fn i64_div_function() -> string { return "ktn_rt_i64_div"; }
+public fn i64_mod_function() -> string { return "ktn_rt_i64_mod"; }
+public fn i64_add_assign_function() -> string { return "ktn_rt_i64_add_assign"; }
+public fn i64_sub_assign_function() -> string { return "ktn_rt_i64_sub_assign"; }
+public fn i64_pre_inc_function() -> string { return "ktn_rt_i64_pre_inc"; }
+public fn i64_post_inc_function() -> string { return "ktn_rt_i64_post_inc"; }
+public fn i64_pre_dec_function() -> string { return "ktn_rt_i64_pre_dec"; }
+public fn i64_post_dec_function() -> string { return "ktn_rt_i64_post_dec"; }
+
 // The print helpers write one value of a primitive type. A generated print call
 // becomes a comma expression of these, separated by the space helper and
 // terminated by the newline helper, which is why print has no single runtime

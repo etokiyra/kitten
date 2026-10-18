@@ -620,6 +620,41 @@ fn exit_parameter_types() -> Type[] {
     return types;
 }
 
+// integer_literal_in_range reports whether a decimal literal denotes a value
+// from 0 through INT64_MAX. Leading zeroes are ignored. The comparison is
+// lexical so it never overflows while validating the literal.
+public fn integer_literal_in_range(string text) -> bool {
+    int size = length(text);
+    int start = 0;
+    while (start < size && text[start] == 48) { // '0'
+        start++;
+    }
+    if (start == size) {
+        return true;
+    }
+    int digits = size - start;
+    if (digits < 19) {
+        return true;
+    }
+    if (digits > 19) {
+        return false;
+    }
+    string maximum = "9223372036854775807";
+    int index = 0;
+    while (index < 19) {
+        int actual = text[start + index];
+        int limit = maximum[index];
+        if (actual < limit) {
+            return true;
+        }
+        if (actual > limit) {
+            return false;
+        }
+        index++;
+    }
+    return true;
+}
+
 // --- Name resolution ---------------------------------------------------------
 
 // lookup_type resolves a type name in the current module's declarations and then

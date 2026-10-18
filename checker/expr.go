@@ -2,6 +2,7 @@ package checker
 
 import (
 	"fmt"
+	"strconv"
 
 	"kitten/parser"
 )
@@ -24,6 +25,9 @@ func (c *checker) checkExpr(expression parser.Expr, scope *Scope) (*Type, error)
 func (c *checker) checkExpression(expression parser.Expr, scope *Scope) (*Type, error) {
 	switch e := expression.(type) {
 	case *parser.IntLiteral:
+		if _, err := strconv.ParseInt(e.Text, 10, 64); err != nil {
+			return nil, c.errorAt(InvalidExpression, e.At, "integer literal out of range")
+		}
 		return IntType, nil
 	case *parser.FloatLiteral:
 		return FloatType, nil
