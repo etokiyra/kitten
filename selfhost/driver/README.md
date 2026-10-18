@@ -104,6 +104,36 @@ wrapper-visible error.
 Linux is verified. The wrapper is POSIX shell and avoids bashisms, but macOS is
 not claimed as tested.
 
+## Fixpoint
+
+The C-level fixpoint is reached. Stage 1 is built by the Go compiler; stage 1
+builds stage 2 from `selfhost/driver.ktn`; stage 2 builds stage 3; and the C for
+`driver.ktn` is byte-identical across Go, stage 1, stage 2, and stage 3. Stage 2
+also reproduces the Go reference for all nine fixtures and `tests/modules/`.
+
+```sh
+kitten build selfhost/driver.ktn -o /tmp/stage1
+KITTENC_DRIVER=/tmp/stage1 KITTEN_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage2
+KITTENC_DRIVER=/tmp/stage2 KITTEN_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage3
+/tmp/stage1 "$PWD/selfhost/driver.ktn" > /tmp/stage1.c
+/tmp/stage2 "$PWD/selfhost/driver.ktn" > /tmp/stage2.c
+/tmp/stage3 "$PWD/selfhost/driver.ktn" > /tmp/stage3.c
+cmp /tmp/stage1.c /tmp/stage2.c
+cmp /tmp/stage2.c /tmp/stage3.c
+```
+
+The Go reference C for `driver.ktn` is produced by
+`loader.Load` → `checker.CheckModules` → `codegen.Generate` and is also compared
+byte for byte by `TestKittenFixpoint`.
+
+Measured on the Linux development host: stage 1 built by Go in about 2.5 s;
+stage 2 and stage 3 built by the previous stage in about 2.9–3.0 s each; each
+driver emitted the 928,224-byte C unit in about 0.4–0.5 s. The three stage
+binaries were byte-identical in that run, but the claim rests on the generated C,
+not on binary reproducibility.
+
 ## Testing
 
 `cmd/kitten/driver_test.go` builds stage 1 with the Go compiler and checks:
@@ -117,6 +147,12 @@ not claimed as tested.
 - no-argument usage against the Go CLI;
 - the driver's relative-path status-2 contract; and
 - that a missing import is fatal and nonzero, without comparing its text.
+
+`TestKittenFixpoint` in the same file additionally builds stages 1–3, compares the
+C for `driver.ktn` across Go and all stages, checks stage-2 determinism and a
+one-byte negative control, replays the 10 fixture roots through stage 2, and
+repeats the error and usage comparisons with stage 2. It is skipped only under
+`go test -short`.
 
 The wrapper is checked with `sh -n`; `shellcheck` is not installed in the test
 environment.

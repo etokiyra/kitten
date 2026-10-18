@@ -4,7 +4,7 @@
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later + MIT" src="https://img.shields.io/badge/license-GPL--3.0--or--later%20%2B%20MIT-blue.svg"></a>
   <img alt="Status: early, v0.1 provisional" src="https://img.shields.io/badge/status-early%20%C2%B7%20v0.1%20provisional-orange.svg">
   <img alt="Bootstrap: Go" src="https://img.shields.io/badge/bootstrap-Go-00ADD8.svg">
-  <img alt="Self-hosting: in progress" src="https://img.shields.io/badge/self--hosting-in%20progress-yellow.svg">
+  <img alt="Self-hosting: C-level fixpoint" src="https://img.shields.io/badge/self--hosting-C--level%20fixpoint-yellow.svg">
   <img alt="Tool: purr" src="https://img.shields.io/badge/tool-purr-ff69b4.svg">
   <img alt="Platform: Linux | macOS" src="https://img.shields.io/badge/platform-linux%20%7C%20macOS-lightgrey.svg">
 </p>
@@ -69,8 +69,8 @@ undecided rather than quietly invented in code.
 
 | | |
 | --- | --- |
-| **Real today** | a full compiler frontend, type checker, C generator and C runtime; a CLI that compiles and runs native programs, including multi-file ones |
-| **Not there yet** | a standard library, packages, a formatter, a language server, a backend that skips C, and self-hosting |
+| **Real today** | a full compiler frontend, type checker, C generator and C runtime; a CLI that compiles and runs native programs, including multi-file ones; a Kitten-written compiler that reaches a C-level self-hosting fixpoint |
+| **Not there yet** | full independence from Go (Go still builds stage 1), a standard library, packages, a formatter, a language server, and a backend that skips C |
 | **How decisions are made** | `SPEC.md` is the source of truth; code does not get to override it |
 
 ---
@@ -356,37 +356,47 @@ It is also the only way a self-hosting claim means anything.
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
-| Generated programs executed | 55 program runs under GCC and Clang, outputs compared |
+| Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
+| Generated programs executed | 65 program runs under GCC and Clang, outputs compared |
 
 </details>
 
-**What it cannot compile yet, and why that is a short list.** The Kitten-written
-generator now emits every expression kind the language has, including assignment, map
-entry insertion, compound assignment, increment/decrement, and string append. All nine
-top-level fixtures in `tests/` compile end-to-end through the Kitten-written backend,
-match the reference generator's C byte for byte, and produce their expected output.
-The Kitten-written module loader matches the Go loader over its corpus for an absolute
-root path, and `tests/modules/` runs through the fully Kitten-written loader, lexer,
-parser, checker, and generator. Phase 5.1 added the `argv()` built-in end to end in
-both pipelines, with the generated C entry point capturing the process argument
-vector before user `main` runs. Phase 5.2 added `eprint(...)`, which writes
-diagnostics to standard error with the same formatting as `print`; the runtime
-fixture captures stdout and stderr separately through both pipelines. Phase 5.3
-added `exit(status)`, which flushes stdout and then stderr before terminating; the
-runtime fixture checks stdout, stderr, and the exact status, including POSIX
-low-eight-bit behavior. Phase 5.6 added the Kitten-written compiler driver at
-`selfhost/driver.ktn` and the temporary POSIX-shell wrapper
-`selfhost/driver/kittenc.sh`: stage 1 emits byte-identical C for all nine fixtures and
-`tests/modules/`, and the wrapper builds and runs them under GCC and Clang. Missing or
-unreadable imports are **not** matched yet: they are fatal through `read_file`, and
-the postponed `ReadFileResult`/`try_read_file` work is scheduled after the fixpoint.
-Relative source paths are made absolute by the wrapper; the driver itself requires an
-absolute path. The two-stage fixpoint is the next phase, not an open generator
-question.
+**The C-level fixpoint is reached.** Stage 1 is built from
+`selfhost/driver.ktn` by the Go compiler. Stage 1 builds stage 2 from the same
+source, and stage 2 builds stage 3. The generated C for `driver.ktn` is
+byte-identical across the Go reference and all three stages. Stage 2 also
+reproduces the Go reference C for all nine fixtures and `tests/modules/`, and the
+resulting programs match their expected output under GCC and Clang. That is the
+precise claim: **the Kitten compiler, built by the Kitten compiler, reproduces
+the Go reference's generated C byte for byte.**
 
-The Go compiler remains the bootstrap and the only pipeline the CLI uses. Kitten is
-**not** self-hosting yet, and this README will not say it is until a Kitten-built compiler
-compiles Kitten's own source and reproduces the reference behavior.
+**What is still not independent.** Go still builds stage 1; the bootstrap has not
+left the pipeline. A C compiler and the temporary POSIX wrapper
+(`selfhost/driver/kittenc.sh`) are still required, and the runtime is still C.
+Missing or unreadable imports are **not** matched because the postponed
+`ReadFileResult`/`try_read_file` work has not landed; those failures are fatal
+through `read_file`. Relative source paths are made absolute by the wrapper; the
+driver itself requires an absolute path. Goal 2 (no C) and Goal 3 (the `purr`
+ecosystem) have not started.
+
+To reproduce the fixpoint by hand:
+
+```sh
+kitten build selfhost/driver.ktn -o /tmp/stage1
+KITTENC_DRIVER=/tmp/stage1 KITTEN_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage2
+KITTENC_DRIVER=/tmp/stage2 KITTEN_RUNTIME_DIR=runtime/csrc \
+  selfhost/driver/kittenc.sh build selfhost/driver.ktn -o /tmp/stage3
+/tmp/stage1 "$PWD/selfhost/driver.ktn" > /tmp/stage1.c
+/tmp/stage2 "$PWD/selfhost/driver.ktn" > /tmp/stage2.c
+/tmp/stage3 "$PWD/selfhost/driver.ktn" > /tmp/stage3.c
+cmp /tmp/stage1.c /tmp/stage2.c
+cmp /tmp/stage2.c /tmp/stage3.c
+```
+
+The Go compiler remains the bootstrap and the only pipeline the CLI uses. This
+README does not claim that the CLI is Kitten-built or that the compiler is fully
+independent of Go.
 
 ---
 

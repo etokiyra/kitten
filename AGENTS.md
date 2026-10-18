@@ -182,7 +182,17 @@ GCC and Clang. The implementation order changed: `ReadFileResult`/`try_read_file
 (5.4) and loader read-error parity (5.5) are postponed until after the fixpoint
 (5.7), whose design stays proposed and untouched. Until then a missing or
 unreadable file is fatal through `read_file` and its diagnostic is **not** matched
-against the reference loader. Phase 5.7, the two-stage fixpoint, is next.
+against the reference loader. Phase 5.7 reached the C-level fixpoint: Go builds
+stage 1 from `selfhost/driver.ktn`, stage 1 builds stage 2, stage 2 builds stage 3,
+and the generated C for `driver.ktn` is byte-identical across Go and all three
+stages; stage 2 also reproduces the Go reference for all nine fixtures and
+`tests/modules/`. The stage binaries were byte-identical in the measured run, but
+the claim rests on the C, not the binaries.
+
+Next candidates, none started: the postponed `ReadFileResult`/`try_read_file` and
+loader read-error parity (5.4/5.5); renaming the installed binary from `kitten` to
+`purr`; and a SPEC cleanup of Go/C-flavored wording. Native backend, standard
+library, and file writing remain unauthorized.
 
 ### Adding a built-in
 
@@ -227,9 +237,10 @@ documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
 `selfhost/codegen/README.md`, `selfhost/loader/README.md`, and
 `selfhost/driver/README.md`.
 
-Self-hosting, a native backend, a complete standard library, and file writing
-are still intentionally unimplemented: do not start them without explicit
-authorization.
+The C-level self-hosting fixpoint is reached, but full independence from Go is
+not: Go still builds stage 1. A native backend, a complete standard library, and
+file writing remain intentionally unimplemented; do not start them, or claim full
+self-hosting, without explicit authorization.
 
 ## Roadmap
 
@@ -268,11 +279,14 @@ authorization.
    runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,
    and exact status/stream runtime coverage; Phase 5.6 added the Kitten-written
    driver and temporary POSIX-shell wrapper, with byte-identical C and native
-   fixture execution under GCC and Clang. The order for the remaining driver work
-   is now 5.7 fixpoint first, then the postponed 5.4/5.5 read-result and loader
-   parity work).
+   fixture execution under GCC and Clang; Phase 5.7 reached the C-level fixpoint.
+   The postponed 5.4/5.5 read-result and loader parity work remains next).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
-   is independence from Go.
+   is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
+   stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is
+   byte-identical across Go and all stages. Full independence remains open because
+   Go still builds stage 1; the postponed read-result/loader parity work and the
+   `purr` rename are the next candidates, not part of this finish line yet.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
    the runtime off C as well. This is independence from C.
 5. Grow a broader standard library and an ecosystem for command-line tools first,

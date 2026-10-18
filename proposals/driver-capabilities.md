@@ -4,11 +4,12 @@
 >
 > The human approved the eight decisions below. Phases 5.1 (`argv`), 5.2
 > (`eprint`), 5.3 (`exit`), and 5.6 (the Kitten driver and wrapper) are
-> implemented. The order was revised in Phase 5.6: `try_read_file` and the loader
-> read-error parity are postponed until after the 5.7 fixpoint. Until then a
-> missing/unreadable file is fatal through `read_file` and is not matched.
+> implemented, and Phase 5.7 reached the C-level fixpoint. The order was revised
+> in Phase 5.6: `try_read_file` and the loader read-error parity are postponed
+> until after the fixpoint. Until then a missing/unreadable file is fatal through
+> `read_file` and is not matched.
 >
-> Status: adopted, Phase 5.0 proposal; Phase 5.6 done; 5.7 fixpoint next. Date:
+> Status: adopted, Phase 5.0 proposal; Phase 5.7 done; 5.4/5.5 next. Date:
 > 2026-10-18.
 >
 > **Adopted decisions**
@@ -554,10 +555,11 @@ to the bootstrap.
 
 ## 4. Proposed implementation order
 
-The order was revised in Phase 5.6. `argv`, `eprint`, `exit`, and the Kitten
-driver are implemented. `try_read_file`/`ReadFileResult` and loader read-error
-parity are **postponed until after the fixpoint**; the fixpoint is next. Each step
-is one coherent commit with its own acceptance checks.
+The order was revised in Phase 5.6 and the fixpoint is now done. `argv`,
+`eprint`, `exit`, the Kitten driver, and the fixpoint are implemented.
+`try_read_file`/`ReadFileResult` and loader read-error parity remain postponed
+until after the fixpoint and are next. Each step is one coherent commit with its
+own acceptance checks.
 
 1. **`argv()` and the argument-carrying entry point.**
    - Runtime `ktn_rt_set_args`/`ktn_rt_argv`; Go and Kitten checkers/code
@@ -600,7 +602,7 @@ is one coherent commit with its own acceptance checks.
      stdout/stderr/status match `kitten build`/`kitten run` for the corpus; the
      wrapper itself contains no Go.
 
-6. **NEXT — Fixpoint proof.**
+6. **DONE — Fixpoint proof.**
    - Compile the Kitten compiler's source with the Go compiler (stage 0), then
      with the Kitten driver/wrapper (stage 1), then stage 1 compiles its own
      source (stage 2).

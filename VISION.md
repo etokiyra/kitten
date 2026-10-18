@@ -100,9 +100,13 @@ means anything later.
 **Finish line:** a compiler written in Kitten, compiled by itself, producing output
 identical to the Go reference. At that point Go leaves the pipeline and becomes history.
 
-**Status:** in progress. The lexer, parser, checker, semantic model, and most of the C
-generator exist in Kitten and are verified against the reference. The README's
-self-hosting section states exactly what is and is not done.
+**Status:** the C-level fixpoint is reached. Stage 1 is built by Go; stage 1 builds
+stage 2 from the same source; stage 2 builds stage 3; and the generated C for
+`selfhost/driver.ktn` is byte-identical across Go, stage 1, stage 2, and stage 3.
+Stage 2 also reproduces the Go reference for every fixture and `tests/modules/`.
+Go still builds stage 1 and the production CLI still uses the Go pipeline, so this
+is not yet full independence from Go. The README's self-hosting section states the
+claim and the remaining limits precisely.
 
 ### 2. Independent of C
 
@@ -288,11 +292,13 @@ These are the parts of the design that should survive any amount of growth:
 ## How far along this is
 
 The frontend, the type checker, the C generator, and the runtime are implemented and
-tested, and the compiler produces and executes native programs today. The
-second implementation in Kitten covers the lexer, parser, checker, semantic model, and
-most of the code generator, and is verified against the Go reference byte for byte. What
-remains before self-hosting — a handful of expression kinds, a module loader, and the
-runtime capabilities a Kitten-written driver needs — is listed precisely in the README.
+tested, and the compiler produces and executes native programs today. The second
+implementation in Kitten covers the lexer, parser, checker, semantic model, module
+loader, driver, and C generator, and reaches a C-level self-hosting fixpoint: Go,
+stage 1, stage 2, and stage 3 generate byte-identical C for the compiler source, and
+stage 2 reproduces the Go reference for every fixture.
 
-Nothing here is self-hosting yet, and this document will not say otherwise until a
-Kitten-built compiler compiles Kitten's own source and matches the reference.
+The remaining limits are stated precisely in the README: Go still builds stage 1, a C
+compiler and the temporary POSIX wrapper are required, the runtime is C, missing-file
+diagnostics are not yet matched, and the `purr` ecosystem and native backend have not
+started. Nothing here claims full independence from Go.
