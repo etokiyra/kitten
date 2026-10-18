@@ -133,6 +133,40 @@ type unitCase struct {
 	rejected string
 }
 
+// bitwiseSource exercises every bitwise operator, literal form, and shift
+// boundary. It is also used by the both-pipeline runtime fixture.
+const bitwiseSource = `fn main() {
+    int mask = 0xF0;
+    print(mask & 0x0F);
+    print(mask | 0x0F);
+    print(mask ^ 0xFF);
+    print(~mask);
+    print(0xFFFFFFFFFFFFFFFF & 0x0F);
+    print(0x8000000000000000 | 1);
+    print(0x7FFFFFFFFFFFFFFF ^ 0xFFFFFFFFFFFFFFFF);
+    print(0xFFFFFFFFFFFFFFFF);
+    print(0x8000000000000000);
+    print(0b1010);
+    int count = 6;
+    print(1 << count);
+    print(-8 >> count);
+    print(1 << 0);
+    print(1 << 1);
+    print(1 << 62);
+    print(1 << 63);
+    print(0x4000000000000000 << 1);
+    print(-8 >> 1);
+    print(-1 >> 63);
+    print(0x8000000000000000 >> 63);
+    print(0x4000000000000000 >> 62);
+    print((1 | 2) & 3 ^ 1);
+    print(1 + 2 << 3);
+    print(1 < 2 << 3);
+}
+`
+
+const bitwiseExpected = "0\n255\n15\n-241\n15\n-9223372036854775807\n-9223372036854775808\n-1\n-9223372036854775808\n10\n64\n-1\n1\n2\n4611686018427387904\n-9223372036854775808\n-9223372036854775808\n-4\n-1\n-1\n1\n2\n24\ntrue\n"
+
 // definedArithmeticSource exercises every defined integer arithmetic form,
 // including compound targets that must be evaluated once.
 const definedArithmeticSource = `struct Counter {
@@ -618,6 +652,9 @@ fn main() {
 	}, {
 		description: "defined integer arithmetic and target evaluation",
 		root:        definedArithmeticSource,
+	}, {
+		description: "bitwise operators, literals, and shifts",
+		root:        bitwiseSource,
 	}, {
 		description: "try_read_file with the implicit prelude and helper",
 		root: `fn describe(ReadFileResult result) -> int {

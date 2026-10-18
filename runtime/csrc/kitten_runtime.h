@@ -38,6 +38,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /*
@@ -317,6 +318,31 @@ static inline int64_t ktn_rt_i64_mod(int64_t left, int64_t right) {
         return 0;
     }
     return left % right;
+}
+
+static inline void ktn_rt_i64_check_shift(int64_t count) {
+    if (count < 0 || count > 63) {
+        char message[128];
+        snprintf(message, sizeof message, "shift count %lld is outside 0..63", (long long)count);
+        ktn_rt_fail(message);
+    }
+}
+
+static inline int64_t ktn_rt_i64_shl(int64_t left, int64_t count) {
+    ktn_rt_i64_check_shift(count);
+    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) << (unsigned)count);
+}
+
+static inline int64_t ktn_rt_i64_shr(int64_t left, int64_t count) {
+    ktn_rt_i64_check_shift(count);
+    uint64_t bits = ktn_rt_i64_bits(left);
+    uint64_t shifted;
+    if ((bits & (UINT64_C(1) << 63)) == 0) {
+        shifted = bits >> (unsigned)count;
+    } else {
+        shifted = ~(~bits >> (unsigned)count);
+    }
+    return ktn_rt_i64_from_bits(shifted);
 }
 
 static inline int64_t ktn_rt_i64_add_assign(int64_t *slot, int64_t value) {

@@ -24,7 +24,7 @@ const (
 	// as "print", which is not a reserved keyword.
 	Ident
 
-	// Int is a decimal integer literal such as 0 or 123.
+	// Int is an integer literal: decimal, hexadecimal (0x...), or binary (0b...).
 	Int
 
 	// Float is a decimal floating-point literal such as 12.5 or 0.25.
@@ -78,6 +78,12 @@ const (
 	And         // &&
 	Or          // ||
 	Not         // !
+	BitAnd      // &
+	BitOr       // |
+	BitXor      // ^
+	BitNot      // ~
+	ShiftLeft   // <<
+	ShiftRight  // >>
 	Inc         // ++
 	Dec         // --
 	PlusAssign  // +=
@@ -148,6 +154,12 @@ var kindNames = map[Kind]string{
 	And:         "And",
 	Or:          "Or",
 	Not:         "Not",
+	BitAnd:      "BitAnd",
+	BitOr:       "BitOr",
+	BitXor:      "BitXor",
+	BitNot:      "BitNot",
+	ShiftLeft:   "ShiftLeft",
+	ShiftRight:  "ShiftRight",
 	Inc:         "Inc",
 	Dec:         "Dec",
 	PlusAssign:  "PlusAssign",

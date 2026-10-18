@@ -218,16 +218,27 @@ fn scan_identifier(Scanner scanner, int start_line, int start_column) -> ScanRes
     return ok_token(scanner, start, keyword_kind(text), start_line, start_column);
 }
 
-// scan_number consumes a decimal integer or floating-point literal.
+// scan_number consumes a decimal integer, a hexadecimal integer, a binary
+// integer, or a floating-point literal.
 //
-// A decimal point is part of the literal only when it is immediately followed
-// by a decimal digit. Thus "1." is an integer followed by a dot and ".5" is a
-// dot followed by an integer. Hex, exponent, and suffix forms do not exist
-// (SPEC.md 6.1 and 6.2), so there is no such thing as a malformed number: a
-// digit sequence always scans as a literal, and any other character after it
-// begins the next token.
+// A decimal point is part of a float only when it is immediately followed by a
+// decimal digit. The hexadecimal and binary prefixes are lowercase only. A
+// malformed prefixed literal is a lexical error at the literal's start.
 fn scan_number(Scanner scanner, int start_line, int start_column) -> ScanResult {
     int start = scanner.position;
+    if (peek(scanner) == 48) { // '0'
+        int prefix = peek_at(scanner, 1);
+        if (prefix == 120) { // x
+            return scan_prefixed_number(scanner, start, start_line, start_column, 16, 16);
+        }
+        if (prefix == 98) { // b
+            return scan_prefixed_number(scanner, start, start_line, start_column, 2, 64);
+        }
+        if (prefix == 88 || prefix == 66 || prefix == 79 || prefix == 111) { // X B O o
+            return failed(start_line, start_column, "invalid integer literal");
+        }
+    }
+
     while (!at_end(scanner) && is_digit(scanner.source[scanner.position])) {
         advance(scanner);
     }
@@ -241,6 +252,34 @@ fn scan_number(Scanner scanner, int start_line, int start_column) -> ScanResult 
         }
     }
     return ok_token(scanner, start, kind, start_line, start_column);
+}
+
+// scan_prefixed_number scans one 0x or 0b literal, validating its digit run and
+// width. The zero and prefix are still at the current position.
+fn scan_prefixed_number(Scanner scanner, int start, int start_line, int start_column, int base, int limit) -> ScanResult {
+    advance(scanner); // '0'
+    advance(scanner); // prefix
+    int digits = 0;
+    while (!at_end(scanner) && is_digit_in_base(scanner.source[scanner.position], base)) {
+        advance(scanner);
+        digits++;
+    }
+    if (digits == 0 || (!at_end(scanner) && is_identifier_part(peek(scanner)))) {
+        return failed(start_line, start_column, "invalid integer literal");
+    }
+    if (digits > limit) {
+        return failed(start_line, start_column, "integer literal out of range");
+    }
+    return ok_token(scanner, start, TokenKind.Int, start_line, start_column);
+}
+
+// is_digit_in_base reports whether byte is a digit of base 2 or 16. The lexer
+// only calls this for those two bases.
+fn is_digit_in_base(int byte, int base) -> bool {
+    if (base == 16) {
+        return is_digit(byte) || (byte >= 97 && byte <= 102) || (byte >= 65 && byte <= 70); // a-f A-F
+    }
+    return byte == 48 || byte == 49; // 0 1
 }
 
 // scan_string consumes a double-quoted string literal, validating escapes.
@@ -337,13 +376,19 @@ fn scan_operator(Scanner scanner, int start_line, int start_column) -> ScanResul
         }
     } else if (first == 60) { // <
         kind = TokenKind.Lt;
-        if (peek(scanner) == 61) {
+        if (peek(scanner) == 60) {
+            advance(scanner);
+            kind = TokenKind.ShiftLeft;
+        } else if (peek(scanner) == 61) {
             advance(scanner);
             kind = TokenKind.Lte;
         }
     } else if (first == 62) { // >
         kind = TokenKind.Gt;
-        if (peek(scanner) == 61) {
+        if (peek(scanner) == 62) {
+            advance(scanner);
+            kind = TokenKind.ShiftRight;
+        } else if (peek(scanner) == 61) {
             advance(scanner);
             kind = TokenKind.Gte;
         }
@@ -352,15 +397,19 @@ fn scan_operator(Scanner scanner, int start_line, int start_column) -> ScanResul
             advance(scanner);
             kind = TokenKind.And;
         } else {
-            matched = false;
+            kind = TokenKind.BitAnd;
         }
     } else if (first == 124) { // |
         if (peek(scanner) == 124) {
             advance(scanner);
             kind = TokenKind.Or;
         } else {
-            matched = false;
+            kind = TokenKind.BitOr;
         }
+    } else if (first == 94) { // ^
+        kind = TokenKind.BitXor;
+    } else if (first == 126) { // ~
+        kind = TokenKind.BitNot;
     } else if (first == 40) {
         kind = TokenKind.LParen;
     } else if (first == 41) {

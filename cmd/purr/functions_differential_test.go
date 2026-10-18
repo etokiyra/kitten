@@ -486,6 +486,16 @@ fn main() {
 }
 `,
 	}, {
+		description: "bitwise and shift expressions",
+		root: `fn mix(int value) -> int {
+    int mask = 0xF0;
+    int shifted = value << 3;
+    return (shifted & mask) | (~value);
+}
+fn main() {
+}
+`,
+	}, {
 		description: "defined integer arithmetic and compound forms",
 		root: `fn arithmetic(int value) -> int {
     int maximum = 9223372036854775807;

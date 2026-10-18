@@ -82,6 +82,8 @@ public fn i64_mul_function() -> string { return "ktn_rt_i64_mul"; }
 public fn i64_neg_function() -> string { return "ktn_rt_i64_neg"; }
 public fn i64_div_function() -> string { return "ktn_rt_i64_div"; }
 public fn i64_mod_function() -> string { return "ktn_rt_i64_mod"; }
+public fn i64_shl_function() -> string { return "ktn_rt_i64_shl"; }
+public fn i64_shr_function() -> string { return "ktn_rt_i64_shr"; }
 public fn i64_add_assign_function() -> string { return "ktn_rt_i64_add_assign"; }
 public fn i64_sub_assign_function() -> string { return "ktn_rt_i64_sub_assign"; }
 public fn i64_pre_inc_function() -> string { return "ktn_rt_i64_pre_inc"; }

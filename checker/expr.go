@@ -21,11 +21,22 @@ func (c *checker) checkExpr(expression parser.Expr, scope *Scope) (*Type, error)
 	return expressionType, nil
 }
 
+// intLiteralInRange reports whether a decimal literal is representable as an
+// int. Prefixed hexadecimal and binary literals are validated lexically; their
+// 64-bit bit patterns are always representable.
+func intLiteralInRange(text string) bool {
+	if len(text) >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'b') {
+		return true
+	}
+	_, err := strconv.ParseInt(text, 10, 64)
+	return err == nil
+}
+
 // checkExpression dispatches on the concrete expression node.
 func (c *checker) checkExpression(expression parser.Expr, scope *Scope) (*Type, error) {
 	switch e := expression.(type) {
 	case *parser.IntLiteral:
-		if _, err := strconv.ParseInt(e.Text, 10, 64); err != nil {
+		if !intLiteralInRange(e.Text) {
 			return nil, c.errorAt(InvalidExpression, e.At, "integer literal out of range")
 		}
 		return IntType, nil
@@ -118,6 +129,16 @@ func (c *checker) checkUnary(expression *parser.UnaryExpr, scope *Scope) (*Type,
 		}
 		return BoolType, nil
 
+	case "~":
+		operandType, err := c.checkExpr(expression.Operand, scope)
+		if err != nil {
+			return nil, err
+		}
+		if operandType != IntType {
+			return nil, c.errorAt(InvalidOperator, expression.OperatorAt, "operator '~' requires an int operand, found %s", operandType)
+		}
+		return IntType, nil
+
 	case "++", "--":
 		operandType, err := c.checkAssignable(expression.Operand, scope)
 		if err != nil {
@@ -151,6 +172,8 @@ func (c *checker) checkBinary(expression *parser.BinaryExpr, scope *Scope) (*Typ
 	switch expression.Operator {
 	case "+", "-", "*", "/", "%":
 		return c.checkArithmetic(expression.Operator, leftType, rightType, expression.OperatorAt)
+	case "&", "|", "^", "<<", ">>":
+		return c.checkIntBinary(expression.Operator, leftType, rightType, expression.OperatorAt)
 	case "<", "<=", ">", ">=":
 		return c.checkRelational(expression.Operator, leftType, rightType, expression.OperatorAt)
 	case "==", "!=":
@@ -187,6 +210,21 @@ func (c *checker) checkArithmetic(operator string, left, right *Type, at parser.
 		return nil, c.errorAt(InvalidOperator, at, "operator %q requires numeric operands, found %s", operator, left)
 	}
 	return left, nil
+}
+
+// checkIntBinary checks "&", "|", "^", "<<", and ">>". Both operands must be
+// int; the result is int. The wording follows checkArithmetic.
+func (c *checker) checkIntBinary(operator string, left, right *Type, at parser.Position) (*Type, error) {
+	if left.IsVoid() || right.IsVoid() {
+		return nil, c.errorAt(InvalidOperator, at, "operator %q cannot be applied to a void value", operator)
+	}
+	if left != right {
+		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
+	}
+	if left != IntType {
+		return nil, c.errorAt(InvalidOperator, at, "operator %q requires int operands, found %s", operator, left)
+	}
+	return IntType, nil
 }
 
 // checkRelational checks "<", "<=", ">", and ">=". The operands must be the

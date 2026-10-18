@@ -76,6 +76,40 @@ public fn expression_error(ExpressionResult result) -> GenerateError {
     }
 }
 
+// integer_literal_text renders a checked integer literal. Decimal literals keep
+// their source spelling; hexadecimal and binary literals become signed decimal
+// C expressions for their 64-bit bit pattern.
+fn integer_literal_text(string text) -> string {
+    int size = length(text);
+    if (size < 3 || text[0] != 48 || (text[1] != 120 && text[1] != 98)) {
+        return text;
+    }
+    int base = 16;
+    if (text[1] == 98) {
+        base = 2;
+    }
+    int value = 0;
+    int index = 2;
+    while (index < size) {
+        int byte = text[index];
+        int digit = 0;
+        if (byte >= 48 && byte <= 57) {
+            digit = byte - 48;
+        } else if (byte >= 97 && byte <= 102) {
+            digit = byte - 97 + 10;
+        } else if (byte >= 65 && byte <= 70) {
+            digit = byte - 65 + 10;
+        }
+        value = value * base + digit;
+        index++;
+    }
+    int minimum = -9223372036854775807 - 1;
+    if (value == minimum) {
+        return "INT64_MIN";
+    }
+    return decimal(value);
+}
+
 // expression_kind_name is the name of an expression kind, used in a diagnostic
 // and by the driver that reports which expression a rendering belongs to. The
 // names follow the shape names used elsewhere in the repository.
@@ -107,9 +141,7 @@ public fn expression_kind_name(Expr expression) -> string {
 public fn emit_expression(ExpressionContext context, Expr expression) -> ExpressionResult {
     match (expression) {
         Integer(node_id, token) {
-            // An integer literal is its source spelling: the language defines no
-            // form that C would spell differently.
-            return ExpressionResult.Ok { text = token.text };
+            return ExpressionResult.Ok { text = integer_literal_text(token.text) };
         }
         Float(node_id, token) {
             // A floating-point literal is its source spelling too. The reference
@@ -1114,6 +1146,9 @@ fn unary_expression(ExpressionContext context, Token operator, Expr operand, boo
                 if (operator.text == "-") {
                     return ExpressionResult.Ok { text = i64_neg_function() + "(" + expression_text(rendered) + ")" };
                 }
+                if (operator.text == "~") {
+                    return ExpressionResult.Ok { text = "(~" + expression_text(rendered) + ")" };
+                }
                 if (operator.text == "++") {
                     if (postfix) {
                         return ExpressionResult.Ok { text = i64_post_inc_function() + "(&(" + expression_text(rendered) + "))" };
@@ -1194,6 +1229,21 @@ fn binary_expression(ExpressionContext context, Token operator, Expr left, Expr 
                 }
                 if (operator.text == "%") {
                     return ExpressionResult.Ok { text = i64_mod_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == "&") {
+                    return ExpressionResult.Ok { text = "(" + left_text + " & " + right_text + ")" };
+                }
+                if (operator.text == "|") {
+                    return ExpressionResult.Ok { text = "(" + left_text + " | " + right_text + ")" };
+                }
+                if (operator.text == "^") {
+                    return ExpressionResult.Ok { text = "(" + left_text + " ^ " + right_text + ")" };
+                }
+                if (operator.text == "<<") {
+                    return ExpressionResult.Ok { text = i64_shl_function() + "(" + left_text + ", " + right_text + ")" };
+                }
+                if (operator.text == ">>") {
+                    return ExpressionResult.Ok { text = i64_shr_function() + "(" + left_text + ", " + right_text + ")" };
                 }
             }
         }

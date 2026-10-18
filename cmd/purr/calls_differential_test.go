@@ -320,6 +320,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "bitwise and shift operations through call arguments",
+		root: `fn show(int value) {
+    print(value);
+}
+fn main() {
+    int mask = 0xF0;
+    show(mask & 0x0F);
+    show(mask | 0x0F);
+    show(~mask);
+    show(0x8000000000000000 >> 63);
+}
+`,
+	}, {
 		description: "integer arithmetic through a call argument",
 		root: `fn print_value(int value) {
     print(value);

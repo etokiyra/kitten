@@ -27,7 +27,7 @@ public enum TokenKind {
     // as "print", which are not reserved keywords.
     Ident,
 
-    // Literals.
+    // Integer literals: decimal, hexadecimal (0x...), or binary (0b...).
     Int,
     Float,
     String,
@@ -76,6 +76,12 @@ public enum TokenKind {
     And,
     Or,
     Not,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
+    ShiftLeft,
+    ShiftRight,
     Inc,
     Dec,
     PlusAssign,
@@ -174,6 +180,12 @@ public fn kind_name(TokenKind kind) -> string {
         And { return "And"; }
         Or { return "Or"; }
         Not { return "Not"; }
+        BitAnd { return "BitAnd"; }
+        BitOr { return "BitOr"; }
+        BitXor { return "BitXor"; }
+        BitNot { return "BitNot"; }
+        ShiftLeft { return "ShiftLeft"; }
+        ShiftRight { return "ShiftRight"; }
         Inc { return "Inc"; }
         Dec { return "Dec"; }
         PlusAssign { return "PlusAssign"; }

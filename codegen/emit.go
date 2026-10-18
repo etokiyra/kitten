@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"kitten/checker"
@@ -222,11 +223,32 @@ func (g *generator) stringLiteralName(literal *parser.StringLiteral) (string, er
 	return "(&" + name + ")", nil
 }
 
+// integerLiteralText renders a checked integer literal. Decimal literals keep
+// their source spelling; hexadecimal and binary literals are canonicalized to a
+// signed decimal C expression so their 64-bit bit pattern is unambiguous.
+func integerLiteralText(text string) string {
+	if len(text) < 3 || text[0] != '0' || (text[1] != 'x' && text[1] != 'b') {
+		return text
+	}
+	base := 16
+	if text[1] == 'b' {
+		base = 2
+	}
+	value, err := strconv.ParseUint(text[2:], base, 64)
+	if err != nil {
+		return text
+	}
+	if value == uint64(1)<<63 {
+		return "INT64_MIN"
+	}
+	return strconv.FormatInt(int64(value), 10)
+}
+
 // expression renders an expression as a C expression.
 func (g *generator) expression(expression parser.Expr) (string, error) {
 	switch e := expression.(type) {
 	case *parser.IntLiteral:
-		return e.Text, nil
+		return integerLiteralText(e.Text), nil
 	case *parser.FloatLiteral:
 		return e.Text, nil
 	case *parser.BoolLiteral:
@@ -288,6 +310,8 @@ func (g *generator) unaryExpression(expression *parser.UnaryExpr) (string, error
 		switch expression.Operator {
 		case "-":
 			return fmt.Sprintf("%s(%s)", runtime.I64NegFunction, operand), nil
+		case "~":
+			return fmt.Sprintf("(~%s)", operand), nil
 		case "++":
 			if expression.Postfix {
 				return fmt.Sprintf("%s(&(%s))", runtime.I64PostIncFunction, operand), nil
@@ -357,6 +381,16 @@ func (g *generator) binaryExpression(expression *parser.BinaryExpr) (string, err
 			return fmt.Sprintf("%s(%s, %s)", runtime.I64DivFunction, left, right), nil
 		case "%":
 			return fmt.Sprintf("%s(%s, %s)", runtime.I64ModFunction, left, right), nil
+		case "&":
+			return fmt.Sprintf("(%s & %s)", left, right), nil
+		case "|":
+			return fmt.Sprintf("(%s | %s)", left, right), nil
+		case "^":
+			return fmt.Sprintf("(%s ^ %s)", left, right), nil
+		case "<<":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64ShlFunction, left, right), nil
+		case ">>":
+			return fmt.Sprintf("%s(%s, %s)", runtime.I64ShrFunction, left, right), nil
 		}
 	}
 

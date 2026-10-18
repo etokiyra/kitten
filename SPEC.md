@@ -178,20 +178,41 @@ take modifiers. See Section 22.
 
 ### 6.1 Integer literals
 
-Integer literals are sequences of decimal digits, for example `0`, `123`, `42`.
-A leading minus sign is not part of the literal; it is the unary minus operator.
-An `int` value is a signed 64-bit integer (Section 18.1).
+Integer literals are decimal, hexadecimal, or binary. A leading minus sign is
+not part of the literal; it is the unary minus operator. An `int` value is a
+signed 64-bit integer (Section 18.1).
+
+```text
+decimal = digit { digit } ;
+hex     = "0x" hex_digit { hex_digit } ;
+binary  = "0b" ( "0" | "1" ) { "0" | "1" } ;
+```
+
+The prefixes are lowercase `0x` and `0b` only. Hexadecimal digits may be upper
+or lower case. Underscores and octal forms are not accepted.
 
 A decimal integer literal must not denote a value greater than `INT64_MAX`
-(`9223372036854775807`). A larger decimal literal is a checker error with the
-message `integer literal out of range`, positioned at the literal. `INT64_MIN`
-cannot be written as one decimal literal because the magnitude is not
-representable; it is written with arithmetic, such as
-`-9223372036854775807 - 1`.
+(`9223372036854775807`). Its value is checked by the checker. A hexadecimal or
+binary literal denotes a 64-bit bit pattern: values at or above
+`0x8000000000000000` denote the corresponding negative two's-complement `int`,
+so `0xFFFFFFFFFFFFFFFF` is `-1` and `0x8000000000000000` is `INT64_MIN`.
+Hexadecimal literals have at most 16 digits after the prefix; binary literals
+have at most 64 digits.
+
+A decimal literal above `INT64_MAX`, or a hexadecimal/binary literal with too
+many digits, is a checker error with the message `integer literal out of range`.
+An empty digit run (`0x`, `0b`), a non-digit suffix (`0x1g`, `0b102`), an
+uppercase prefix (`0X`, `0B`), or an octal-looking form (`0o17`) is a lexical
+error with the message `invalid integer literal`. Both errors are positioned at
+the beginning of the literal.
+
+`INT64_MIN` cannot be written as one decimal literal because the magnitude is
+not representable; it is written with arithmetic, such as
+`-9223372036854775807 - 1`, or as `0x8000000000000000`.
 
 Not supported in this revision (and therefore not to be added without a
-specification change): hexadecimal, binary, and octal forms; digit separators;
-numeric suffixes; exponent notation.
+specification change): octal forms, digit separators, numeric suffixes, and
+exponent notation.
 
 ### 6.2 Floating-point literals
 
@@ -704,14 +725,16 @@ variable_declaration = type IDENT [ "=" expression ] ";" ;
 expression_statement = expression ";" ;
 
 expression       = assignment ;
-assignment       = logical_or { ( "=" | "+=" | "-=" ) logical_or } ;   // right-associative
-logical_or       = logical_and { "||" logical_and } ;
-logical_and      = equality { "&&" equality } ;
+assignment       = bitwise_or { ( "=" | "+=" | "-=" ) bitwise_or } ;   // right-associative
+bitwise_or       = bitwise_xor { "|" bitwise_xor } ;
+bitwise_xor      = bitwise_and { "^" bitwise_and } ;
+bitwise_and      = equality { "&" equality } ;
 equality         = relational { ( "==" | "!=" ) relational } ;
-relational       = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
+relational       = shift { ( "<" | "<=" | ">" | ">=" ) shift } ;
+shift            = additive { ( "<<" | ">>" ) additive } ;
 additive         = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative   = unary { ( "*" | "/" | "%" ) unary } ;
-unary            = ( "-" | "!" | "++" | "--" ) unary | postfix ;
+unary            = ( "-" | "~" | "!" | "++" | "--" ) unary | postfix ;
 postfix          = primary { call | member | index | "++" | "--" } ;
 call             = "(" [ arguments ] ")" ;
 arguments        = expression { "," expression } ;
@@ -865,7 +888,10 @@ initialize a variable or field.
 | `+` | two `int`, two `float`, or two `string` | the operand type (`string` concatenates) |
 | `-` `*` `/` | two `int`, or two `float` | the operand type |
 | `%` | two `int` | `int` |
+| `&` `\|` `^` | two `int` | `int` |
+| `<<` `>>` | two `int` | `int` |
 | `<` `<=` `>` `>=` | two `int`, or two `float` | `bool` |
+| unary `~` | one `int` | `int` |
 | `==` `!=` | two of the same primitive type | `bool` |
 | `&&` `\|\|` | two `bool` | `bool` |
 | unary `-` | one `int` or `float` | the operand type |
@@ -891,12 +917,25 @@ Notes:
   type-checked. This is what makes the common bound-check idiom
   `position < size && text[position] != 32` safe, since the indexed access is
   not evaluated once `position < size` is false.
+- `&`, `|`, and `^` are bitwise operations on the 64-bit two's-complement
+  pattern. `~` is the bitwise complement. `<<` shifts left, discarding bits
+  shifted out; `>>` is an arithmetic right shift, copying the sign bit into
+  vacated high bits. The shift count must be an `int` in `0..63`; any other
+  count is a fatal runtime error with the message
+  `shift count <n> is outside 0..63`, where `<n>` is signed decimal. This check
+  is performed at runtime even for a constant count.
+- These operators bind as the C#-style precedence table in Section 17.2:
+  `a & b == c` parses as `a & (b == c)` and is a type error; that consequence is
+  intentional.
 - Indexing is defined for arrays, maps, and strings. A string index is an `int`
   (a byte), not a one-character `string`; see Section 20.6.
 - `int` arithmetic is defined by two's-complement 64-bit wraparound. The
   operations `+`, `-`, `*`, unary `-`, `+=`, `-=`, `++`, and `--` produce the
   unique result modulo 2^64 interpreted as a signed two's-complement 64-bit
   integer; overflow wraps and is not a runtime failure.
+- The bitwise operators `&`, `|`, `^`, `~`, `<<`, and `>>` are defined for
+  `int` only. Shifts outside `0..63` fail at runtime rather than relying on C
+  behavior; `>>` is arithmetic for negative values.
 - `/` truncates toward zero. `%` is the remainder with the sign of the dividend.
   A zero divisor is a fatal runtime error with the message
   `integer division by zero`. `INT64_MIN / -1` is `INT64_MIN` and
@@ -1186,7 +1225,9 @@ Generated code includes `<stdint.h>` and `<stdbool.h>` through the runtime
 header, so no C integer-width assumption is made and no undefined behavior is
 relied upon. Integer arithmetic is emitted through the runtime's
 `ktn_rt_i64_*` helpers, which use unsigned bit patterns and explicit division
-checks; generated C never evaluates signed overflow or division by zero.
+checks; generated C never evaluates signed overflow, division by zero, or a
+signed shift with an out-of-range count. `&`, `|`, `^`, and `~` may use direct C
+operators; `<<` and `>>` use `ktn_rt_i64_shl` and `ktn_rt_i64_shr`.
 
 ### 19.2 Struct representation and reference semantics
 

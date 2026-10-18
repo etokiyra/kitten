@@ -157,7 +157,7 @@ out-of-bounds write, and the differential corpus checks the bound on every input
 ## Differential testing
 
 `cmd/purr/parser_differential_test.go` builds the Kitten parser once and runs
-it over a corpus of 262 inputs, comparing its rendering with the reference
+it over a corpus of 283 inputs, comparing its rendering with the reference
 implementation's rendering of the same source:
 
 ```sh
@@ -166,14 +166,14 @@ go test -count=1 -v -run TestKittenParser ./cmd/purr/
 
 The corpus covers every grammar production listed above, empty and one-token
 programs, all four declaration forms with and without visibility, every operator
-alone and in precedence-boundary combinations, every break in the precedence
-table, nested and deeply nested constructs (forty levels of parentheses, unary
+alone and in C#-style precedence-boundary combinations including the
+bitwise/shift levels, every break in the precedence table, nested and deeply nested constructs (forty levels of parentheses, unary
 operators, calls, member access, and blocks), collections and their literals,
 `match` arms with and without bindings, sixty-five malformed or truncated
 inputs, non-ASCII input both valid and invalid as UTF-8, every `.ktn` fixture,
 and the self-hosted sources themselves.
 
-Results: **257 of the 262 inputs render byte-identically**. The remaining five
+Results: **278 of the 283 inputs render byte-identically**. The remaining five
 contain a byte at or above 128, where the two implementations differ only in the
 documented lexer-level ways - a byte-oriented column, and a lexeme or message
 that Go renders by decoding UTF-8 - and the harness verifies those by comparing

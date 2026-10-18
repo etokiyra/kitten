@@ -90,7 +90,7 @@ func (l *lexer) scan() (Token, error) {
 	case isIdentifierStart(current):
 		return l.scanIdentifier(startLine, startColumn), nil
 	case isDigit(current):
-		return l.scanNumber(startLine, startColumn), nil
+		return l.scanNumber(startLine, startColumn)
 	case current == '"':
 		return l.scanString(startLine, startColumn)
 	default:
@@ -140,13 +140,25 @@ func (l *lexer) scanIdentifier(startLine, startColumn int) Token {
 	return Token{Kind: kind, Text: text, Line: startLine, Column: startColumn}
 }
 
-// scanNumber consumes a decimal integer or floating-point literal.
+// scanNumber consumes a decimal integer, a hexadecimal integer, a binary
+// integer, or a floating-point literal.
 //
-// A decimal point is part of the literal only when it is immediately followed
-// by a decimal digit. Thus "1." is an integer followed by a dot and ".5" is a
-// dot followed by an integer.
-func (l *lexer) scanNumber(startLine, startColumn int) Token {
+// A decimal point is part of a float only when it is immediately followed by a
+// decimal digit. The hexadecimal and binary prefixes are lowercase only. A
+// malformed prefixed literal is a lexical error at the literal's start.
+func (l *lexer) scanNumber(startLine, startColumn int) (Token, error) {
 	start := l.pos
+	if l.peek() == '0' && !l.atEnd() {
+		switch l.peekAt(1) {
+		case 'x':
+			return l.scanPrefixedNumber(startLine, startColumn, 'x', 16, 16)
+		case 'b':
+			return l.scanPrefixedNumber(startLine, startColumn, 'b', 2, 64)
+		case 'X', 'B', 'O', 'o':
+			return Token{}, l.invalidInteger(startLine, startColumn)
+		}
+	}
+
 	for !l.atEnd() && isDigit(l.peek()) {
 		l.advance()
 	}
@@ -161,7 +173,43 @@ func (l *lexer) scanNumber(startLine, startColumn int) Token {
 	}
 
 	text := string(l.source[start:l.pos])
-	return Token{Kind: kind, Text: text, Line: startLine, Column: startColumn}
+	return Token{Kind: kind, Text: text, Line: startLine, Column: startColumn}, nil
+}
+
+// scanPrefixedNumber scans one 0x or 0b literal, validating its digit run and
+// width. The prefix has not been consumed yet when this is called.
+func (l *lexer) scanPrefixedNumber(startLine, startColumn int, prefix rune, base, limit int) (Token, error) {
+	start := l.pos
+	l.advance() // '0'
+	l.advance() // prefix
+
+	digits := 0
+	for !l.atEnd() && isDigitInBase(l.peek(), base) {
+		l.advance()
+		digits++
+	}
+	if digits == 0 || (!l.atEnd() && isIdentifierPart(l.peek())) {
+		return Token{}, l.invalidInteger(startLine, startColumn)
+	}
+	if digits > limit {
+		return Token{}, &Error{
+			Line:    startLine,
+			Column:  startColumn,
+			Message: "integer literal out of range",
+		}
+	}
+	return Token{Kind: Int, Text: string(l.source[start:l.pos]), Line: startLine, Column: startColumn}, nil
+}
+
+func (l *lexer) invalidInteger(line, column int) error {
+	return &Error{Line: line, Column: column, Message: "invalid integer literal"}
+}
+
+func isDigitInBase(character rune, base int) bool {
+	if base == 16 {
+		return isDigit(character) || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')
+	}
+	return character == '0' || character == '1'
 }
 
 // scanString consumes a double-quoted string literal, validating escapes.
@@ -290,6 +338,10 @@ func (l *lexer) scanOperator(startLine, startColumn int) (Token, error) {
 		return build(Not), nil
 
 	case '<':
+		if l.peek() == '<' {
+			l.advance()
+			return build(ShiftLeft), nil
+		}
 		if l.peek() == '=' {
 			l.advance()
 			return build(Lte), nil
@@ -297,6 +349,10 @@ func (l *lexer) scanOperator(startLine, startColumn int) (Token, error) {
 		return build(Lt), nil
 
 	case '>':
+		if l.peek() == '>' {
+			l.advance()
+			return build(ShiftRight), nil
+		}
 		if l.peek() == '=' {
 			l.advance()
 			return build(Gte), nil
@@ -308,14 +364,19 @@ func (l *lexer) scanOperator(startLine, startColumn int) (Token, error) {
 			l.advance()
 			return build(And), nil
 		}
-		return Token{}, l.unexpected(startLine, startColumn, '&')
+		return build(BitAnd), nil
 
 	case '|':
 		if l.peek() == '|' {
 			l.advance()
 			return build(Or), nil
 		}
-		return Token{}, l.unexpected(startLine, startColumn, '|')
+		return build(BitOr), nil
+
+	case '^':
+		return build(BitXor), nil
+	case '~':
+		return build(BitNot), nil
 
 	case '(':
 		return build(LParen), nil

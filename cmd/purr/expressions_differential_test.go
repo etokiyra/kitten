@@ -1145,6 +1145,20 @@ fn main() {
 }
 `,
 	}, {
+		description: "bitwise and shift operators",
+		root: `fn main() {
+    int mask = 0xF0;
+    print(mask & 0x0F);
+    print(mask | 0x0F);
+    print(mask ^ 0xFF);
+    print(~mask);
+    print(1 << 3);
+    print(0x8000000000000000 >> 63);
+    print(-8 >> 1);
+    print((mask | 0x0F) & 0xFF);
+}
+`,
+	}, {
 		description: "defined integer wrapping, division, and remainder",
 		root: `fn main() {
     int maximum = 9223372036854775807;

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +154,56 @@ func TestIntegerLiterals(t *testing.T) {
 	})
 }
 
+func TestPrefixedIntegerLiterals(t *testing.T) {
+	sixtyFourBinaryDigits := "0b" + strings.Repeat("1", 64)
+	cases := []struct {
+		source string
+	}{{
+		source: "0x0",
+	}, {
+		source: "0xFF",
+	}, {
+		source: "0xAbCd",
+	}, {
+		source: "0xFFFFFFFFFFFFFFFF",
+	}, {
+		source: "0b0",
+	}, {
+		source: "0b101",
+	}, {
+		source: sixtyFourBinaryDigits,
+	}}
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.source, func(t *testing.T) {
+			assertTokens(t, testCase.source, []Token{
+				token(Int, testCase.source, 1, 1),
+				token(EOF, "", 1, 1+len(testCase.source)),
+			})
+		})
+	}
+
+	invalid := []string{
+		"0x", "0b", "0X1", "0B1", "0o17", "0x1g", "0b102", "0x1_",
+	}
+	for _, source := range invalid {
+		lexError := assertLexError(t, source, 1, 1)
+		if lexError.Message != "invalid integer literal" {
+			t.Errorf("%q: message %q, want invalid integer literal", source, lexError.Message)
+		}
+	}
+	outOfRange := []string{
+		"0x10000000000000000",
+		"0b" + strings.Repeat("0", 65),
+	}
+	for _, source := range outOfRange {
+		lexError := assertLexError(t, source, 1, 1)
+		if lexError.Message != "integer literal out of range" {
+			t.Errorf("%q: message %q, want integer literal out of range", source, lexError.Message)
+		}
+	}
+}
+
 func TestFloatLiterals(t *testing.T) {
 	assertTokens(t, "12.5 0.25", []Token{
 		token(Float, "12.5", 1, 1),
@@ -256,6 +307,12 @@ func TestOperators(t *testing.T) {
 		{">=", Gte},
 		{"&&", And},
 		{"||", Or},
+		{"&", BitAnd},
+		{"|", BitOr},
+		{"^", BitXor},
+		{"~", BitNot},
+		{"<<", ShiftLeft},
+		{">>", ShiftRight},
 	}
 
 	for _, testCase := range cases {
@@ -413,10 +470,7 @@ func TestUnknownCharacters(t *testing.T) {
 		{"@", 1, 1},
 		{"a @ b", 1, 3},
 		{"$", 1, 1},
-		{"&", 1, 1},
-		{"|", 1, 1},
 		{"fn main() { # }", 1, 13},
-		{"a\n\t~", 2, 2},
 	}
 
 	for _, testCase := range cases {

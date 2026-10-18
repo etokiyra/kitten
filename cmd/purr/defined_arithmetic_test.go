@@ -22,6 +22,20 @@ const missingMapEntrySource = `fn main() {
 }
 `
 
+const negativeShiftSource = `fn main() {
+    print("before");
+    int value = 1;
+    print(value << -1);
+}
+`
+
+const largeShiftSource = `fn main() {
+    print("before");
+    int value = 1;
+    print(value >> 64);
+}
+`
+
 // buildDefinedArithmeticProgram builds one source through the Go pipeline.
 func buildDefinedArithmeticProgram(t *testing.T, directory, name, source string) string {
 	t.Helper()
@@ -80,6 +94,25 @@ func TestDefinedArithmeticRuntime(t *testing.T) {
 			stderr:   "purr: map has no entry for key \"missing\"\n",
 			status:   1,
 		},
+		{
+			name:     "bitwise and shift operators",
+			source:   bitwiseSource,
+			expected: bitwiseExpected,
+		},
+		{
+			name:     "negative shift count",
+			source:   negativeShiftSource,
+			expected: "before\n",
+			stderr:   "purr: shift count -1 is outside 0..63\n",
+			status:   1,
+		},
+		{
+			name:     "shift count 64",
+			source:   largeShiftSource,
+			expected: "before\n",
+			stderr:   "purr: shift count 64 is outside 0..63\n",
+			status:   1,
+		},
 	}
 
 	for index, testCase := range cases {
@@ -130,16 +163,26 @@ func TestDefinedArithmeticSanitizer(t *testing.T) {
 	compileFlags, linkFlags := gcBuildFlags()
 	compileFlags = append(compileFlags, "-fsanitize=undefined")
 
-	directory := t.TempDir()
-	text, err := runKittenUnit(buildKittenUnit(t), t.TempDir(), definedArithmeticSource, "")
-	if err != nil {
-		t.Fatalf("generating C with the Kitten pipeline: %v", err)
-	}
-	result, err := buildAndRunProgram(t, compiler, compileFlags, linkFlags, directory, text, 0)
-	if err != nil {
-		t.Skipf("undefined behavior sanitizer is unavailable with %s: %v", filepath.Base(compiler[0]), err)
-	}
-	if result.stderr != "" || result.status != 0 {
-		t.Errorf("the sanitizer reported a problem: stderr %q, status %d", result.stderr, result.status)
+	unitExecutable := buildKittenUnit(t)
+	probeDirectory := t.TempDir()
+	for index, testCase := range []struct {
+		name   string
+		source string
+	}{
+		{"defined integer arithmetic", definedArithmeticSource},
+		{"bitwise and shift operators", bitwiseSource},
+	} {
+		text, err := runKittenUnit(unitExecutable, probeDirectory, testCase.source, "")
+		if err != nil {
+			t.Fatalf("%s: generating C with the Kitten pipeline: %v", testCase.name, err)
+		}
+		directory := t.TempDir()
+		result, err := buildAndRunProgram(t, compiler, compileFlags, linkFlags, directory, text, index)
+		if err != nil {
+			t.Skipf("undefined behavior sanitizer is unavailable with %s: %v", filepath.Base(compiler[0]), err)
+		}
+		if result.stderr != "" || result.status != 0 {
+			t.Errorf("%s: the sanitizer reported a problem: stderr %q, status %d", testCase.name, result.stderr, result.status)
+		}
 	}
 }

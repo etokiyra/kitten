@@ -1386,10 +1386,14 @@ fn parse_match(Parser parser) -> StmtResult {
 fn precedence_assignment() -> int { return 1; }
 fn precedence_logical_or() -> int { return 2; }
 fn precedence_logical_and() -> int { return 3; }
-fn precedence_equality() -> int { return 4; }
-fn precedence_relational() -> int { return 5; }
-fn precedence_additive() -> int { return 6; }
-fn precedence_multiplicative() -> int { return 7; }
+fn precedence_bitwise_or() -> int { return 4; }
+fn precedence_bitwise_xor() -> int { return 5; }
+fn precedence_bitwise_and() -> int { return 6; }
+fn precedence_equality() -> int { return 7; }
+fn precedence_relational() -> int { return 8; }
+fn precedence_shift() -> int { return 9; }
+fn precedence_additive() -> int { return 10; }
+fn precedence_multiplicative() -> int { return 11; }
 
 // binary_precedence returns the precedence of a binary or assignment operator,
 // or 0 when the token kind is not one.
@@ -1399,8 +1403,12 @@ fn binary_precedence(TokenKind kind) -> int {
     }
     if (kind == TokenKind.Or) { return precedence_logical_or(); }
     if (kind == TokenKind.And) { return precedence_logical_and(); }
+    if (kind == TokenKind.BitOr) { return precedence_bitwise_or(); }
+    if (kind == TokenKind.BitXor) { return precedence_bitwise_xor(); }
+    if (kind == TokenKind.BitAnd) { return precedence_bitwise_and(); }
     if (kind == TokenKind.Eq || kind == TokenKind.Neq) { return precedence_equality(); }
     if (kind == TokenKind.Lt || kind == TokenKind.Lte || kind == TokenKind.Gt || kind == TokenKind.Gte) { return precedence_relational(); }
+    if (kind == TokenKind.ShiftLeft || kind == TokenKind.ShiftRight) { return precedence_shift(); }
     if (kind == TokenKind.Plus || kind == TokenKind.Minus) { return precedence_additive(); }
     if (kind == TokenKind.Star || kind == TokenKind.Slash || kind == TokenKind.Percent) { return precedence_multiplicative(); }
     return 0;
@@ -1463,7 +1471,7 @@ fn parse_binary(Parser parser, int min_precedence) -> ExprResult {
 // prefix operator applies.
 fn parse_unary(Parser parser) -> ExprResult {
     Token token = peek(parser);
-    if (token.kind == TokenKind.Minus || token.kind == TokenKind.Not ||
+    if (token.kind == TokenKind.Minus || token.kind == TokenKind.Not || token.kind == TokenKind.BitNot ||
         token.kind == TokenKind.Inc || token.kind == TokenKind.Dec) {
         advance(parser);
         ExprResult operand_result = parse_unary(parser);

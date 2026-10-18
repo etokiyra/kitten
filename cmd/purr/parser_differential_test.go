@@ -489,16 +489,17 @@ func parserCorpus(t *testing.T) []parserCase {
 	add("match nested", "fn f(U u) {\n    match (u) {\n        A(x) {\n            match (x) {\n                B(y) {\n                }\n                C {\n                }\n            }\n        }\n    }\n}\n")
 
 	// Expressions: literals.
-	add("literals", "fn main() {\n    x = 0;\n    x = 1234567890;\n    x = 1.5;\n    x = 0.25;\n    x = \"text\";\n    x = \"\";\n    x = \"a\\nb\\tc\\\"d\\\\e\";\n    x = true;\n    x = false;\n}\n")
+	add("literals", "fn main() {\n    x = 0;\n    x = 1234567890;\n    x = 0x1F;\n    x = 0b101;\n    x = 1.5;\n    x = 0.25;\n    x = \"text\";\n    x = \"\";\n    x = \"a\\nb\\tc\\\"d\\\\e\";\n    x = true;\n    x = false;\n}\n")
+	add("prefixed literal boundaries", "fn main() {\n    x = 0xFFFFFFFFFFFFFFFF;\n    x = 0x8000000000000000;\n    x = 0b"+strings.Repeat("1", 64)+";\n}\n")
 	add("parenthesized", "fn main() {\n    x = ((1));\n    x = (a + b) * c;\n}\n")
 
 	// Expressions: unary and postfix.
-	add("prefix operators", "fn main() {\n    a = -b;\n    a = !b;\n    a = ++b;\n    a = --b;\n    a = - -b;\n    a = !!b;\n}\n")
+	add("prefix operators", "fn main() {\n    a = -b;\n    a = !b;\n    a = ~b;\n    a = ++b;\n    a = --b;\n    a = - -b;\n    a = !!b;\n    a = -~b;\n}\n")
 	add("postfix operators", "fn main() {\n    a = b++;\n    a = b--;\n    a = b++ + c--;\n}\n")
 	add("mixed fixity", "fn main() {\n    a = -b++;\n    a = ++b--;\n}\n")
 
 	// Expressions: every binary operator.
-	binaryOperators := []string{"+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||"}
+	binaryOperators := []string{"+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "&", "|", "^", "<<", ">>"}
 	for _, operator := range binaryOperators {
 		add("binary "+operator, "fn main() {\n    a = b "+operator+" c;\n}\n")
 		add("binary "+operator+" chained", "fn main() {\n    a = b "+operator+" c "+operator+" d;\n}\n")
@@ -532,6 +533,16 @@ func parserCorpus(t *testing.T) []parserCase {
 		"a = b || c && d",
 		"x = -y + z",
 		"x = a = b + c",
+		"a & b | c ^ d",
+		"a | b ^ c & d",
+		"a << 1 + 2",
+		"a & b == c",
+		"~a + 1",
+		"-~a",
+		"a << b << c",
+		"1 < 2 << 3",
+		"a + (b << c)",
+		"(a + b) << c",
 	}
 	for _, expression := range precedenceCases {
 		add("precedence "+expression, "fn main() {\n    "+expression+";\n}\n")

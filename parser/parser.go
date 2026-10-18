@@ -895,8 +895,12 @@ const (
 	precedenceAssignment = iota + 1
 	precedenceLogicalOr
 	precedenceLogicalAnd
+	precedenceBitwiseOr
+	precedenceBitwiseXor
+	precedenceBitwiseAnd
 	precedenceEquality
 	precedenceRelational
+	precedenceShift
 	precedenceAdditive
 	precedenceMultiplicative
 )
@@ -911,10 +915,18 @@ func binaryPrecedence(kind lexer.Kind) (int, bool) {
 		return precedenceLogicalOr, true
 	case lexer.And:
 		return precedenceLogicalAnd, true
+	case lexer.BitOr:
+		return precedenceBitwiseOr, true
+	case lexer.BitXor:
+		return precedenceBitwiseXor, true
+	case lexer.BitAnd:
+		return precedenceBitwiseAnd, true
 	case lexer.Eq, lexer.Neq:
 		return precedenceEquality, true
 	case lexer.Lt, lexer.Lte, lexer.Gt, lexer.Gte:
 		return precedenceRelational, true
+	case lexer.ShiftLeft, lexer.ShiftRight:
+		return precedenceShift, true
 	case lexer.Plus, lexer.Minus:
 		return precedenceAdditive, true
 	case lexer.Star, lexer.Slash, lexer.Percent:
@@ -989,7 +1001,7 @@ func (p *parser) parseBinary(minPrecedence int) (Expr, error) {
 func (p *parser) parseUnary() (Expr, error) {
 	token := p.peek()
 	switch token.Kind {
-	case lexer.Minus, lexer.Not, lexer.Inc, lexer.Dec:
+	case lexer.Minus, lexer.Not, lexer.BitNot, lexer.Inc, lexer.Dec:
 		p.advance()
 		operand, err := p.parseUnary()
 		if err != nil {

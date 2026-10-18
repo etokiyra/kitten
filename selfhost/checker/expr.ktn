@@ -172,6 +172,20 @@ fn check_unary(Checker checker, Token operator, Expr operand, Scope scope) -> Ty
         return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
     }
 
+    if (operator.text == "~") {
+        TypeResult operand_result = check_expr(checker, operand, scope);
+        if (!type_ok(operand_result)) {
+            return operand_result;
+        }
+        Type operand_type = type_value(operand_result);
+        if (operand_type.kind != TypeKind.Int) {
+            return TypeResult.Failed {
+                error = error_at(checker, ErrorKind.InvalidOperator, position_of_token(operator), "operator '~' requires an int operand, found " + type_string(operand_type))
+            };
+        }
+        return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
+    }
+
     // "++" and "--": the operand must be an assignable numeric location.
     TypeResult target_result = check_assignable(checker, operand, scope);
     if (!type_ok(target_result)) {
@@ -205,6 +219,9 @@ fn check_binary(Checker checker, Token operator, Expr left_expression, Expr righ
 
     if (operator_text == "+" || operator_text == "-" || operator_text == "*" || operator_text == "/" || operator_text == "%") {
         return check_arithmetic(checker, operator_text, left, right, at);
+    }
+    if (operator_text == "&" || operator_text == "|" || operator_text == "^" || operator_text == "<<" || operator_text == ">>") {
+        return check_int_binary(checker, operator_text, left, right, at);
     }
     if (operator_text == "<" || operator_text == "<=" || operator_text == ">" || operator_text == ">=") {
         return check_relational(checker, operator_text, left, right, at);
@@ -248,6 +265,27 @@ fn check_arithmetic(Checker checker, string operator, Type left, Type right, Pos
         };
     }
     return TypeResult.Ok { type = left };
+}
+
+// check_int_binary checks "&", "|", "^", "<<", and ">>". Both operands must be
+// int; the result is int. The wording follows check_arithmetic.
+fn check_int_binary(Checker checker, string operator, Type left, Type right, Position at) -> TypeResult {
+    if (is_void(left) || is_void(right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " cannot be applied to a void value")
+        };
+    }
+    if (!same_type(left, right)) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator) + " requires operands of the same type, found " + type_string(left) + " and " + type_string(right))
+        };
+    }
+    if (left.kind != TypeKind.Int) {
+        return TypeResult.Failed {
+            error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " requires int operands, found " + type_string(left))
+        };
+    }
+    return TypeResult.Ok { type = primitive_type(TypeKind.Int, "int") };
 }
 
 // check_relational checks "<", "<=", ">", and ">=". The operands must be the

@@ -10,9 +10,9 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1 status:** Section 2 (defined integer arithmetic) and the approved
-> arithmetic decisions are **ADOPTED**. Sections 3 through 8 remain
-> **PROPOSED, not adopted**.
+> **Phase 8.1/8.2 status:** Section 2 (defined integer arithmetic) and
+> Section 3 (bitwise/shift operators and hex/binary literals) are **ADOPTED**.
+> Sections 4 through 8 remain **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -341,7 +341,7 @@ full suite under GCC and Clang; and Go/Kitten generated C byte-identical for
 every existing corpus and fixture. This commit must land before bitwise
 operators.
 
-## 3. Bitwise and shift operators
+## 3. Bitwise and shift operators (ADOPTED in Phase 8.2)
 
 ### 3.1 Need
 
@@ -403,16 +403,21 @@ Proposed SPEC Section 6.1 replacement:
 
 > An integer literal is decimal, hexadecimal, or binary. Decimal literals are a
 > sequence of decimal digits with value at most `INT64_MAX`. Hexadecimal
-> literals start with `0x` or `0X` and contain one or more hexadecimal digits;
-> binary literals start with `0b` or `0B` and contain one or more `0` or `1`
-> digits. Underscores, octal forms, signs, and suffixes are not part of a
-> literal; a leading `-` is unary minus.
+> literals start with lowercase `0x`; binary literals start with lowercase
+> `0b`. Hexadecimal digits may be upper or lower case. Underscores, octal forms,
+> signs, and suffixes are not part of a literal; a leading `-` is unary minus.
 >
-> A hexadecimal or binary literal denotes a 64-bit bit pattern. Its value must
-> be at most `0xFFFFFFFFFFFFFFFF`; values at or above `0x8000000000000000`
-> denote the corresponding negative two's-complement `int`. Decimal literals
-> may not denote a value above `INT64_MAX`. A literal outside these ranges is a
-> checker error at the literal: `integer literal out of range`.
+> A hexadecimal or binary literal denotes a 64-bit bit pattern. Hexadecimal
+> literals have at most 16 digits after the prefix; binary literals have at most
+> 64. Its value must be at most `0xFFFFFFFFFFFFFFFF`; values at or above
+> `0x8000000000000000` denote the corresponding negative two's-complement
+> `int`. Decimal literals may not denote a value above `INT64_MAX`.
+>
+> A decimal literal above `INT64_MAX`, or a hexadecimal/binary literal with too
+> many digits, is a checker error at the literal: `integer literal out of
+> range`. An empty digit run (`0x`, `0b`), a non-digit suffix (`0x1g`,
+> `0b102`), uppercase prefixes (`0X`, `0B`), or an octal-looking form (`0o17`)
+> is a lexical error at the literal's start: `invalid integer literal`.
 
 There is no `byte` literal. A byte value is written through
 `byte_from_int(0x41)`.
@@ -429,23 +434,26 @@ involved.
   `ktn_rt_i64_shl(left, count)` and `ktn_rt_i64_shr(left, count)`. The helpers
   validate `0 <= count <= 63` and perform the operation on `uint64_t`, with
   arithmetic sign fill for `>>`.
-- Hex/binary literals: parse to a `uint64_t` bit pattern in the checker; emit a
-  canonical C integer. Values in `0..INT64_MAX` emit decimal; `2^63` emits
-  `INT64_MIN`; larger values emit their negative decimal bit-pattern value
+- Hex/binary literals: the lexer validates their digit runs and widths, the
+  checker accepts their bit patterns, and both generators emit a canonical C
+  integer. Values in `0..INT64_MAX` emit decimal; `2^63` emits `INT64_MIN`;
+  larger values emit their negative decimal bit-pattern value
   (`0xFFFFFFFFFFFFFFFF` emits `-1`). Existing decimal literals keep their source
   spelling so existing generated C stays stable.
 - The full-suite C comparison must include the compiler source; this feature is
-  not complete until the fixpoint still passes.
+  not complete until the fixpoint still passes. Shifts are checked by the MIT
+  `ktn_rt_i64_shl`/`ktn_rt_i64_shr` helpers; `&`, `|`, `^`, and `~` are direct
+  C operators.
 
 ### 3.6 Diagnostics
 
 Use the existing `InvalidOperator`/`TypeMismatch` categories with wording
 consistent with `checkArithmetic`:
 
-- `operator '&' requires int operands, found <type>`
-- `operator '<<' requires int operands, found <type>`
+- `operator "&" requires int operands, found <type>`
+- `operator "<<" requires int operands, found <type>`
 - `operator '~' requires an int operand, found <type>`
-- `operator '&' requires operands of the same type, found int and byte`
+- `operator "&" requires operands of the same type, found int and byte`
 
 ### 3.7 Files, risks, alternatives
 

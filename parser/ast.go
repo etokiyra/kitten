@@ -427,7 +427,7 @@ func (e *BoolLiteral) Pos() Position { return e.At }
 
 // UnaryExpr is a prefix or postfix unary operation.
 //
-// Operator is one of "-", "!", "++", or "--". Postfix is false for a prefix
+// Operator is one of "-", "~", "!", "++", or "--". Postfix is false for a prefix
 // operator and true for a postfix one; only "++" and "--" can be postfix.
 // OperatorAt reports the position of the operator. What these operators mean,
 // and whether an operand is a valid target, are deferred to the checker.

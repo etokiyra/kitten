@@ -64,11 +64,14 @@ two can be read side by side:
   keyword);
 - numbers, where a decimal point belongs to a literal only when a digit follows
   it, so `1.` is an integer and a dot while `.5` is a dot and an integer;
+  decimal literals stay decimal, while lowercase `0x`/`0b` prefixes scan
+  64-bit hexadecimal/binary bit patterns with checked digit runs and widths;
 - string literals with the four escapes `\n`, `\t`, `\"`, `\\`, with distinct
   errors for an unterminated literal, a newline inside one, and an unsupported
   escape;
 - operators and punctuation with longest-match preference, so `==`, `->`, and
-  `++` are single tokens;
+  `++` are single tokens, and the bitwise/shift spellings `&`, `|`, `^`, `~`,
+  `<<`, and `>>` are distinct from `&&`, `||`, `<`, and `>`;
 - one-based line and column tracking, where only a newline advances the line;
 - exactly one `EOF` token at the end, positioned after the last byte;
 - the first lexical error, returned instead of any tokens.
@@ -80,7 +83,7 @@ token-or-error outcome of a single scan step.
 ## Differential testing
 
 `cmd/purr/differential_test.go` builds the Kitten lexer once and runs it over a
-corpus of 772 inputs, comparing the result with the Go lexer:
+corpus of 1,074 inputs, comparing the result with the Go lexer:
 
 ```sh
 go test -count=1 -v -run TestKittenLexer ./cmd/purr/
@@ -89,7 +92,8 @@ go test -count=1 -v -run TestKittenLexer ./cmd/purr/
 The corpus covers every keyword, type name, and boolean literal; identifiers and
 keyword-prefix identifiers; every operator and punctuation mark, every ordered
 pair of operators, and juxtapositions that could be split differently; integer
-and floating-point boundaries and non-numbers; every supported escape, every
+and floating-point boundaries, hexadecimal/binary literals and their error
+forms, and non-numbers; every supported escape, every
 string error form, and strings containing line breaks; comments and their
 interaction with division; whitespace and `\n`, `\r`, and `\r\n` line endings;
 multi-line position tracking; non-ASCII input, both valid and invalid UTF-8;

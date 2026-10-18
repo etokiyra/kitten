@@ -625,6 +625,9 @@ fn exit_parameter_types() -> Type[] {
 // lexical so it never overflows while validating the literal.
 public fn integer_literal_in_range(string text) -> bool {
     int size = length(text);
+    if (size >= 2 && text[0] == 48 && (text[1] == 120 || text[1] == 98)) { // 0x or 0b
+        return true;
+    }
     int start = 0;
     while (start < size && text[start] == 48) { // '0'
         start++;

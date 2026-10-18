@@ -246,7 +246,8 @@ binary operator with its operand rules, array creation, indexing and length, map
 and `has`, strings and `substring`, `print`'s variadic argument rule, conditions,
 `return`, the conservative return-path analysis, defined two's-complement
 integer arithmetic and decimal-literal range checking, and the implicit
-`try_read_file`/`ReadFileResult` prelude with its reserved name.
+`try_read_file`/`ReadFileResult` prelude with its reserved name, and the
+bitwise/shift operators and hexadecimal/binary literal rules.
 
 The reference's nil-guards (`"a module contains a nil struct declaration"`,
 `"identifier is nil"`, `"unsupported expression %T"`, `"function %q has no
@@ -273,7 +274,7 @@ conversion remains deferred.
 ## Differential testing
 
 `cmd/purr/checker_differential_test.go` builds the checker once and runs it over
-a corpus of **1888 inputs**, comparing its rendering with the reference
+a corpus of **1897 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
@@ -295,7 +296,7 @@ generator's. A self-hosted source that declares `import` statements is checked a
 a one-module program, so the corpus exercises the reference's undefined-name
 diagnostics on them rather than checking them cleanly.
 
-**All 1888 inputs render byte-identically**, so this is exact parity on
+**All 1897 inputs render byte-identically**, so this is exact parity on
 success/failure, error category, position, message, and the declaration counts
 reported on success. `TestKittenCheckerOutputFormat` additionally pins the
 rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
@@ -316,8 +317,8 @@ the same corpus. The rendering is one line per declaration and per annotated nod
 in a fixed walk order — the node's kind and position, its resolved type, its
 resolved symbol with the declaration position it denotes, and its variant — with
 types rendered structurally and named types carrying their module. It covers the
-annotations themselves rather than success counts: **1888 inputs, all identical,
-4952 annotated lines of which 4715 carry a fact** (the remainder are the callee
+annotations themselves rather than success counts: **1897 inputs, all identical,
+4997 annotated lines of which 4760 carry a fact** (the remainder are the callee
 nodes and type names that the reference leaves unannotated).
 
 `TestKittenSemanticsOutputFormat` pins the rendering, and

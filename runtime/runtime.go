@@ -40,6 +40,8 @@ const (
 	I64NegFunction       = "ktn_rt_i64_neg"
 	I64DivFunction       = "ktn_rt_i64_div"
 	I64ModFunction       = "ktn_rt_i64_mod"
+	I64ShlFunction       = "ktn_rt_i64_shl"
+	I64ShrFunction       = "ktn_rt_i64_shr"
 	I64AddAssignFunction = "ktn_rt_i64_add_assign"
 	I64SubAssignFunction = "ktn_rt_i64_sub_assign"
 	I64PreIncFunction    = "ktn_rt_i64_pre_inc"

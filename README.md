@@ -345,11 +345,11 @@ It is also the only way a self-hosting claim means anything.
 
 | Stage | Verified against the Go reference |
 | --- | --- |
-| Lexer | 772 inputs |
-| Parser + AST | 262 inputs |
-| Checker + semantic model | 1,888 inputs, byte-identical |
+| Lexer | 1,074 inputs |
+| Parser + AST | 283 inputs |
+| Checker + semantic model | 1,897 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 93 whole units, 3,671 lines |
+| Entry point and translation-unit assembly | 96 whole units, 3,760 lines |
 | Module loader | 33 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
@@ -357,8 +357,8 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 83 program runs under GCC and Clang, outputs compared |
-| Defined arithmetic runtime | wrapping, division, map failure, and target-once through both pipelines |
+| Generated programs executed | 89 program runs under GCC and Clang, outputs compared |
+| Defined arithmetic/bitwise runtime | wrapping, division, shifts, failures, and target-once through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 
 </details>
