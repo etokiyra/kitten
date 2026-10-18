@@ -738,6 +738,97 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_write_file with FileResult",
+		root: `fn main() {
+    match (try_write_file("x", "y")) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "try_write_bytes with FileResult",
+		root: `fn main() {
+    byte[] data = new byte[2];
+    data[0] = byte_from_int(65);
+    data[1] = byte_from_int(66);
+    match (try_write_bytes("x", data)) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "try_create_directory and try_remove with FileResult",
+		root: `fn main() {
+    match (try_create_directory("x")) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+    match (try_remove("x")) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "try_list_directory with ListDirectoryResult",
+		root: `fn main() {
+    match (try_list_directory("x")) {
+        Ok(entries) { print(length(entries)); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "read, write, and list prelude subsets together",
+		root: `fn main() {
+    try_read_file("x");
+    try_write_file("y", "z");
+    try_create_directory("d");
+    try_remove("e");
+    try_list_directory("f");
+}
+`,
+	}, {
+		description: "file prelude from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_write_file("x", "y")));
+}
+`,
+		imported: `public fn classify(FileResult result) -> int {
+    match (result) {
+        Ok { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+`,
+	}, {
+		description: "direct FileResult and ListDirectoryResult construction",
+		root: `fn main() {
+    try_write_file("x", "y");
+    try_list_directory("d");
+    FileResult ok = FileResult.Ok;
+    FileResult failed = FileResult.Failed { message = "m" };
+    string[] entries = new string[1];
+    entries[0] = "a";
+    ListDirectoryResult listed = ListDirectoryResult.Ok { entries = entries };
+    ListDirectoryResult list_failed = ListDirectoryResult.Failed { message = "m" };
+    match (ok) { Ok { print("ok"); } Failed(message) { print(message); } }
+    match (listed) { Ok(names) { print(length(names)); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "a shadowed try_write_file still emits the prelude helper",
+		root: `fn try_write_file(string path, string text) -> int {
+    return 1;
+}
+fn main() {
+    print(try_write_file("x", "y"));
+}
+`,
+	}, {
 		description: "a shadowed try_read_file still emits the prelude helper",
 		root: `fn try_read_file(string path) -> int {
     return 1;

@@ -30,8 +30,11 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include "kitten_runtime.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -501,6 +504,10 @@ static const char *ktn_rt_go_error_reason(int error, char *fallback, size_t capa
             return "too many open files in system";
         case ELOOP:
             return "too many levels of symbolic links";
+        case EEXIST:
+            return "file exists";
+        case ENOTEMPTY:
+            return "directory not empty";
         default:
             break;
     }
@@ -515,9 +522,7 @@ static const char *ktn_rt_go_error_reason(int error, char *fallback, size_t capa
  * Builds "<operation> <path>: <reason>" as a GC-managed string. The path is the
  * exact Kitten path bytes; no quotes are added, matching Go's os.ReadFile text.
  */
-static const ktn_string *ktn_rt_path_error(const char *operation, const ktn_string *path, int error) {
-    char fallback[256];
-    const char *reason = ktn_rt_go_error_reason(error, fallback, sizeof(fallback));
+static const ktn_string *ktn_rt_path_error_with_reason(const char *operation, const ktn_string *path, const char *reason) {
     size_t operation_length = strlen(operation);
     size_t reason_length = strlen(reason);
     size_t length = operation_length + 1 + (size_t)path->length + 2 + reason_length;
@@ -525,6 +530,12 @@ static const ktn_string *ktn_rt_path_error(const char *operation, const ktn_stri
     char *bytes = ktn_rt_string_bytes(result);
     snprintf(bytes, length + 1, "%s %s: %s", operation, path->data, reason);
     return result;
+}
+
+static const ktn_string *ktn_rt_path_error(const char *operation, const ktn_string *path, int error) {
+    char fallback[256];
+    const char *reason = ktn_rt_go_error_reason(error, fallback, sizeof(fallback));
+    return ktn_rt_path_error_with_reason(operation, path, reason);
 }
 
 /* Returns a plain failure message string for a non-path condition. */
@@ -584,6 +595,165 @@ bool ktn_rt_try_read_file(const ktn_string *path, const ktn_string **text, const
     result->length = total;
     bytes[total] = '\0';
     *text = result;
+    return true;
+}
+
+/* Writes every byte or reports the first write failure. */
+static bool ktn_rt_write_all(int descriptor, const char *bytes, int64_t length, const ktn_string *path, const ktn_string **message) {
+    int64_t total = 0;
+    while (total < length) {
+        ssize_t count = write(descriptor, bytes + total, (size_t)(length - total));
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            *message = ktn_rt_path_error("write", path, errno);
+            return false;
+        }
+        if (count == 0) {
+            *message = ktn_rt_path_error_with_reason("write", path, "short write");
+            return false;
+        }
+        total += (int64_t)count;
+    }
+    return true;
+}
+
+/* Creates or truncates path and writes length bytes with mode 0644. */
+static bool ktn_rt_try_write_common(const ktn_string *path, const char *bytes, int64_t length, const ktn_string **message) {
+    if (message == NULL) {
+        ktn_rt_fail("try_write received a null result slot");
+    }
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(path);
+    int descriptor = open(checked->data, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (descriptor < 0) {
+        *message = ktn_rt_path_error("open", checked, errno);
+        return false;
+    }
+
+    if (!ktn_rt_write_all(descriptor, bytes, length, checked, message)) {
+        close(descriptor);
+        return false;
+    }
+    if (close(descriptor) != 0) {
+        *message = ktn_rt_path_error("close", checked, errno);
+        return false;
+    }
+    return true;
+}
+
+bool ktn_rt_try_write_file(const ktn_string *path, const ktn_string *text, const ktn_string **message) {
+    const ktn_string *checked = ktn_rt_string_value(text);
+    return ktn_rt_try_write_common(path, checked->data, checked->length, message);
+}
+
+bool ktn_rt_try_write_bytes(const ktn_string *path, const ktn_array *data, const ktn_string **message) {
+    if (data == NULL) {
+        ktn_rt_fail("try_write_bytes received a null byte array");
+    }
+    if (data->element_size != (int64_t)sizeof(uint8_t)) {
+        ktn_rt_fail("try_write_bytes received a non-byte array");
+    }
+    return ktn_rt_try_write_common(path, (const char *)data->data, data->length, message);
+}
+
+bool ktn_rt_try_create_directory(const ktn_string *path, const ktn_string **message) {
+    if (message == NULL) {
+        ktn_rt_fail("try_create_directory received a null result slot");
+    }
+    *message = NULL;
+    const ktn_string *checked = ktn_rt_string_value(path);
+    if (mkdir(checked->data, 0755) != 0) {
+        *message = ktn_rt_path_error("mkdir", checked, errno);
+        return false;
+    }
+    return true;
+}
+
+bool ktn_rt_try_remove(const ktn_string *path, const ktn_string **message) {
+    if (message == NULL) {
+        ktn_rt_fail("try_remove received a null result slot");
+    }
+    *message = NULL;
+    const ktn_string *checked = ktn_rt_string_value(path);
+
+    struct stat information;
+    if (lstat(checked->data, &information) != 0) {
+        *message = ktn_rt_path_error("remove", checked, errno);
+        return false;
+    }
+    int result = S_ISDIR(information.st_mode) ? rmdir(checked->data) : unlink(checked->data);
+    if (result != 0) {
+        *message = ktn_rt_path_error("remove", checked, errno);
+        return false;
+    }
+    return true;
+}
+
+/* Orders two ktn_string pointers by their NUL-terminated name bytes. */
+static int ktn_rt_name_compare(const void *left, const void *right) {
+    const ktn_string *a = *(const ktn_string *const *)left;
+    const ktn_string *b = *(const ktn_string *const *)right;
+    return strcmp(a->data, b->data);
+}
+
+bool ktn_rt_try_list_directory(const ktn_string *path, ktn_array **entries, const ktn_string **message) {
+    if (entries == NULL || message == NULL) {
+        ktn_rt_fail("try_list_directory received a null result slot");
+    }
+    *entries = NULL;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(path);
+    DIR *directory = opendir(checked->data);
+    if (directory == NULL) {
+        *message = ktn_rt_path_error("open", checked, errno);
+        return false;
+    }
+
+    int64_t count = 0;
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        count++;
+    }
+    if (errno != 0) {
+        int error = errno;
+        closedir(directory);
+        *message = ktn_rt_path_error("readdirent", checked, error);
+        return false;
+    }
+
+    ktn_array *result = ktn_rt_array_new(count, (int64_t)sizeof(const ktn_string *));
+    rewinddir(directory);
+    int64_t index = 0;
+    errno = 0;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        size_t name_length = strlen(entry->d_name);
+        ktn_string *name = ktn_rt_string_allocate((int64_t)name_length);
+        memcpy(ktn_rt_string_bytes(name), entry->d_name, name_length);
+        ((const ktn_string **)result->data)[index] = name;
+        index++;
+    }
+    if (errno != 0) {
+        int error = errno;
+        closedir(directory);
+        *message = ktn_rt_path_error("readdirent", checked, error);
+        return false;
+    }
+    closedir(directory);
+
+    qsort(result->data, (size_t)index, sizeof(const ktn_string *), ktn_rt_name_compare);
+    result->length = index;
+    *entries = result;
     return true;
 }
 

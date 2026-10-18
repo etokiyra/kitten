@@ -10,10 +10,11 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1/8.2/8.3 status:** Section 2 (defined integer arithmetic),
+> **Phase 8.1/8.2/8.3/8.4 status:** Section 2 (defined integer arithmetic),
 > Section 3 (bitwise/shift operators and hex/binary literals), Section 4
-> (`byte` and `byte[]`), and Section 5 (explicit conversions) are **ADOPTED**.
-> Sections 6 through 8 remain **PROPOSED, not adopted**.
+> (`byte` and `byte[]`), Section 5 (explicit conversions), and the file/directory
+> built-ins in Section 6 are **ADOPTED**. Sections 7 and 8 and the process part
+> of Section 6 remain **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -609,7 +610,7 @@ Alternatives: `as` casts (new grammar and precedence; rejected for now),
 overloading by argument type (new dispatch; rejected), implicit byte
 conversions (forbidden by the decision).
 
-## 6. Recoverable file, directory, and process APIs
+## 6. Recoverable file, directory, and process APIs (file/directory ADOPTED in Phase 8.4)
 
 ### 6.1 Need
 
@@ -619,7 +620,7 @@ creation/listing/removal and file writes. These must be recoverable: a path
 failure is data, not a process termination. Reuse the 5.4 prelude decisions
 rather than adding generics.
 
-### 6.2 Proposed predeclared source
+### 6.2 Predeclared source (FileResult and ListDirectoryResult adopted; RunResult and CurrentDirectoryResult proposed)
 
 Use these public unions, assembled only as needed (Section 6.3):
 
@@ -630,7 +631,7 @@ public union FileResult {
 }
 
 public union ListDirectoryResult {
-    Ok { string[] names; }
+    Ok { string[] entries; }
     Failed { string message; }
 }
 
@@ -645,12 +646,13 @@ public union CurrentDirectoryResult {
 }
 ```
 
-`ReadFileResult` remains exactly as it is. The names `FileResult`,
-`ListDirectoryResult`, `RunResult`, and `CurrentDirectoryResult` are reserved
-against every user top-level declaration in every program, whether or not a
-trigger fires, following the `ReadFileResult` rule.
+`ReadFileResult` remains exactly as it is. The adopted names `FileResult` and
+`ListDirectoryResult` are reserved against every user top-level declaration in
+every program, whether or not a trigger fires, following the `ReadFileResult`
+rule. `RunResult` and `CurrentDirectoryResult` are reserved only when their
+proposed phases are adopted.
 
-### 6.3 Proposed built-ins and exact rules
+### 6.3 Built-ins and exact rules (file/directory adopted; try_run proposed)
 
 Add to Section 18.8:
 
@@ -672,8 +674,8 @@ try_run(string path, string[] arguments) -> RunResult
   non-empty directory is a failure. Recursive removal is not part of this
   proposal.
 - `try_list_directory` returns the entry names only, excluding `.` and `..`,
-  sorted by bytewise name order. It returns a fresh `string[]`; it does not
-  return metadata and does not recurse.
+  sorted by bytewise name order, in `entries`. It returns a fresh `string[]`;
+  it does not return metadata and does not recurse.
 - `try_run` executes the program at `path`, with `arguments` supplying
   `argv[1..]`; the runtime uses `path` as `argv[0]`. It does not invoke a shell
   and does not search `PATH`; the path is passed to the OS. It inherits the
@@ -723,7 +725,7 @@ built-in: one `Function` entry and one non-static generated helper. The Go and
 Kitten checkers each duplicate the fragment text; differential whole-unit tests
 must compare the assembled module and generated C. The loader is unchanged.
 
-### 6.5 C lowering and runtime ABI
+### 6.5 C lowering and runtime ABI (file/directory adopted; try_run proposed)
 
 Generated helpers use the existing non-static pattern, for example:
 
@@ -747,7 +749,7 @@ bool ktn_rt_try_create_directory(const ktn_string *path,
 bool ktn_rt_try_remove(const ktn_string *path,
                        const ktn_string **message);
 bool ktn_rt_try_list_directory(const ktn_string *path,
-                               ktn_array **names,
+                               ktn_array **entries,
                                const ktn_string **message);
 bool ktn_rt_try_run(const ktn_string *path,
                     const ktn_array *arguments,
@@ -756,7 +758,7 @@ bool ktn_rt_try_run(const ktn_string *path,
 ```
 
 `try_list_directory` returns a `ktn_array` of `const ktn_string *` elements in
-sorted order. `try_run` builds an argv vector from `path` and the argument
+sorted order in `entries`. `try_run` builds an argv vector from `path` and the argument
 array, forks/execs, waits, and reports a normalized status. The byte array
 argument of `try_write_bytes` is the existing `ktn_array *` with element size
 one.

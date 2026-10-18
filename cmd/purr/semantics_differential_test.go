@@ -192,6 +192,16 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "Argv"
 	case checker.BuiltinTryReadFile:
 		return "TryReadFile"
+	case checker.BuiltinTryWriteFile:
+		return "TryWriteFile"
+	case checker.BuiltinTryWriteBytes:
+		return "TryWriteBytes"
+	case checker.BuiltinTryCreateDirectory:
+		return "TryCreateDirectory"
+	case checker.BuiltinTryRemove:
+		return "TryRemove"
+	case checker.BuiltinTryListDirectory:
+		return "TryListDirectory"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

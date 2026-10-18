@@ -551,10 +551,19 @@ func (g *generator) emitUnionConstructors() error {
 	return nil
 }
 
-// emitPreludeHelper emits the helper that turns the runtime's non-fatal read
-// result into the predeclared ReadFileResult union. The runtime does not know
-// the union layout; the helper calls the generated constructors.
+// emitPreludeHelper emits one helper for each used prelude built-in. The read
+// helper comes first, preserving the output of programs that use only
+// try_read_file.
 func (g *generator) emitPreludeHelper() error {
+	if err := g.emitReadFilePreludeHelper(); err != nil {
+		return err
+	}
+	return g.emitFileDirectoryPreludeHelpers()
+}
+
+// emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
+// read result into the predeclared ReadFileResult union.
+func (g *generator) emitReadFilePreludeHelper() error {
 	unionType, ok := g.checked.Types["ReadFileResult"]
 	if !ok || unionType == nil {
 		return nil
@@ -570,6 +579,95 @@ func (g *generator) emitPreludeHelper() error {
 	g.line("if (%s(ktn_path, &ktn_text, &ktn_message)) {", runtime.TryReadFileFunction)
 	g.indent++
 	g.line("return %s(ktn_text);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// preludeUnionType returns a named prelude union, or an error when the checker
+// did not register it.
+func (g *generator) preludeUnionType(name string) (*checker.Type, error) {
+	unionType, ok := g.checked.Types[name]
+	if !ok || unionType == nil {
+		return nil, &Error{Line: 1, Column: 1, Message: fmt.Sprintf("the predeclared %s is not registered", name)}
+	}
+	if !unionType.IsUnion() {
+		return nil, &Error{Line: 1, Column: 1, Message: fmt.Sprintf("the predeclared %s is not a union", name)}
+	}
+	return unionType, nil
+}
+
+// emitFileDirectoryPreludeHelpers emits the non-static helpers for the write and
+// directory built-ins that the checker registered.
+func (g *generator) emitFileDirectoryPreludeHelpers() error {
+	if _, ok := g.checked.Builtins["try_write_file"]; ok {
+		if err := g.emitFilePreludeHelper("try_write_file", []string{"const ktn_string *ktn_path", "const ktn_string *ktn_text"}, runtime.TryWriteFileFunction+"(ktn_path, ktn_text, &ktn_message)"); err != nil {
+			return err
+		}
+	}
+	if _, ok := g.checked.Builtins["try_write_bytes"]; ok {
+		if err := g.emitFilePreludeHelper("try_write_bytes", []string{"const ktn_string *ktn_path", "ktn_array *ktn_data"}, runtime.TryWriteBytesFunction+"(ktn_path, ktn_data, &ktn_message)"); err != nil {
+			return err
+		}
+	}
+	if _, ok := g.checked.Builtins["try_create_directory"]; ok {
+		if err := g.emitFilePreludeHelper("try_create_directory", []string{"const ktn_string *ktn_path"}, runtime.TryCreateDirectoryFunction+"(ktn_path, &ktn_message)"); err != nil {
+			return err
+		}
+	}
+	if _, ok := g.checked.Builtins["try_remove"]; ok {
+		if err := g.emitFilePreludeHelper("try_remove", []string{"const ktn_string *ktn_path"}, runtime.TryRemoveFunction+"(ktn_path, &ktn_message)"); err != nil {
+			return err
+		}
+	}
+	if _, ok := g.checked.Builtins["try_list_directory"]; ok {
+		if err := g.emitListDirectoryPreludeHelper(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// emitFilePreludeHelper emits one FileResult helper. Ok carries no payload.
+func (g *generator) emitFilePreludeHelper(builtin string, parameters []string, call string) error {
+	unionType, err := g.preludeUnionType("FileResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(%s) {", cStruct, preludeHelperName(unionType.Module, builtin), strings.Join(parameters, ", "))
+	g.indent++
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s) {", call)
+	g.indent++
+	g.line("return %s();", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitListDirectoryPreludeHelper emits the ListDirectoryResult helper.
+func (g *generator) emitListDirectoryPreludeHelper() error {
+	unionType, err := g.preludeUnionType("ListDirectoryResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_path) {", cStruct, preludeHelperName(unionType.Module, "try_list_directory"))
+	g.indent++
+	g.line("ktn_array *ktn_entries = NULL;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s(ktn_path, &ktn_entries, &ktn_message)) {", runtime.TryListDirectoryFunction)
+	g.indent++
+	g.line("return %s(ktn_entries);", variantConstructorName(unionType, "Ok"))
 	g.indent--
 	g.line("}")
 	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))

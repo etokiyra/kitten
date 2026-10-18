@@ -6,8 +6,8 @@ being built one at a time:
 - the helper layer - C names, the C type mapping, C string-literal escaping, and
   bounded output accumulation;
 - the declaration emitter - the nine sections the reference generator emits
-  before any function body, plus the non-static `try_read_file` prelude helper
-  when the checker injected that prelude; and
+  before any function body, plus the non-static prelude helpers when the checker
+  injected the corresponding file or directory prelude; and
 - the core expression emitter - integer, floating-point, and boolean literals,
   string literals, identifiers, unary expressions, binary expressions, calls to
   user functions and built-ins, member access and variant references, struct and
@@ -150,8 +150,9 @@ An unrecognized directive prints `unknown <directive>`.
   between, `substring_function()`, `map_has_function()`,
   `read_file_function()`, `try_read_file_function()`, `argv_function()`, and
   `exit_function()` are the remaining built-ins,
-  `prelude_try_read_file_helper_name(module)` names the generated helper the
-  checker's prelude type needs, `set_args_function()` is the entry-point call
+  `prelude_helper_name(module, builtin)` names a generated prelude helper, and
+  `prelude_try_read_file_helper_name(module)` preserves the original read-helper
+  spelling, `set_args_function()` is the entry-point call
   that saves `argc`/`argv`, and
   `string_at_function()`, `array_new_function()`, `array_at_function()`,
   `map_new_function()`, `map_set_function()`, and `map_at_function()` are the
@@ -160,7 +161,10 @@ An unrecognized directive prints `unknown <directive>`.
   `i64_div_function()`, `i64_mod_function()`, `i64_shl_function()`, and
   `i64_shr_function()` are the defined integer arithmetic and shift helpers, and
   `string_to_bytes_function()` and `bytes_to_string_function()` are the string/
-  byte conversion helpers; `i64_add_assign_function()`,
+  byte conversion helpers, `try_write_file_function()`, `try_write_bytes_function()`,
+  `try_create_directory_function()`, `try_remove_function()`, and
+  `try_list_directory_function()` are the recoverable file and directory runtime
+  helpers, and `i64_add_assign_function()`,
   `i64_sub_assign_function()`, `i64_pre_inc_function()`,
   `i64_post_inc_function()`, `i64_pre_dec_function()`, and
   `i64_post_dec_function()` take the target address so it is evaluated once.
@@ -725,7 +729,7 @@ Running `go test -count=1 -v -run TestKittenCodegen ./cmd/purr/` reports:
 
 - 29 mangled names anchored to the reference generator's C.
 - 15 C type spellings anchored to the reference generator's C.
-- 791 string literals whose escaping and byte length match the reference
+- 823 string literals whose escaping and byte length match the reference
   generator's pooled literals exactly.
 - The exact accumulated text for empty, small, many-chunk, capacity-boundary, and
   overflow runs, including a partial line that never ends.
@@ -748,8 +752,8 @@ Running `go test -count=1 -v -run TestKittenDeclarations ./cmd/purr/` reports:
   declarations, two modules, identically named private declarations in different
   modules, declaration order, bodies with and without literals, a shared literal
   pool, many declarations of every kind, and wide field and parameter lists.
-- 44 corpus programs whose sections match byte for byte, over 778 lines, and
-  1802 whose check error the probe reports exactly as the reference checker does.
+- 51 corpus programs whose sections match byte for byte, over 1149 lines, and
+  1824 whose check error the probe reports exactly as the reference checker does.
 - 57 corpus programs without an entry point, verified by deriving the reference
   section: prepending `fn main() {}` adds exactly one prototype line and nothing
   else, and removing it - together with the prototype block's blank line when the
@@ -772,7 +776,7 @@ so the emitter's failure message has no remaining kind to describe.
 
 Running `go test -count=1 -v -run TestKittenExpressions ./cmd/purr/` reports:
 
-- 225 of 1446 expected lines of the 32 targeted programs compared byte for byte,
+- 229 of 1467 expected lines of the 33 targeted programs compared byte for byte,
   covering every literal kind, both booleans, every unary and binary operator,
   precedence, associativity, redundant parentheses, nesting, mixed operand
   types, member access and qualified variant references, struct and variant
@@ -780,8 +784,8 @@ Running `go test -count=1 -v -run TestKittenExpressions ./cmd/purr/` reports:
   every compound operator, string append, map entry assignment, `try_read_file`,
   direct `ReadFileResult` construction, and the nested combinations of them. The lines that are not compared are the subexpressions
   of a compared expression, which the compared whole already validates.
-- 126 of 1374 expected lines of 42 corpus programs compared byte for byte, over
-  the checker corpus, and whose **78 pooled entries** are compared as well. The
+- 143 of 1522 expected lines of 49 corpus programs compared byte for byte, over
+  the checker corpus, and whose **95 pooled entries** are compared as well. The
   compared-line count falls because assignment now renders rather than reporting
   an unimplemented message, and an assignment that is a statement is not a print
   argument; the function and unit harnesses compare those assignments as part of
@@ -829,7 +833,7 @@ rather than being counted as a match.
 
 Running `go test -count=1 -v -run TestKittenFunctions ./cmd/purr/` reports:
 
-- 20 targeted programs over **54 functions and 497 lines** compared byte for byte:
+- 21 targeted programs over **57 functions and 546 lines** compared byte for byte:
   empty bodies, locals with and without initializers, expression statements,
   returns with and without values, `if`/`else`/`else if` chains, nested blocks and
   shadowed names, nested `while` loops, `for` loops with every combination of
@@ -838,7 +842,7 @@ Running `go test -count=1 -v -run TestKittenFunctions ./cmd/purr/` reports:
   initializer that is an expression, a union with a string payload, `match` inside
   loops, string literals in nested statements that keep the pool's order,
   `try_read_file` matching, and a second module.
-- 42 corpus programs over 822 lines and 67 functions compared byte for byte.
+- 49 corpus programs over 1009 lines and 79 functions compared byte for byte.
 - Match temporaries numbered in emission order across a unit, checked directly.
 - 11 assignment programs over 85 lines compared byte for byte, covering an
   assignment statement, a field, an element, a compound assignment, a loop
@@ -859,7 +863,7 @@ driver's shape including the file, which only the entry point rule sets.
 
 Running `go test -count=1 -v -run TestKittenUnit ./cmd/purr/` reports:
 
-- **34 whole units identical over 1473 lines** in the targeted corpus: a minimal
+- **42 whole units identical over 2172 lines** in the targeted corpus: a minimal
   `main`; an `eprint` unit; an `exit` unit; a `main` that runs a loop, a string
   concatenation, and an `if`; several
   functions in declaration order; nested blocks and control flow; loops of every
@@ -872,8 +876,8 @@ Running `go test -count=1 -v -run TestKittenUnit ./cmd/purr/` reports:
   and repeated literals; the pool's order when strings appear in different
   functions; strings inside nested statements; and two modules, one of which
   declares its own `main`.
-- **42 whole corpus units identical over 1780 lines**, plus **57 corpus programs whose
-  entry point failure is reported identically**, and 1802 check errors reported
+- **49 whole corpus units identical over 2380 lines**, plus **57 corpus programs whose
+  entry point failure is reported identically**, and 1824 check errors reported
   identically.
 - **4 targeted and 57 corpus entry point rejections**, covering a missing `main`,
   parameters, a return value, and an imported module that declares `main` but is not
@@ -896,7 +900,7 @@ and runs both generated programs and compares what they write.
 
 Running `go test -count=1 -v -run TestKittenCalls ./cmd/purr/` reports:
 
-- **22 whole units identical over 652 lines**: `print` and `eprint` with every
+- **23 whole units identical over 733 lines**: `print` and `eprint` with every
   primitive type and with several at once; `exit` with an int expression; user
   calls with zero, one, and several
   arguments; calls in

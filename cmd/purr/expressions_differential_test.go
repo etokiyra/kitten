@@ -1145,6 +1145,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "file and directory prelude calls and matches",
+		root: `fn main() {
+    match (try_write_file("x", "y")) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+    match (try_list_directory("d")) {
+        Ok(entries) { print(length(entries)); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "byte values, arrays, and conversions",
 		root: `fn main() {
     byte a = byte_from_int(65);

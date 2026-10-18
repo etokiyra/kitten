@@ -253,7 +253,7 @@ fn emit_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(union_constructors)) {
         return union_constructors;
     }
-    return emit_prelude_helper_section(emitter);
+    return emit_all_prelude_helper_sections(emitter);
 }
 
 // --- Sections ----------------------------------------------------------------
@@ -332,10 +332,20 @@ fn emit_union_constructor_section(DeclarationEmitter emitter) -> EmitStep {
     return for_each_union(emitter, DeclarationPhase.UnionConstructor);
 }
 
-// emit_prelude_helper_section emits the helper that turns the runtime's
-// non-fatal read result into the predeclared ReadFileResult union. It appears
-// after union constructors and only when the checker registered the prelude.
-fn emit_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+// emit_all_prelude_helper_sections emits the read helper first, preserving the
+// output of programs that use only try_read_file, then the file and directory
+// helpers that the checker registered.
+fn emit_all_prelude_helper_sections(DeclarationEmitter emitter) -> EmitStep {
+    EmitStep read_helper = emit_read_file_prelude_helper_section(emitter);
+    if (!emit_ok(read_helper)) {
+        return read_helper;
+    }
+    return emit_file_directory_prelude_helper_section(emitter);
+}
+
+// emit_read_file_prelude_helper_section emits the helper that turns the
+// runtime's non-fatal read result into the predeclared ReadFileResult union.
+fn emit_read_file_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
     if (!has(emitter.model.visible_types, "ReadFileResult")) {
         return EmitStep.Ok;
     }
@@ -365,6 +375,161 @@ fn emit_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
     }
     emitter.indent = emitter.indent + 1;
     EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_text);");
+    if (!emit_ok(ok)) {
+        return ok;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) {
+        return close_if;
+    }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) {
+        return failed;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) {
+        return close;
+    }
+    return emit_line(emitter, "");
+}
+
+// emit_file_directory_prelude_helper_section emits the helpers for the file
+// and directory built-ins the checker registered, in fixed order.
+fn emit_file_directory_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (has(emitter.model.builtins, "try_write_file")) {
+        EmitStep write_file = emit_file_prelude_helper(
+            emitter,
+            "try_write_file",
+            "const ktn_string *ktn_path, const ktn_string *ktn_text",
+            try_write_file_function() + "(ktn_path, ktn_text, &ktn_message)"
+        );
+        if (!emit_ok(write_file)) {
+            return write_file;
+        }
+    }
+    if (has(emitter.model.builtins, "try_write_bytes")) {
+        EmitStep write_bytes = emit_file_prelude_helper(
+            emitter,
+            "try_write_bytes",
+            "const ktn_string *ktn_path, ktn_array *ktn_data",
+            try_write_bytes_function() + "(ktn_path, ktn_data, &ktn_message)"
+        );
+        if (!emit_ok(write_bytes)) {
+            return write_bytes;
+        }
+    }
+    if (has(emitter.model.builtins, "try_create_directory")) {
+        EmitStep create_directory = emit_file_prelude_helper(
+            emitter,
+            "try_create_directory",
+            "const ktn_string *ktn_path",
+            try_create_directory_function() + "(ktn_path, &ktn_message)"
+        );
+        if (!emit_ok(create_directory)) {
+            return create_directory;
+        }
+    }
+    if (has(emitter.model.builtins, "try_remove")) {
+        EmitStep remove = emit_file_prelude_helper(
+            emitter,
+            "try_remove",
+            "const ktn_string *ktn_path",
+            try_remove_function() + "(ktn_path, &ktn_message)"
+        );
+        if (!emit_ok(remove)) {
+            return remove;
+        }
+    }
+    if (has(emitter.model.builtins, "try_list_directory")) {
+        return emit_list_directory_prelude_helper(emitter);
+    }
+    return EmitStep.Ok;
+}
+
+// emit_file_prelude_helper emits one FileResult helper. Ok has no payload.
+fn emit_file_prelude_helper(DeclarationEmitter emitter, string builtin, string parameters, string call) -> EmitStep {
+    if (!has(emitter.model.visible_types, "FileResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared FileResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["FileResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared FileResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, builtin) + "(" + parameters + ") {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) {
+        return message;
+    }
+    EmitStep condition = emit_line(emitter, "if (" + call + ") {");
+    if (!emit_ok(condition)) {
+        return condition;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "();");
+    if (!emit_ok(ok)) {
+        return ok;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) {
+        return close_if;
+    }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) {
+        return failed;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) {
+        return close;
+    }
+    return emit_line(emitter, "");
+}
+
+// emit_list_directory_prelude_helper emits the ListDirectoryResult helper.
+fn emit_list_directory_prelude_helper(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.visible_types, "ListDirectoryResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared ListDirectoryResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["ListDirectoryResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared ListDirectoryResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, "try_list_directory") + "(const ktn_string *ktn_path) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep entries = emit_line(emitter, "ktn_array *ktn_entries = NULL;");
+    if (!emit_ok(entries)) {
+        return entries;
+    }
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) {
+        return message;
+    }
+    EmitStep condition = emit_line(emitter, "if (" + try_list_directory_function() + "(ktn_path, &ktn_entries, &ktn_message)) {");
+    if (!emit_ok(condition)) {
+        return condition;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_entries);");
     if (!emit_ok(ok)) {
         return ok;
     }

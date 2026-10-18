@@ -774,6 +774,21 @@ fn call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] a
     if (builtin == BuiltinKind.TryReadFile) {
         return try_read_file_expression(context, node_id, callee, arguments, argument_count);
     }
+    if (builtin == BuiltinKind.TryWriteFile) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_write_file", 2);
+    }
+    if (builtin == BuiltinKind.TryWriteBytes) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_write_bytes", 2);
+    }
+    if (builtin == BuiltinKind.TryCreateDirectory) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_create_directory", 1);
+    }
+    if (builtin == BuiltinKind.TryRemove) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_remove", 1);
+    }
+    if (builtin == BuiltinKind.TryListDirectory) {
+        return prelude_call_expression(context, node_id, callee, arguments, argument_count, "try_list_directory", 1);
+    }
     if (builtin == BuiltinKind.IntFromByte) {
         return int_from_byte_expression(context, callee, arguments, argument_count);
     }
@@ -836,6 +851,19 @@ fn try_read_file_expression(ExpressionContext context, int node_id, Expr callee,
                     };
                 }
             }
+        }
+    }
+}
+
+// prelude_call_expression lowers a file or directory built-in call to the
+// generated helper named after its result union's prelude module.
+fn prelude_call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] arguments, int argument_count, string builtin, int required) -> ExpressionResult {
+    match (expression_info(module_model(context.model, context.module_index), node_id).type) {
+        Absent {
+            return missing_expression_type(callee);
+        }
+        Present(result_type) {
+            return builtin_call_expression(context, callee, prelude_helper_name(result_type.module, builtin), builtin, arguments, argument_count, required);
         }
     }
 }

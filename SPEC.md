@@ -1036,12 +1036,13 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Thirteen functions are provided by the language: `print`, `eprint`, `exit`,
+Eighteen functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
-`int_from_byte`, `byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All
-are represented in the semantic environment rather than special-cased in
-expression checking. A user-defined top-level declaration with the same name
-shadows the built-in.
+`try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
+`try_list_directory`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
+`bytes_to_string`. All are represented in the semantic environment rather than
+special-cased in expression checking. A user-defined top-level declaration with
+the same name shadows the built-in.
 
 **`print`**
 
@@ -1056,8 +1057,8 @@ shadows the built-in.
 
 - It accepts **one or more** arguments, with exactly the same allowed types,
   separators, formatting, and trailing-newline rule as `print`: every argument
-  must be `int`, `float`, `bool`, or `string`, values are separated by single
-  spaces, and the line ends with a newline.
+  must be `int`, `float`, `bool`, `string`, or `byte`, values are separated by
+  single spaces, and the line ends with a newline.
 - It writes to **standard error**, not standard output. Diagnostics therefore
   never share a stream with generated program output or generated C.
 - Its return type is `void`, so a call to `eprint` cannot be used as a value.
@@ -1173,6 +1174,120 @@ shadows the built-in.
 - Calling it with the wrong number of arguments or a non-`string` argument is an
   error.
 - Its return type is `ReadFileResult`, and it is not variadic.
+
+**File and directory result types and prelude injection**
+
+- The language also provides two predeclared public unions:
+
+  ```kitten
+  union FileResult {
+      Ok
+      Failed { string message; }
+  }
+
+  union ListDirectoryResult {
+      Ok { string[] entries; }
+      Failed { string message; }
+  }
+  ```
+
+- `FileResult.Ok` carries no payload; it is written without braces, as
+  `FileResult.Ok`. `FileResult.Failed { message = ... }`,
+  `ListDirectoryResult.Ok { entries = ... }`, and
+  `ListDirectoryResult.Failed { message = ... }` are ordinary variant
+  constructions.
+- The three predeclared union names `ReadFileResult`, `FileResult`, and
+  `ListDirectoryResult` are reserved in **every** program: any user top-level
+  declaration with one of those names is an error, whether or not the
+  corresponding implicit type is introduced.
+- `file` and `directory` built-ins use one synthetic prelude module, appended
+  after every loaded module with `id = module count` and path `<prelude>`. The
+  module contains only the result unions required by the program's syntactic
+  calls, in the fixed order `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, with each union's fixed source text concatenated
+  directly (each block ends with its closing brace and newline). A program using
+  only `try_read_file` therefore gets exactly the existing `ReadFileResult`
+  prelude and is otherwise unchanged.
+- The trigger is syntactic for each built-in name, as it is for
+  `try_read_file`: an identifier call named `try_write_file` (even if shadowed
+  by a user function) introduces `FileResult` and its generated helper; the same
+  applies to the other new built-ins. A program with no new built-in and no
+  `try_read_file` gets no prelude module.
+- The same prelude module also carries a non-static generated helper for each
+  used built-in. Helpers build the result union with the generated constructors;
+  the runtime only returns success/failure and a message or payload. A user
+  function that shadows a built-in still causes its prelude helper to be
+  emitted, just as in the existing `try_read_file` rule.
+
+**`try_write_file`**
+
+- `try_write_file(path, text)` takes exactly one `string` path and one `string`
+  text. It creates the file if necessary or truncates it, writes the string's
+  bytes as stored, and closes the file. It never appends and never creates
+  parent directories. The creation mode is `0644`, subject to the process
+  umask.
+- It returns `FileResult`. Success is `FileResult.Ok`; every failure is
+  `FileResult.Failed { message = ... }` and never terminates the program.
+- A failure to open or create is `open <path>: <reason>`, matching Go's
+  `os.WriteFile` text. A write failure is `write <path>: <reason>`; a short
+  write is `write <path>: short write`. A close failure is
+  `close <path>: <reason>`. Reasons are lower-case operating-system text, such
+  as `no such file or directory`, `permission denied`, or `is a directory`.
+  There is no loader prefix.
+- Calling it with the wrong number of arguments or with arguments that are not
+  two `string` values is an error. Its return type is `FileResult`, and it is
+  not variadic.
+
+**`try_write_bytes`**
+
+- `try_write_bytes(path, data)` has the same create-or-truncate, `0644`,
+  full-write, close, and `FileResult` rules as `try_write_file`, but writes the
+  elements of a `byte[]` in order. NUL bytes and arbitrary non-UTF-8 bytes are
+  valid file content.
+- Its open, write, short-write, and close failure texts are the same
+  `open`/`write`/`close <path>: <reason>` forms.
+- Calling it with the wrong number of arguments or with a non-`string` path or
+  non-`byte[]` data is an error. Its return type is `FileResult`, and it is not
+  variadic.
+
+**`try_create_directory`**
+
+- `try_create_directory(path)` creates exactly one directory level with mode
+  `0755`, subject to the process umask. It does **not** create missing parents
+  and fails if the path already exists. It returns `FileResult`; success is
+  `FileResult.Ok`.
+- A failure is `FileResult.Failed { message = ... }` with
+  `mkdir <path>: <reason>`, matching Go's `os.Mkdir` text (for example
+  `mkdir /x: file exists` or `mkdir /x/y: no such file or directory`).
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error. Its return type is `FileResult`, and it is not variadic.
+
+**`try_remove`**
+
+- `try_remove(path)` removes one regular file, one symbolic link (the link
+  itself, not its target), or one empty directory. It is never recursive; a
+  non-empty directory is a recoverable failure. It returns `FileResult`.
+- A failure is `FileResult.Failed { message = ... }` with
+  `remove <path>: <reason>`, matching Go's `os.Remove` text (for example
+  `remove /x: no such file or directory` or
+  `remove /x: directory not empty`).
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error. Its return type is `FileResult`, and it is not variadic.
+
+**`try_list_directory`**
+
+- `try_list_directory(path)` reads one directory and returns
+  `ListDirectoryResult`. Success is `ListDirectoryResult.Ok { entries = ... }`,
+  where `entries` is a fresh `string[]` containing only entry names, with no
+  path prefix, excluding `.` and `..`. The names are sorted bytewise ascending,
+  so the result does not depend on filesystem order. An empty directory yields
+  an empty array.
+- A failure is `ListDirectoryResult.Failed { message = ... }`. A failure to open
+  the directory is `open <path>: <reason>` (for example
+  `open /x: not a directory` for a regular file); a failure while reading
+  directory entries is `readdirent <path>: <reason>`. There is no loader prefix.
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error. Its return type is `ListDirectoryResult`, and it is not variadic.
 
 **`int_from_byte`**
 
@@ -1328,7 +1443,9 @@ is **deferred**.
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
-  `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_exit`, the
+  `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_try_write_file`,
+  `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
+  `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -1757,7 +1874,10 @@ first working design and may evolve.
 
 ### 22.2 File I/O
 
-Two built-in functions perform file input:
+The file and directory built-ins are recoverable except for the existing
+fatal `read_file`. All return fresh GC-managed strings and arrays, close every
+descriptor on every path, and use Go-compatible operating-system text without a
+loader prefix.
 
 - `read_file(path) -> string` reads the entire contents of the regular file at
   `path` into a new GC-managed string. An empty file yields the empty string, so
@@ -1772,17 +1892,31 @@ Two built-in functions perform file input:
   maximum read size (256 MiB), or a read error prints a message on standard
   error and exits with a nonzero status. `try_read_file` reports those file
   failures as `Failed` instead, without terminating.
-- Both functions apply the same 256 MiB limit. The file is always closed,
-  including on failure paths.
-- The returned string is NUL-terminated. Because strings cannot contain an
+- `try_write_file(path, text) -> FileResult` creates or truncates the file and
+  writes the string bytes with creation mode `0644` subject to the umask.
+  `try_write_bytes(path, data) -> FileResult` does the same for a `byte[]`.
+  Neither appends nor creates parent directories. Success is `FileResult.Ok`;
+  failures are recoverable and use `open`, `write`, or `close` path text.
+- `try_create_directory(path) -> FileResult` creates one level with mode `0755`
+  subject to the umask. It neither creates parents nor treats an existing path
+  as success; failures use `mkdir <path>: <reason>`.
+- `try_remove(path) -> FileResult` removes a regular file, a symbolic link
+  itself, or an empty directory, never recursively. A non-empty directory is a
+  recoverable failure; failures use `remove <path>: <reason>`.
+- `try_list_directory(path) -> ListDirectoryResult` returns entry names only,
+  sorted bytewise ascending, excluding `.` and `..`; an empty directory yields
+  an empty array. Failures use `open <path>: <reason>` or
+  `readdirent <path>: <reason>`.
+- Every result is a snapshot at the time of the call. The read functions apply
+  the 256 MiB limit and are always closed, including on failure paths. The
+  returned read string is NUL-terminated; because strings cannot contain an
   embedded NUL byte (Section 20.1), content after the first NUL byte in the file
-  is not represented. Non-UTF-8 bytes are otherwise preserved as byte
-  sequences.
-- The string is a snapshot of the file at the time of the read. If the file
-  changes while it is being read, the result is the bytes read up to the
-  originally observed size.
+  is not represented, while `try_write_bytes` can write NUL bytes and
+  `string_to_bytes`/`bytes_to_string` preserve byte content except for the
+  NUL restriction on `bytes_to_string`.
 
-Writing, directory traversal, and other filesystem operations are **not**
+Process launch, current-working-directory changes, recursive removal, atomic
+replacement, and file metadata beyond the operations above are **not**
 implemented.
 
 ### 22.3 Visibility and name resolution
@@ -1864,8 +1998,8 @@ The following are **not** implemented and must not be assumed:
 - Selective imports, aliases, and re-exporting.
 - Search paths, package manifests, and dependency resolution beyond relative
   paths.
-- Writing files, directory listing, file metadata, and other filesystem
-  operations.
+- Metadata, recursive operations, atomic replacement, and other filesystem
+  operations beyond the built-ins in Section 18.8.
 - Separate compilation or incremental builds; the whole program is reloaded and
   recompiled each time.
 - Compiled module caching.
@@ -1883,6 +2017,11 @@ The following are **not** implemented and must not be assumed:
 8. `read_file` is fatal on failure; `try_read_file` returns a recoverable
    `ReadFileResult`.
 9. The whole program is loaded and compiled together, with no caching.
+10. File and directory built-ins return predeclared `FileResult` or
+    `ListDirectoryResult` values, inject their implicit prelude module only when
+    a corresponding call is present, and use Go-compatible error text.
+11. `try_list_directory` returns sorted entry names only; `try_remove` is never
+    recursive.
 
 ---
 
@@ -2916,8 +3055,8 @@ produce its expected output when compiled and run.
   and directory paths as loader errors, but still requires an absolute root
   because the self-hosted runtime has no working directory (Sections 22.2 and
   22.4).
-- File writing, directory operations, and process launch, none of which the
-  self-hosted runtime offers.
+- Process launch, and driver integration of the file-writing and directory
+  operations; the self-hosted driver does not use them.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,
 and the generator's helper, declaration, expression, literal-pool, statement, and

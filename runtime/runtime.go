@@ -106,6 +106,21 @@ const (
 	// string without terminating the program.
 	TryReadFileFunction = "ktn_rt_try_read_file"
 
+	// TryWriteFileFunction creates or truncates a file and writes a string.
+	TryWriteFileFunction = "ktn_rt_try_write_file"
+
+	// TryWriteBytesFunction creates or truncates a file and writes a byte array.
+	TryWriteBytesFunction = "ktn_rt_try_write_bytes"
+
+	// TryCreateDirectoryFunction creates one directory level.
+	TryCreateDirectoryFunction = "ktn_rt_try_create_directory"
+
+	// TryRemoveFunction removes one file, link, or empty directory.
+	TryRemoveFunction = "ktn_rt_try_remove"
+
+	// TryListDirectoryFunction lists sorted entry names.
+	TryListDirectoryFunction = "ktn_rt_try_list_directory"
+
 	// StringToBytesFunction returns a string's bytes as a byte array.
 	StringToBytesFunction = "ktn_rt_string_to_bytes"
 

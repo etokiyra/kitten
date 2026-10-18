@@ -296,6 +296,68 @@ fn main() {
     print("try_read_file(");
 }
 `)
+	add("file and directory builtins and result unions", `fn describe_file(FileResult result) -> int {
+    match (result) {
+        Ok { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+fn describe_list(ListDirectoryResult result) -> int {
+    match (result) {
+        Ok(entries) {
+            int index = 0;
+            while (index < length(entries)) {
+                print(entries[index]);
+                index++;
+            }
+            return length(entries);
+        }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    FileResult written = try_write_file("x", "y");
+    FileResult bytes = try_write_bytes("x", string_to_bytes("y"));
+    FileResult made = try_create_directory("d");
+    FileResult removed = try_remove("d");
+    ListDirectoryResult listed = try_list_directory("x");
+    FileResult direct_ok = FileResult.Ok;
+    FileResult direct_failed = FileResult.Failed { message = "m" };
+    string[] entries = new string[1];
+    entries[0] = "a";
+    ListDirectoryResult direct_list = ListDirectoryResult.Ok { entries = entries };
+    ListDirectoryResult direct_list_failed = ListDirectoryResult.Failed { message = "m" };
+    print(describe_file(written), describe_file(bytes), describe_file(made), describe_file(removed));
+    print(describe_file(direct_ok), describe_file(direct_failed));
+    print(describe_list(listed), describe_list(direct_list), describe_list(direct_list_failed));
+}
+`)
+	add("try_write_file only", `fn main() {
+    match (try_write_file("x", "y")) {
+        Ok { print("ok"); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_list_directory only", `fn main() {
+    match (try_list_directory("x")) {
+        Ok(entries) { print(length(entries)); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_read_file with a new builtin", `fn main() {
+    try_read_file("x");
+    try_write_file("y", "z");
+}
+`)
+	add("shadowed try_write_file still injects its prelude", `fn try_write_file(string path, string text) -> int {
+    return 1;
+}
+fn main() {
+    print(try_write_file("x", "y"));
+}
+`)
 	add("bitwise and shift operators", `fn main() {
     int mask = 0xFF;
     int bits = 0b1010;
@@ -516,6 +578,28 @@ fn main() {
 		"fn f() { match (try_read_file(\"x\")) { Ok(text) { } } }\n",
 		"fn f() { try_read_file(); }\n",
 		"fn f() { try_read_file(1); }\n",
+		"fn f() { match (try_write_file(\"x\", \"y\")) { Ok { } } }\n",
+		"fn f() { match (try_list_directory(\"x\")) { Ok(entries) { } } }\n",
+		"fn f() { try_write_file(); }\n",
+		"fn f() { try_write_file(\"x\"); }\n",
+		"fn f() { try_write_file(1, \"y\"); }\n",
+		"fn f() { try_write_file(\"x\", 1); }\n",
+		"fn f() { try_write_bytes(\"x\"); }\n",
+		"fn f() { try_write_bytes(\"x\", \"y\"); }\n",
+		"fn f() { try_create_directory(); }\n",
+		"fn f() { try_create_directory(1); }\n",
+		"fn f() { try_remove(); }\n",
+		"fn f() { try_remove(1); }\n",
+		"fn f() { try_list_directory(); }\n",
+		"fn f() { try_list_directory(1); }\n",
+		"fn FileResult() {}\n",
+		"struct FileResult {}\n",
+		"enum FileResult { A }\n",
+		"union FileResult { A }\n",
+		"fn ListDirectoryResult() {}\n",
+		"struct ListDirectoryResult {}\n",
+		"enum ListDirectoryResult { A }\n",
+		"union ListDirectoryResult { A }\n",
 
 		// Indexing.
 		"fn f() { int x = 1; int y = x[0]; }\n",
@@ -673,6 +757,28 @@ fn main() {
 		"struct Hidden { int x; }\npublic fn make() -> int {\n    Hidden h = Hidden { x = 1 };\n    return h.x;\n}\n")
 	addModules("map of imported type", "import \"input2.txt\";\nfn main() {\n    map[string]P table = new map[string]P;\n    table[\"a\"] = P { x = 1 };\n}\n",
 		"public struct P {\n    int x;\n}\n")
+	addModules("try_write_file from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_write_file("x", "y")));
+}
+`, `public fn classify(FileResult result) -> int {
+    match (result) {
+        Ok { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_list_directory from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_list_directory("x")));
+}
+`, `public fn classify(ListDirectoryResult result) -> int {
+    match (result) {
+        Ok(entries) { return length(entries); }
+        Failed(message) { return -1; }
+    }
+}
+`)
 	addModules("try_read_file from an imported module", `import "input2.txt";
 fn main() {
     print(classify(try_read_file("x")));

@@ -578,6 +578,28 @@ func (g *generator) structLiteral(expression *parser.StructLiteral) (string, err
 	return fmt.Sprintf("%s(%s)", constructorName(structType.Name, structType.Module), strings.Join(arguments, ", ")), nil
 }
 
+// preludeCall lowers a file or directory built-in call to its generated prelude
+// helper. The checker guarantees the argument count and types; this reports a
+// malformed tree rather than emitting a partial call.
+func (g *generator) preludeCall(expression *parser.CallExpr, builtin string, expected int) (string, error) {
+	if len(expression.Arguments) < expected {
+		return "", &Error{Line: expression.OpenParen.Line, Column: expression.OpenParen.Column, Message: builtin + " is missing an argument"}
+	}
+	resultType, err := g.expressionType(expression)
+	if err != nil {
+		return "", err
+	}
+	arguments := make([]string, 0, expected)
+	for _, argument := range expression.Arguments {
+		rendered, err := g.expression(argument)
+		if err != nil {
+			return "", err
+		}
+		arguments = append(arguments, rendered)
+	}
+	return fmt.Sprintf("%s(%s)", preludeHelperName(resultType.Module, builtin), strings.Join(arguments, ", ")), nil
+}
+
 // callExpression renders a function call. The built-in print is expanded into a
 // comma expression of runtime helpers, the built-in length reads the array
 // header, and user functions become plain C calls.
@@ -656,6 +678,16 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 			return "", err
 		}
 		return fmt.Sprintf("%s(%s)", preludeTryReadFileHelperName(resultType.Module), argument), nil
+	case checker.BuiltinTryWriteFile:
+		return g.preludeCall(expression, "try_write_file", 2)
+	case checker.BuiltinTryWriteBytes:
+		return g.preludeCall(expression, "try_write_bytes", 2)
+	case checker.BuiltinTryCreateDirectory:
+		return g.preludeCall(expression, "try_create_directory", 1)
+	case checker.BuiltinTryRemove:
+		return g.preludeCall(expression, "try_remove", 1)
+	case checker.BuiltinTryListDirectory:
+		return g.preludeCall(expression, "try_list_directory", 1)
 	case checker.BuiltinIntFromByte:
 		argument, err := g.expression(expression.Arguments[0])
 		if err != nil {

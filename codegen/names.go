@@ -106,6 +106,12 @@ func preludeTryReadFileHelperName(module int) string {
 	return "ktn_prelude_" + strconv.Itoa(module) + "_try_read_file"
 }
 
+// preludeHelperName is the generated helper for one used file or directory
+// built-in in the prelude module. The read helper keeps its original name.
+func preludeHelperName(module int, builtin string) string {
+	return "ktn_prelude_" + strconv.Itoa(module) + "_" + builtin
+}
+
 // cType maps a resolved Kitten type to its C representation:
 //
 //	int    -> int64_t             (signed 64-bit)

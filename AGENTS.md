@@ -228,9 +228,12 @@ renamed every `byte` identifier in Kitten source, fixtures, and embedded test
 source to `octet`, with no language change. Phase 8.3b added `byte` as a reserved
 unsigned 8-bit type, `byte[]`, byte comparisons and printing, and the four
 conversions `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
-`bytes_to_string`. Phase 8.4 (file and directory APIs) is next. A SPEC cleanup
-of Go/C-flavored wording remains a later candidate. Native backend, standard
-library, and file writing remain unauthorized.
+`bytes_to_string`. Phase 8.4 added the recoverable file and directory built-ins,
+their `FileResult` and `ListDirectoryResult` prelude unions, Go-compatible error
+text, and the generalized on-use prelude. Phase 8.5 (process launch, `RunResult`)
+is next, and file writing now unblocks `purr new` as a separate later phase. A SPEC cleanup
+of Go/C-flavored wording remains a later candidate. The native backend and a
+standard library remain unauthorized.
 
 ### Adding a built-in
 
@@ -264,6 +267,11 @@ or the Go and Kitten pipelines stop agreeing:
 10. **Documentation** — `README.md`, `AGENTS.md`, and the relevant
     `selfhost/*/README.md`; update measured counts, never invent them.
 
+A **prelude built-in** additionally changes `checker/prelude.go` and
+`selfhost/checker/prelude.ktn` (source blocks, syntactic trigger, late
+registration, and reserved names), both generators' helper emission, and the
+prelude subset and whole-unit corpora.
+
 For a new **operator or primitive type**, this built-in checklist is not enough:
 also update both lexers' token kinds and scans, both parsers' precedence or type
 grammar, both checker type tables and operator rules, both code generators' C
@@ -285,8 +293,8 @@ documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
 The C-level self-hosting fixpoint is reached, but full independence from Go is
 not: Go still builds stage 1. The design of the zero-dependency native toolchain
 (Goal 2) is authorized by Phase 7.0 and lives in
-`proposals/zero-dependency-toolchain.md`; its implementation, a complete standard
-library, and file writing remain intentionally unimplemented. Do not start them,
+`proposals/zero-dependency-toolchain.md`; its native-backend implementation and a
+complete standard library remain intentionally unimplemented. Do not start them,
 or claim full self-hosting or zero dependencies, without separate explicit
 authorization after the design is approved.
 
@@ -334,7 +342,8 @@ authorization after the design is approved.
    and the C runtime; Phase 8.2 added bitwise/shift operators and hex/binary
    literals; Phase 8.3a freed the `byte` identifier by renaming it to `octet`
    in source and fixtures; Phase 8.3b added the `byte` type, `byte[]`, and
-   explicit byte/string conversions).
+   explicit byte/string conversions; Phase 8.4 added recoverable file and
+   directory operations and their on-use result unions).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

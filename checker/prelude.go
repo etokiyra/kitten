@@ -2,50 +2,112 @@ package checker
 
 import (
 	"fmt"
+	"strings"
 
 	"kitten/lexer"
 	"kitten/parser"
 )
 
-// readFileResultPrelude is the fixed source of the implicit prelude. It is
-// parsed by the ordinary lexer and parser, so it uses the same union and field
-// registration as any user source.
-const readFileResultPrelude = `public union ReadFileResult {
+// The fixed source blocks of the implicit prelude. Each block ends with its
+// closing brace and a newline, so concatenation puts the next union on its own
+// line and the only-read source is exactly the source used before the file and
+// directory built-ins existed.
+const (
+	readFileResultPrelude = `public union ReadFileResult {
     Ok { string text; }
     Failed { string message; }
 }
 `
+
+	fileResultPrelude = `public union FileResult {
+    Ok
+    Failed { string message; }
+}
+`
+
+	listDirectoryResultPrelude = `public union ListDirectoryResult {
+    Ok { string[] entries; }
+    Failed { string message; }
+}
+`
+)
 
 // preludeModulePath identifies the synthetic module. A user source file cannot
 // normally have this path; the only consequence is that reserved-name checks
 // skip the prelude itself.
 const preludeModulePath = "<prelude>"
 
-// parseReadFileResultPrelude parses the fixed prelude into a module with ID 0.
-// The caller assigns the final ID when appending it.
-func parseReadFileResultPrelude() (*parser.Module, error) {
-	tokens, err := lexer.Lex(readFileResultPrelude)
+// preludeUses records which prelude built-ins a program calls syntactically.
+type preludeUses struct {
+	readFile        bool
+	writeFile       bool
+	writeBytes      bool
+	createDirectory bool
+	remove          bool
+	listDirectory   bool
+}
+
+// any reports whether any prelude built-in is used.
+func (u preludeUses) any() bool {
+	return u.readFile || u.writeFile || u.writeBytes || u.createDirectory ||
+		u.remove || u.listDirectory
+}
+
+// preludeSource assembles the fixed prelude source for the used built-ins. The
+// order is fixed, and a union appears only when a built-in that returns it is
+// used. A program using only try_read_file gets exactly readFileResultPrelude.
+func preludeSource(uses preludeUses) string {
+	var source strings.Builder
+	if uses.readFile {
+		source.WriteString(readFileResultPrelude)
+	}
+	if uses.writeFile || uses.writeBytes || uses.createDirectory || uses.remove {
+		source.WriteString(fileResultPrelude)
+	}
+	if uses.listDirectory {
+		source.WriteString(listDirectoryResultPrelude)
+	}
+	return source.String()
+}
+
+// parsePrelude parses assembled prelude source into a module with ID 0. The
+// caller assigns the final ID when appending it.
+func parsePrelude(source string) (*parser.Module, error) {
+	tokens, err := lexer.Lex(source)
 	if err != nil {
-		return nil, fmt.Errorf("parsing the ReadFileResult prelude: %w", err)
+		return nil, fmt.Errorf("parsing the prelude: %w", err)
 	}
 	program, err := parser.Parse(tokens)
 	if err != nil {
-		return nil, fmt.Errorf("parsing the ReadFileResult prelude: %w", err)
+		return nil, fmt.Errorf("parsing the prelude: %w", err)
 	}
 	return &parser.Module{Path: preludeModulePath, Program: program}, nil
 }
 
-// usesTryReadFile reports whether any module contains a syntactic call whose
-// callee is the identifier "try_read_file". It is deliberately syntactic: a
-// user function with that name may cause the prelude to be injected unused, but
-// the helper is non-static and no semantic rule depends on the false positive.
-func usesTryReadFile(modules []*parser.Module) bool {
+// scanPreludeUses scans every module for syntactic calls to the six prelude
+// built-ins. It is deliberately syntactic: a user function with one of these
+// names may cause the prelude to be injected unused, but helpers are non-static
+// and no semantic rule depends on the false positive.
+func scanPreludeUses(modules []*parser.Module) preludeUses {
+	return preludeUses{
+		readFile:        usesCallee(modules, "try_read_file"),
+		writeFile:       usesCallee(modules, "try_write_file"),
+		writeBytes:      usesCallee(modules, "try_write_bytes"),
+		createDirectory: usesCallee(modules, "try_create_directory"),
+		remove:          usesCallee(modules, "try_remove"),
+		listDirectory:   usesCallee(modules, "try_list_directory"),
+	}
+}
+
+// usesCallee reports whether any module contains a syntactic call whose callee
+// is the given identifier.
+func usesCallee(modules []*parser.Module, calleeName string) bool {
 	for _, module := range modules {
 		if module == nil || module.Program == nil {
 			continue
 		}
 		for _, declaration := range module.Program.Declarations {
-			if declarationUsesTryReadFile(declaration) {
+			if declarationUsesCallee(declaration, calleeName) {
 				return true
 			}
 		}
@@ -53,56 +115,56 @@ func usesTryReadFile(modules []*parser.Module) bool {
 	return false
 }
 
-// declarationUsesTryReadFile scans a top-level declaration. Only a function body
-// can contain an expression.
-func declarationUsesTryReadFile(declaration parser.Decl) bool {
+// declarationUsesCallee scans a top-level declaration. Only a function body can
+// contain an expression.
+func declarationUsesCallee(declaration parser.Decl, calleeName string) bool {
 	function, ok := declaration.(*parser.FunctionDecl)
 	if !ok || function == nil {
 		return false
 	}
-	return statementUsesTryReadFile(function.Body)
+	return statementUsesCallee(function.Body, calleeName)
 }
 
-// statementUsesTryReadFile scans one statement and its children.
-func statementUsesTryReadFile(statement parser.Stmt) bool {
+// statementUsesCallee scans one statement and its children.
+func statementUsesCallee(statement parser.Stmt, calleeName string) bool {
 	switch s := statement.(type) {
 	case *parser.BlockStmt:
 		if s == nil {
 			return false
 		}
 		for _, inner := range s.Statements {
-			if statementUsesTryReadFile(inner) {
+			if statementUsesCallee(inner, calleeName) {
 				return true
 			}
 		}
 	case *parser.VarDeclStmt:
-		return s != nil && expressionUsesTryReadFile(s.Initializer)
+		return s != nil && expressionUsesCallee(s.Initializer, calleeName)
 	case *parser.ExprStmt:
-		return s != nil && expressionUsesTryReadFile(s.Expression)
+		return s != nil && expressionUsesCallee(s.Expression, calleeName)
 	case *parser.IfStmt:
 		return s != nil &&
-			(expressionUsesTryReadFile(s.Condition) ||
-				statementUsesTryReadFile(s.Then) ||
-				statementUsesTryReadFile(s.Else))
+			(expressionUsesCallee(s.Condition, calleeName) ||
+				statementUsesCallee(s.Then, calleeName) ||
+				statementUsesCallee(s.Else, calleeName))
 	case *parser.WhileStmt:
-		return s != nil && (expressionUsesTryReadFile(s.Condition) || statementUsesTryReadFile(s.Body))
+		return s != nil && (expressionUsesCallee(s.Condition, calleeName) || statementUsesCallee(s.Body, calleeName))
 	case *parser.ForStmt:
 		return s != nil &&
-			(statementUsesTryReadFile(s.Init) ||
-				expressionUsesTryReadFile(s.Condition) ||
-				expressionUsesTryReadFile(s.Increment) ||
-				statementUsesTryReadFile(s.Body))
+			(statementUsesCallee(s.Init, calleeName) ||
+				expressionUsesCallee(s.Condition, calleeName) ||
+				expressionUsesCallee(s.Increment, calleeName) ||
+				statementUsesCallee(s.Body, calleeName))
 	case *parser.ReturnStmt:
-		return s != nil && expressionUsesTryReadFile(s.Value)
+		return s != nil && expressionUsesCallee(s.Value, calleeName)
 	case *parser.MatchStmt:
 		if s == nil {
 			return false
 		}
-		if expressionUsesTryReadFile(s.Scrutinee) {
+		if expressionUsesCallee(s.Scrutinee, calleeName) {
 			return true
 		}
 		for _, arm := range s.Arms {
-			if arm != nil && statementUsesTryReadFile(arm.Body) {
+			if arm != nil && statementUsesCallee(arm.Body, calleeName) {
 				return true
 			}
 		}
@@ -110,8 +172,8 @@ func statementUsesTryReadFile(statement parser.Stmt) bool {
 	return false
 }
 
-// expressionUsesTryReadFile scans one expression and its children.
-func expressionUsesTryReadFile(expression parser.Expr) bool {
+// expressionUsesCallee scans one expression and its children.
+func expressionUsesCallee(expression parser.Expr, calleeName string) bool {
 	switch e := expression.(type) {
 	case nil:
 		return false
@@ -119,35 +181,35 @@ func expressionUsesTryReadFile(expression parser.Expr) bool {
 		*parser.StringLiteral, *parser.BoolLiteral, *parser.NewMapExpr:
 		return false
 	case *parser.UnaryExpr:
-		return e != nil && expressionUsesTryReadFile(e.Operand)
+		return e != nil && expressionUsesCallee(e.Operand, calleeName)
 	case *parser.BinaryExpr:
-		return e != nil && (expressionUsesTryReadFile(e.Left) || expressionUsesTryReadFile(e.Right))
+		return e != nil && (expressionUsesCallee(e.Left, calleeName) || expressionUsesCallee(e.Right, calleeName))
 	case *parser.AssignExpr:
-		return e != nil && (expressionUsesTryReadFile(e.Target) || expressionUsesTryReadFile(e.Value))
+		return e != nil && (expressionUsesCallee(e.Target, calleeName) || expressionUsesCallee(e.Value, calleeName))
 	case *parser.CallExpr:
 		if e == nil {
 			return false
 		}
 		if identifier, ok := e.Callee.(*parser.Identifier); ok &&
-			identifier != nil && identifier.Name == "try_read_file" {
+			identifier != nil && identifier.Name == calleeName {
 			return true
 		}
-		if expressionUsesTryReadFile(e.Callee) {
+		if expressionUsesCallee(e.Callee, calleeName) {
 			return true
 		}
 		for _, argument := range e.Arguments {
-			if expressionUsesTryReadFile(argument) {
+			if expressionUsesCallee(argument, calleeName) {
 				return true
 			}
 		}
 	case *parser.MemberExpr:
-		return e != nil && expressionUsesTryReadFile(e.Receiver)
+		return e != nil && expressionUsesCallee(e.Receiver, calleeName)
 	case *parser.StructLiteral:
 		if e == nil {
 			return false
 		}
 		for _, field := range e.Fields {
-			if field != nil && expressionUsesTryReadFile(field.Value) {
+			if field != nil && expressionUsesCallee(field.Value, calleeName) {
 				return true
 			}
 		}
@@ -156,14 +218,14 @@ func expressionUsesTryReadFile(expression parser.Expr) bool {
 			return false
 		}
 		for _, field := range e.Fields {
-			if field != nil && expressionUsesTryReadFile(field.Value) {
+			if field != nil && expressionUsesCallee(field.Value, calleeName) {
 				return true
 			}
 		}
 	case *parser.NewArrayExpr:
-		return e != nil && expressionUsesTryReadFile(e.Length)
+		return e != nil && expressionUsesCallee(e.Length, calleeName)
 	case *parser.IndexExpr:
-		return e != nil && (expressionUsesTryReadFile(e.Target) || expressionUsesTryReadFile(e.Index))
+		return e != nil && (expressionUsesCallee(e.Target, calleeName) || expressionUsesCallee(e.Index, calleeName))
 	}
 	return false
 }
@@ -189,4 +251,56 @@ func declarationName(declaration parser.Decl) (string, parser.Position, bool) {
 		}
 	}
 	return "", parser.Position{}, false
+}
+
+// preludeReservedNames are reserved against every user top-level declaration,
+// whether or not the corresponding prelude union is introduced.
+var preludeReservedNames = map[string]bool{
+	"ReadFileResult":      true,
+	"FileResult":          true,
+	"ListDirectoryResult": true,
+}
+
+// registerPreludeBuiltins adds the built-ins whose calls triggered the prelude.
+// Each result type is read from the collected prelude, so a builtin's return
+// type is the prelude's resolved union.
+func (c *checker) registerPreludeBuiltins(uses preludeUses) error {
+	type registration struct {
+		used       bool
+		name       string
+		parameters []*Type
+		result     string
+		builtin    BuiltinKind
+	}
+	registrations := []registration{
+		{uses.readFile, "try_read_file", []*Type{StringType}, "ReadFileResult", BuiltinTryReadFile},
+		{uses.writeFile, "try_write_file", []*Type{StringType, StringType}, "FileResult", BuiltinTryWriteFile},
+		{uses.writeBytes, "try_write_bytes", []*Type{StringType, c.arrayType(ByteType)}, "FileResult", BuiltinTryWriteBytes},
+		{uses.createDirectory, "try_create_directory", []*Type{StringType}, "FileResult", BuiltinTryCreateDirectory},
+		{uses.remove, "try_remove", []*Type{StringType}, "FileResult", BuiltinTryRemove},
+		{uses.listDirectory, "try_list_directory", []*Type{StringType}, "ListDirectoryResult", BuiltinTryListDirectory},
+	}
+	for _, entry := range registrations {
+		if !entry.used {
+			continue
+		}
+		resultType, ok := c.publicTypes[entry.result]
+		if !ok || resultType == nil {
+			return &Error{
+				Kind:    InvalidType,
+				Line:    1,
+				Column:  1,
+				Message: fmt.Sprintf("the %s prelude was not registered", entry.result),
+			}
+		}
+		function := &Function{
+			Name:           entry.name,
+			ParameterTypes: entry.parameters,
+			ReturnType:     resultType,
+			Builtin:        entry.builtin,
+		}
+		c.builtins[entry.name] = function
+		c.result.Builtins[entry.name] = function
+	}
+	return nil
 }

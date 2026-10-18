@@ -16,7 +16,7 @@ the language, and no language feature was added to make the checker easier.
 | `state.ktn` | symbols, functions, scopes, the checker state, name and type resolution, diagnostics |
 | `expr.ktn` | expression checking |
 | `stmt.ktn` | statement checking and the conservative control-flow analysis |
-| `prelude.ktn` | the fixed `ReadFileResult` source, its syntactic trigger, and its builtin registration |
+| `prelude.ktn` | the admissible prelude union blocks, their syntactic triggers, and late builtin registration |
 | `checker.ktn` | the five passes and the public entry points |
 
 The driver is `../check.ktn`, one directory up, rather than `main.ktn` here. The
@@ -202,36 +202,36 @@ The reference resolves a declaration by AST node identity, in maps keyed by the
 declaration pointer. Kitten has no map keyed by object identity, so a declaration
 is looked up by its module and name, which duplicate detection makes exact.
 
-## Implicit ReadFileResult prelude
+## Implicit file and directory prelude
 
-A syntactic call whose callee is the identifier `try_read_file` causes
-`check_modules` to append one synthetic module after every loaded module, at
-`id = module_count` and path `<prelude>`. The module is the fixed source
+A syntactic call whose callee is one of `try_read_file`, `try_write_file`,
+`try_write_bytes`, `try_create_directory`, `try_remove`, or
+`try_list_directory` causes `check_modules` to append one synthetic module after
+every loaded module, at `id = module_count` and path `<prelude>`. The module
+contains only the result unions required by the calls, in the fixed order
 
-```kitten
-public union ReadFileResult {
-    Ok { string text; }
-    Failed { string message; }
-}
-```
+1. `ReadFileResult` for `try_read_file`
+2. `FileResult` for `try_write_file`, `try_write_bytes`,
+   `try_create_directory`, or `try_remove`
+3. `ListDirectoryResult` for `try_list_directory`
 
-parsed with the ordinary Kitten lexer and parser and checked by the ordinary
-passes, so the prelude is a real public union with the same registration, field,
-and variant rules as a user declaration. The loaded module ids and every mangled
-name do not change. A program with no such call gets no extra module and no
-extra type.
+with each fixed block concatenated directly. A `try_read_file`-only program gets
+exactly the old source and C. A program with no matching call gets no extra
+module and no extra type.
 
-The trigger is deliberately syntactic: a user function named `try_read_file`
-still injects the prelude, and the generated helper is non-static and may be
-unused. `try_read_file` remains shadowable. The prelude type name
-`ReadFileResult` is reserved against every user top-level declaration, whether or
-not the program has a trigger, with the reference's exact diagnostic. The
-builtin itself is registered only after the prelude type has been collected, so
-its return type is the prelude's resolved type.
+The prelude is parsed with the ordinary lexer and parser and checked by the
+ordinary passes, so each union is a real public union with the same registration,
+field, and variant rules as a user declaration. The loaded module ids and every
+mangled name do not change.
 
-The loader does **not** inject the prelude; this is the checker's responsibility,
-exactly as in the Go reference. Loader read-error parity landed in 5.5: the loader
-uses `try_read_file` for source reads without involving this prelude.
+The trigger is deliberately syntactic: a user function with one of these names
+still injects its result union, and the generated helper is non-static and may be
+unused. The built-ins remain shadowable. The prelude type names `ReadFileResult`,
+`FileResult`, and `ListDirectoryResult` are reserved against every user top-level
+declaration, whether or not the program has a trigger, with the reference's exact
+diagnostic. A builtin itself is registered only after its result type has been
+collected, so its return type is the prelude's resolved type. The loader does
+**not** inject the prelude; this is the checker's responsibility.
 
 ## Coverage
 
@@ -246,9 +246,10 @@ binary operator with its operand rules, array creation, indexing and length, map
 and `has`, strings and `substring`, `print`'s variadic argument rule, conditions,
 `return`, the conservative return-path analysis, defined two's-complement
 integer arithmetic and decimal-literal range checking, and the implicit
-`try_read_file`/`ReadFileResult` prelude with its reserved name, and the
-bitwise/shift operators, hexadecimal/binary literal rules, the `byte` type and
-`byte[]`, and the four byte/string conversion built-ins.
+file/directory prelude with its three reserved names, the bitwise/shift
+operators, hexadecimal/binary literal rules, the `byte` type and `byte[]`, the
+four byte/string conversion built-ins, and the five recoverable file/directory
+built-ins.
 
 The reference's nil-guards (`"a module contains a nil struct declaration"`,
 `"identifier is nil"`, `"unsupported expression %T"`, `"function %q has no
@@ -275,7 +276,7 @@ conversion remains deferred.
 ## Differential testing
 
 `cmd/purr/checker_differential_test.go` builds the checker once and runs it over
-a corpus of **1918 inputs**, comparing its rendering with the reference
+a corpus of **1947 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
@@ -297,7 +298,7 @@ generator's. A self-hosted source that declares `import` statements is checked a
 a one-module program, so the corpus exercises the reference's undefined-name
 diagnostics on them rather than checking them cleanly.
 
-**All 1918 inputs render byte-identically**, so this is exact parity on
+**All 1947 inputs render byte-identically**, so this is exact parity on
 success/failure, error category, position, message, and the declaration counts
 reported on success. `TestKittenCheckerOutputFormat` additionally pins the
 rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
@@ -318,8 +319,8 @@ the same corpus. The rendering is one line per declaration and per annotated nod
 in a fixed walk order — the node's kind and position, its resolved type, its
 resolved symbol with the declaration position it denotes, and its variant — with
 types rendered structurally and named types carrying their module. It covers the
-annotations themselves rather than success counts: **1918 inputs, all identical,
-5161 annotated lines of which 4900 carry a fact** (the remainder are the callee
+annotations themselves rather than success counts: **1947 inputs, all identical,
+5371 annotated lines of which 5068 carry a fact** (the remainder are the callee
 nodes and type names that the reference leaves unannotated).
 
 `TestKittenSemanticsOutputFormat` pins the rendering, and

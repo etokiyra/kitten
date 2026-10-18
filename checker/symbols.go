@@ -60,6 +60,21 @@ const (
 	// BuiltinTryReadFile reads a file into the predeclared result union.
 	BuiltinTryReadFile
 
+	// BuiltinTryWriteFile creates or truncates a file and writes a string.
+	BuiltinTryWriteFile
+
+	// BuiltinTryWriteBytes creates or truncates a file and writes a byte array.
+	BuiltinTryWriteBytes
+
+	// BuiltinTryCreateDirectory creates one directory level.
+	BuiltinTryCreateDirectory
+
+	// BuiltinTryRemove removes one file, link, or empty directory.
+	BuiltinTryRemove
+
+	// BuiltinTryListDirectory lists sorted directory entry names.
+	BuiltinTryListDirectory
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 

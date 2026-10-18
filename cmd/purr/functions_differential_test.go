@@ -486,6 +486,25 @@ fn main() {
 }
 `,
 	}, {
+		description: "file and directory result parameters",
+		root: `fn inspect(FileResult result) -> int {
+    match (result) {
+        Ok { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+fn count(ListDirectoryResult result) -> int {
+    match (result) {
+        Ok(entries) { return length(entries); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(inspect(try_write_file("x", "y")));
+    print(count(try_list_directory("d")));
+}
+`,
+	}, {
 		description: "byte parameters and byte arrays",
 		root: `fn first(byte value, byte[] values) -> byte {
     return values[0];

@@ -320,6 +320,19 @@ fn main() {
 }
 `,
 	}, {
+		description: "file result through call arguments",
+		root: `fn inspect(FileResult result) -> int {
+    match (result) {
+        Ok { return 1; }
+        Failed(message) { return 2; }
+    }
+}
+fn main() {
+    print(inspect(try_write_file("x", "y")));
+    print(inspect(try_create_directory("d")));
+}
+`,
+	}, {
 		description: "byte values through call arguments",
 		root: `fn show(int value) {
     print(value);

@@ -431,6 +431,33 @@ bool ktn_rt_try_read_file(const ktn_string *path,
                           const ktn_string **message);
 
 /*
+ * Recoverable write and directory operations. Each returns true on success and
+ * stores NULL in *message; on failure it returns false and stores a fresh
+ * GC-managed Go-compatible error message. Every descriptor is closed on every
+ * path. The write functions create or truncate with mode 0644, never append,
+ * and never create parent directories.
+ */
+bool ktn_rt_try_write_file(const ktn_string *path,
+                          const ktn_string *text,
+                          const ktn_string **message);
+bool ktn_rt_try_write_bytes(const ktn_string *path,
+                           const ktn_array *data,
+                           const ktn_string **message);
+bool ktn_rt_try_create_directory(const ktn_string *path,
+                                 const ktn_string **message);
+bool ktn_rt_try_remove(const ktn_string *path,
+                       const ktn_string **message);
+
+/*
+ * Reads one directory into a fresh array of strings, sorted bytewise ascending
+ * and excluding "." and "..". On success *entries is the array and *message is
+ * NULL; on failure *entries is NULL and *message holds the error.
+ */
+bool ktn_rt_try_list_directory(const ktn_string *path,
+                               ktn_array **entries,
+                               const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

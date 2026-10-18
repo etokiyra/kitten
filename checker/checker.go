@@ -215,9 +215,9 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 		return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "cannot check a program with no modules"}
 	}
 
-	preludeNeeded := usesTryReadFile(modules)
-	if preludeNeeded {
-		prelude, err := parseReadFileResultPrelude()
+	preludeUses := scanPreludeUses(modules)
+	if preludeUses.any() {
+		prelude, err := parsePrelude(preludeSource(preludeUses))
 		if err != nil {
 			return nil, err
 		}
@@ -268,19 +268,10 @@ func CheckModules(modules []*parser.Module) (*Result, error) {
 	if err := c.collectDeclarations(); err != nil {
 		return nil, err
 	}
-	if preludeNeeded {
-		resultType, ok := c.publicTypes["ReadFileResult"]
-		if !ok || resultType == nil {
-			return nil, &Error{Kind: InvalidType, Line: 1, Column: 1, Message: "the ReadFileResult prelude was not registered"}
+	if preludeUses.any() {
+		if err := c.registerPreludeBuiltins(preludeUses); err != nil {
+			return nil, err
 		}
-		function := &Function{
-			Name:           "try_read_file",
-			ParameterTypes: []*Type{StringType},
-			ReturnType:     resultType,
-			Builtin:        BuiltinTryReadFile,
-		}
-		c.builtins["try_read_file"] = function
-		c.result.Builtins["try_read_file"] = function
 	}
 	if err := c.resolveStructs(); err != nil {
 		return nil, err
@@ -385,8 +376,8 @@ func (c *checker) collectDeclarations() error {
 		c.current = module
 		for _, declaration := range c.result.Modules[index].Program.Declarations {
 			if module.path != preludeModulePath {
-				if name, at, ok := declarationName(declaration); ok && name == "ReadFileResult" {
-					return c.errorAt(DuplicateDeclaration, at, `cannot declare "ReadFileResult": the name is reserved for the predeclared type`)
+				if name, at, ok := declarationName(declaration); ok && preludeReservedNames[name] {
+					return c.errorAt(DuplicateDeclaration, at, "cannot declare %q: the name is reserved for the predeclared type", name)
 				}
 			}
 			switch d := declaration.(type) {

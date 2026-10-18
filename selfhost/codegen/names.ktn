@@ -125,6 +125,11 @@ public fn substring_function() -> string { return "ktn_rt_substring"; }
 public fn map_has_function() -> string { return "ktn_rt_map_has"; }
 public fn read_file_function() -> string { return "ktn_rt_read_file"; }
 public fn try_read_file_function() -> string { return "ktn_rt_try_read_file"; }
+public fn try_write_file_function() -> string { return "ktn_rt_try_write_file"; }
+public fn try_write_bytes_function() -> string { return "ktn_rt_try_write_bytes"; }
+public fn try_create_directory_function() -> string { return "ktn_rt_try_create_directory"; }
+public fn try_remove_function() -> string { return "ktn_rt_try_remove"; }
+public fn try_list_directory_function() -> string { return "ktn_rt_try_list_directory"; }
 public fn string_to_bytes_function() -> string { return "ktn_rt_string_to_bytes"; }
 public fn bytes_to_string_function() -> string { return "ktn_rt_bytes_to_string"; }
 
@@ -132,6 +137,13 @@ public fn bytes_to_string_function() -> string { return "ktn_rt_bytes_to_string"
 // predeclared ReadFileResult from the runtime's non-fatal read primitive.
 public fn prelude_try_read_file_helper_name(int module) -> string {
     return "ktn_prelude_" + decimal(module) + "_try_read_file";
+}
+
+// prelude_helper_name names a generated helper for a used file or directory
+// built-in in the prelude module. The read helper keeps its original function
+// name for byte-identical output.
+public fn prelude_helper_name(int module, string builtin) -> string {
+    return "ktn_prelude_" + decimal(module) + "_" + builtin;
 }
 
 // string_at_function reads one byte of a string, array_new_function and

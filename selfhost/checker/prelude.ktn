@@ -1,10 +1,10 @@
-// prelude.ktn - the implicit ReadFileResult prelude.
+// prelude.ktn - the implicit file and directory result prelude.
 //
-// It mirrors checker/prelude.go: a fixed source text, a syntactic scan for
-// try_read_file calls, and the late registration of the builtin after the
-// prelude type has been collected. The loader never injects this module; the
-// checker appends it after every loaded module, with id equal to the loaded
-// module count.
+// It mirrors checker/prelude.go: fixed union source blocks assembled only for
+// the built-ins a program calls, a syntactic scan for those calls, and late
+// registration of each builtin after the prelude types have been collected. The
+// loader never injects this module; the checker appends it after every loaded
+// module, with id equal to the loaded module count.
 
 import "../lexer/lexer.ktn";
 import "../lexer/tokens.ktn";
@@ -17,9 +17,65 @@ public fn prelude_module_path() -> string {
     return "<prelude>";
 }
 
-// read_file_result_prelude is byte-identical to the Go checker's fixed source.
+// PreludeUses records which prelude built-ins a program calls syntactically.
+public struct PreludeUses {
+    bool read_file;
+    bool write_file;
+    bool write_bytes;
+    bool create_directory;
+    bool remove;
+    bool list_directory;
+}
+
+// prelude_uses_any reports whether any prelude built-in is used.
+public fn prelude_uses_any(PreludeUses uses) -> bool {
+    return uses.read_file || uses.write_file || uses.write_bytes ||
+        uses.create_directory || uses.remove || uses.list_directory;
+}
+
+// read_file_result_prelude, file_result_prelude, and
+// list_directory_result_prelude are byte-identical to the Go checker's fixed
+// source blocks.
 public fn read_file_result_prelude() -> string {
     return "public union ReadFileResult {\n    Ok { string text; }\n    Failed { string message; }\n}\n";
+}
+
+public fn file_result_prelude() -> string {
+    return "public union FileResult {\n    Ok\n    Failed { string message; }\n}\n";
+}
+
+public fn list_directory_result_prelude() -> string {
+    return "public union ListDirectoryResult {\n    Ok { string[] entries; }\n    Failed { string message; }\n}\n";
+}
+
+// prelude_source assembles the fixed source in the same order and with the same
+// subset rule as the Go checker.
+public fn prelude_source(PreludeUses uses) -> string {
+    string source = "";
+    if (uses.read_file) {
+        source = source + read_file_result_prelude();
+    }
+    if (uses.write_file || uses.write_bytes || uses.create_directory || uses.remove) {
+        source = source + file_result_prelude();
+    }
+    if (uses.list_directory) {
+        source = source + list_directory_result_prelude();
+    }
+    return source;
+}
+
+// prelude_uses scans every module for syntactic calls to the six prelude
+// built-ins. A user function with one of these names may inject the prelude
+// unused, but helpers are non-static and no semantic rule depends on it.
+public fn prelude_uses(Module[] modules, int module_count) -> PreludeUses {
+    return PreludeUses {
+        read_file = uses_callee(modules, module_count, "try_read_file"),
+        write_file = uses_callee(modules, module_count, "try_write_file"),
+        write_bytes = uses_callee(modules, module_count, "try_write_bytes"),
+        create_directory = uses_callee(modules, module_count, "try_create_directory"),
+        remove = uses_callee(modules, module_count, "try_remove"),
+        list_directory = uses_callee(modules, module_count, "try_list_directory")
+    };
 }
 
 // PreludeResult is the parsed prelude module or the impossible frontend failure.
@@ -28,10 +84,10 @@ public union PreludeResult {
     Failed { int line; int column; string message; }
 }
 
-// parse_read_file_result_prelude parses the fixed prelude with the ordinary
-// Kitten lexer and parser. The module id is assigned by the caller.
-public fn parse_read_file_result_prelude() -> PreludeResult {
-    match (lex(read_file_result_prelude())) {
+// parse_prelude parses assembled prelude source with the ordinary Kitten lexer
+// and parser. The module id is assigned by the caller.
+public fn parse_prelude(string source) -> PreludeResult {
+    match (lex(source)) {
         Failure(line, column, message) {
             return PreludeResult.Failed { line = line, column = column, message = message };
         }
@@ -60,38 +116,118 @@ public fn parse_read_file_result_prelude() -> PreludeResult {
     }
 }
 
-// try_read_file_parameter_types returns the builtin's one string parameter.
-public fn try_read_file_parameter_types() -> Type[] {
+// one_string_parameters, two_string_parameters, and
+// string_byte_array_parameters build the builtin parameter arrays.
+fn one_string_parameters() -> Type[] {
     Type[] types = new Type[1];
     types[0] = primitive_type(TypeKind.String, "string");
     return types;
 }
 
-// try_read_file_builtin builds the builtin against the collected prelude type.
-public fn try_read_file_builtin(Type result_type) -> Function {
+fn two_string_parameters() -> Type[] {
+    Type[] types = new Type[2];
+    types[0] = primitive_type(TypeKind.String, "string");
+    types[1] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+fn string_byte_array_parameters() -> Type[] {
+    Type[] types = new Type[2];
+    types[0] = primitive_type(TypeKind.String, "string");
+    types[1] = array_type(primitive_type(TypeKind.Byte, "byte"));
+    return types;
+}
+
+// prelude_builtin builds one late builtin against its collected result type.
+public fn prelude_builtin(string name, Type[] parameter_types, Type result_type, BuiltinKind kind) -> Function {
     return Function {
-        name = "try_read_file",
-        parameter_names = new string[1],
-        parameter_count = 1,
-        parameter_types = try_read_file_parameter_types(),
+        name = name,
+        parameter_names = new string[2],
+        parameter_count = length(parameter_types),
+        parameter_types = parameter_types,
         return_type = result_type,
         module = 0,
-        builtin = BuiltinKind.TryReadFile,
+        builtin = kind,
         variadic = false,
         allowed_types = new Type[1],
         allowed_count = 0
     };
 }
 
-// uses_try_read_file reports whether any module contains a syntactic call whose
-// callee is the identifier try_read_file.
-public fn uses_try_read_file(Module[] modules, int module_count) -> bool {
+// register_prelude_builtins adds each builtin whose call triggered the prelude.
+public fn register_prelude_builtins(Checker checker, PreludeUses uses) -> StepResult {
+    if (uses.read_file) {
+        if (!has(checker.public_types, "ReadFileResult")) {
+            return missing_prelude_type("ReadFileResult");
+        }
+        Function function = prelude_builtin("try_read_file", one_string_parameters(), checker.public_types["ReadFileResult"], BuiltinKind.TryReadFile);
+        checker.builtins["try_read_file"] = function;
+        checker.model.builtins["try_read_file"] = function;
+    }
+    if (uses.write_file) {
+        if (!has(checker.public_types, "FileResult")) {
+            return missing_prelude_type("FileResult");
+        }
+        Function function = prelude_builtin("try_write_file", two_string_parameters(), checker.public_types["FileResult"], BuiltinKind.TryWriteFile);
+        checker.builtins["try_write_file"] = function;
+        checker.model.builtins["try_write_file"] = function;
+    }
+    if (uses.write_bytes) {
+        if (!has(checker.public_types, "FileResult")) {
+            return missing_prelude_type("FileResult");
+        }
+        Function function = prelude_builtin("try_write_bytes", string_byte_array_parameters(), checker.public_types["FileResult"], BuiltinKind.TryWriteBytes);
+        checker.builtins["try_write_bytes"] = function;
+        checker.model.builtins["try_write_bytes"] = function;
+    }
+    if (uses.create_directory) {
+        if (!has(checker.public_types, "FileResult")) {
+            return missing_prelude_type("FileResult");
+        }
+        Function function = prelude_builtin("try_create_directory", one_string_parameters(), checker.public_types["FileResult"], BuiltinKind.TryCreateDirectory);
+        checker.builtins["try_create_directory"] = function;
+        checker.model.builtins["try_create_directory"] = function;
+    }
+    if (uses.remove) {
+        if (!has(checker.public_types, "FileResult")) {
+            return missing_prelude_type("FileResult");
+        }
+        Function function = prelude_builtin("try_remove", one_string_parameters(), checker.public_types["FileResult"], BuiltinKind.TryRemove);
+        checker.builtins["try_remove"] = function;
+        checker.model.builtins["try_remove"] = function;
+    }
+    if (uses.list_directory) {
+        if (!has(checker.public_types, "ListDirectoryResult")) {
+            return missing_prelude_type("ListDirectoryResult");
+        }
+        Function function = prelude_builtin("try_list_directory", one_string_parameters(), checker.public_types["ListDirectoryResult"], BuiltinKind.TryListDirectory);
+        checker.builtins["try_list_directory"] = function;
+        checker.model.builtins["try_list_directory"] = function;
+    }
+    return StepResult.Ok;
+}
+
+fn missing_prelude_type(string name) -> StepResult {
+    return StepResult.Failed {
+        error = CheckError {
+            kind = ErrorKind.InvalidType,
+            file = prelude_module_path(),
+            line = 1,
+            column = 1,
+            message = "the " + name + " prelude was not registered"
+        }
+    };
+}
+
+// uses_callee reports whether any module contains a syntactic call whose callee
+// is the given identifier.
+public fn uses_callee(Module[] modules, int module_count, string callee_name) -> bool {
     int index = 0;
     while (index < module_count) {
         Module module = modules[index];
         int declaration_index = 0;
         while (declaration_index < module.program.declaration_count) {
-            if (declaration_uses_try_read_file(module.program.declarations[declaration_index])) {
+            if (declaration_uses_callee(module.program.declarations[declaration_index], callee_name)) {
                 return true;
             }
             declaration_index++;
@@ -101,12 +237,12 @@ public fn uses_try_read_file(Module[] modules, int module_count) -> bool {
     return false;
 }
 
-// declaration_uses_try_read_file scans a top-level declaration. Only a function
+// declaration_uses_callee scans a top-level declaration. Only a function
 // body can contain an expression.
-fn declaration_uses_try_read_file(Decl declaration) -> bool {
+fn declaration_uses_callee(Decl declaration, string callee_name) -> bool {
     match (declaration) {
         Function(at, visibility, name, parameters, parameter_count, return_type, body) {
-            return statement_uses_try_read_file(body);
+            return statement_uses_callee(body, callee_name);
         }
         Struct(at, visibility, name, fields, field_count) { return false; }
         Enum(at, visibility, name, cases, case_count) { return false; }
@@ -115,13 +251,13 @@ fn declaration_uses_try_read_file(Decl declaration) -> bool {
     }
 }
 
-// statement_uses_try_read_file scans a statement and its children.
-fn statement_uses_try_read_file(Stmt statement) -> bool {
+// statement_uses_callee scans a statement and its children.
+fn statement_uses_callee(Stmt statement, string callee_name) -> bool {
     match (statement) {
         Block(open_brace, statements, statement_count) {
             int index = 0;
             while (index < statement_count) {
-                if (statement_uses_try_read_file(statements[index])) {
+                if (statement_uses_callee(statements[index], callee_name)) {
                     return true;
                 }
                 index++;
@@ -130,32 +266,32 @@ fn statement_uses_try_read_file(Stmt statement) -> bool {
         }
         VarDecl(type_ref, name, initializer) {
             match (initializer) {
-                Present(expression) { return expression_uses_try_read_file(expression); }
+                Present(expression) { return expression_uses_callee(expression, callee_name); }
                 Absent { return false; }
             }
         }
         Expression(expression) {
-            return expression_uses_try_read_file(expression);
+            return expression_uses_callee(expression, callee_name);
         }
         If(at, condition, then_branch, else_branch) {
-            if (expression_uses_try_read_file(condition)) {
+            if (expression_uses_callee(condition, callee_name)) {
                 return true;
             }
-            if (statement_uses_try_read_file(then_branch)) {
+            if (statement_uses_callee(then_branch, callee_name)) {
                 return true;
             }
             match (else_branch) {
-                Present(statement_value) { return statement_uses_try_read_file(statement_value); }
+                Present(statement_value) { return statement_uses_callee(statement_value, callee_name); }
                 Absent { return false; }
             }
         }
         While(at, condition, body) {
-            return expression_uses_try_read_file(condition) || statement_uses_try_read_file(body);
+            return expression_uses_callee(condition, callee_name) || statement_uses_callee(body, callee_name);
         }
         For(at, initializer, condition, increment, body) {
             match (initializer) {
                 Present(statement_value) {
-                    if (statement_uses_try_read_file(statement_value)) {
+                    if (statement_uses_callee(statement_value, callee_name)) {
                         return true;
                     }
                 }
@@ -163,7 +299,7 @@ fn statement_uses_try_read_file(Stmt statement) -> bool {
             }
             match (condition) {
                 Present(expression) {
-                    if (expression_uses_try_read_file(expression)) {
+                    if (expression_uses_callee(expression, callee_name)) {
                         return true;
                     }
                 }
@@ -171,27 +307,27 @@ fn statement_uses_try_read_file(Stmt statement) -> bool {
             }
             match (increment) {
                 Present(expression) {
-                    if (expression_uses_try_read_file(expression)) {
+                    if (expression_uses_callee(expression, callee_name)) {
                         return true;
                     }
                 }
                 Absent { }
             }
-            return statement_uses_try_read_file(body);
+            return statement_uses_callee(body, callee_name);
         }
         Return(at, value) {
             match (value) {
-                Present(expression) { return expression_uses_try_read_file(expression); }
+                Present(expression) { return expression_uses_callee(expression, callee_name); }
                 Absent { return false; }
             }
         }
         Match(at, scrutinee, arms, arm_count) {
-            if (expression_uses_try_read_file(scrutinee)) {
+            if (expression_uses_callee(scrutinee, callee_name)) {
                 return true;
             }
             int index = 0;
             while (index < arm_count) {
-                if (statement_uses_try_read_file(arms[index].body)) {
+                if (statement_uses_callee(arms[index].body, callee_name)) {
                     return true;
                 }
                 index++;
@@ -201,8 +337,8 @@ fn statement_uses_try_read_file(Stmt statement) -> bool {
     }
 }
 
-// expression_uses_try_read_file scans an expression and its children.
-fn expression_uses_try_read_file(Expr expression) -> bool {
+// expression_uses_callee scans an expression and its children.
+fn expression_uses_callee(Expr expression, string callee_name) -> bool {
     match (expression) {
         Integer(node_id, token) { return false; }
         Float(node_id, token) { return false; }
@@ -210,18 +346,18 @@ fn expression_uses_try_read_file(Expr expression) -> bool {
         String(node_id, token) { return false; }
         Identifier(node_id, token) { return false; }
         Unary(node_id, operator, operand, postfix) {
-            return expression_uses_try_read_file(operand);
+            return expression_uses_callee(operand, callee_name);
         }
         Binary(node_id, operator, left, right) {
-            return expression_uses_try_read_file(left) || expression_uses_try_read_file(right);
+            return expression_uses_callee(left, callee_name) || expression_uses_callee(right, callee_name);
         }
         Assign(node_id, operator, target, value) {
-            return expression_uses_try_read_file(target) || expression_uses_try_read_file(value);
+            return expression_uses_callee(target, callee_name) || expression_uses_callee(value, callee_name);
         }
         Call(node_id, open_paren, callee, arguments, argument_count) {
             match (callee) {
                 Identifier(callee_id, token) {
-                    if (token.text == "try_read_file") {
+                    if (token.text == callee_name) {
                         return true;
                     }
                 }
@@ -240,12 +376,12 @@ fn expression_uses_try_read_file(Expr expression) -> bool {
                 NewMap(callee_id, at, map_type) { }
                 Index(callee_id, bracket, target, index) { }
             }
-            if (expression_uses_try_read_file(callee)) {
+            if (expression_uses_callee(callee, callee_name)) {
                 return true;
             }
             int index = 0;
             while (index < argument_count) {
-                if (expression_uses_try_read_file(arguments[index])) {
+                if (expression_uses_callee(arguments[index], callee_name)) {
                     return true;
                 }
                 index++;
@@ -253,12 +389,12 @@ fn expression_uses_try_read_file(Expr expression) -> bool {
             return false;
         }
         Member(node_id, dot, receiver, member) {
-            return expression_uses_try_read_file(receiver);
+            return expression_uses_callee(receiver, callee_name);
         }
         StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
             int index = 0;
             while (index < field_count) {
-                if (expression_uses_try_read_file(fields[index].value)) {
+                if (expression_uses_callee(fields[index].value, callee_name)) {
                     return true;
                 }
                 index++;
@@ -268,7 +404,7 @@ fn expression_uses_try_read_file(Expr expression) -> bool {
         VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
             int index = 0;
             while (index < field_count) {
-                if (expression_uses_try_read_file(fields[index].value)) {
+                if (expression_uses_callee(fields[index].value, callee_name)) {
                     return true;
                 }
                 index++;
@@ -276,11 +412,11 @@ fn expression_uses_try_read_file(Expr expression) -> bool {
             return false;
         }
         NewArray(node_id, at, element, length) {
-            return expression_uses_try_read_file(length);
+            return expression_uses_callee(length, callee_name);
         }
         NewMap(node_id, at, map_type) { return false; }
         Index(node_id, bracket, target, index) {
-            return expression_uses_try_read_file(target) || expression_uses_try_read_file(index);
+            return expression_uses_callee(target, callee_name) || expression_uses_callee(index, callee_name);
         }
     }
 }
