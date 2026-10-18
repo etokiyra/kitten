@@ -170,8 +170,13 @@ and several arguments, including an empty argument and one containing spaces. Ph
 5.2 added `eprint(...)` end to end: the runtime's `ktn_rt_eprint_*` helpers mirror
 the print helpers, the newline helper flushes stdout before the diagnostic and then
 flushes stderr, and the runtime fixture captures stdout and stderr separately through
-both pipelines. Phase 5.3 (`exit`) is next; `try_read_file`, loader read-error
-parity, the driver, and the fixpoint remain future phases.
+both pipelines. Phase 5.3 added `exit(status)` and one shared flush path:
+`ktn_rt_exit` flushes stdout then stderr and terminates, `ktn_rt_fail` routes through
+it while keeping its message and status 1, and the runtime fixture checks stdout,
+stderr, and the exact status, including POSIX low-eight-bit behavior. Phase 5.4
+(`try_read_file` and the predeclared `ReadFileResult` union) is next and is the
+type-system change; loader read-error parity, the driver, and the fixpoint remain
+future phases.
 
 ### Adding a built-in
 
@@ -253,7 +258,8 @@ authorization.
    relative roots are deferred to 4E.2, which needs a SPEC decision; Phase 5.1
    added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point;
    Phase 5.2 added `eprint(...)`, the flushing stderr helpers, and separate-stream
-   runtime coverage).
+   runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,
+   and exact status/stream runtime coverage).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move

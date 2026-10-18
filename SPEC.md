@@ -594,11 +594,6 @@ outcome here.
 - Concurrency.
 - The precise behavior of the garbage collector and runtime, and the concrete
   Boehm GC configuration.
-- A way for a Kitten program to choose its process exit status. `argv()` and
-  `eprint(...)` are now available (Section 18.8), so a program can read its
-  arguments and report a diagnostic on standard error, but it cannot yet select a
-  non-fatal exit status (Section 25.4).
-
 **Parser clarifications deferred**
 
 - Whether an empty `enum` body (`enum E {}`, no cases) and an empty `union` body
@@ -978,10 +973,10 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Seven functions are provided by the language: `print`, `eprint`, `length`,
-`argv`, `has`, `substring`, and `read_file`. All are represented in the semantic
-environment rather than special-cased in expression checking. A user-defined
-top-level declaration with the same name shadows the built-in.
+Eight functions are provided by the language: `print`, `eprint`, `exit`,
+`length`, `argv`, `has`, `substring`, and `read_file`. All are represented in the
+semantic environment rather than special-cased in expression checking. A
+user-defined top-level declaration with the same name shadows the built-in.
 
 **`print`**
 
@@ -1009,6 +1004,27 @@ top-level declaration with the same name shadows the built-in.
   and is flushed at normal process exit, when its buffer fills, or before a fatal
   runtime error. The streams are independent: standard output carries only
   `print` output and standard error carries only `eprint` output.
+
+**`exit`**
+
+- `exit(status)` takes exactly one `int` and terminates the process with that
+  status. It never returns and has type `void`, so it cannot be used as a value.
+  Calling it with no arguments, more than one argument, or a non-`int` argument
+  is an error.
+- Before terminating, it flushes standard output first and then standard error,
+  so output produced before the exit is not lost and appears in that order. No
+  other flushing or cleanup is promised.
+- The status is passed to the host without validation or conversion. On POSIX
+  systems only the low eight bits are observable, so `exit(256)` is observed as
+  status 0 and `exit(-1)` as status 255. Other hosts may interpret the status
+  differently.
+- `exit` **does not change control-flow analysis**. It is an ordinary expression
+  statement to the checker, not a terminating statement: a function with a
+  non-void return type still needs a `return` on every path the conservative
+  analysis accepts, even if an `exit` call precedes that path.
+- The compiler driver conventionally uses status 0 for success, 1 for a
+  compilation or execution failure, and 2 for a usage error. The language does
+  not enforce those values.
 
 **`length`**
 
@@ -1165,7 +1181,7 @@ is **deferred**.
   `ktn_rt_substring`, `ktn_rt_array_new`, `ktn_rt_array_at`,
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
-  `ktn_rt_read_file`, and the built-in print and eprint helpers.
+  `ktn_rt_read_file`, `ktn_rt_exit`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1263,7 +1279,7 @@ targets the host platform; cross-compilation and Windows are **not** supported.
    and there are no string/number conversions or code-point operations.
 4. The runtime provides GC initialization, struct allocation, string
    concatenation/append/equality/length/indexing/ranges, dynamic arrays, maps,
-   the process argument vector, and print and eprint helpers.
+   the process argument vector, print and eprint helpers, and process exit.
 5. The entry point must be a zero-parameter, void-returning `main`; the generated
    C entry point captures `argc`/`argv` for `argv()` before calling it.
 6. Default `build` output is the source base name in the current directory.
@@ -2082,11 +2098,10 @@ uninitialized token is observed, and no slot is written twice.
 - **Embedded NUL bytes.** A Kitten string cannot contain a NUL byte
   (Section 20.1), so a source file containing one is truncated at that byte by
   `read_file`; the reference lexer would continue past it.
-- **No chosen exit status.** The runtime exposes no way for a program to select a
-  nonzero exit status; the only nonzero exit is a fatal runtime error. The lexer
-  driver still reads the fixed relative path `input.txt` and reports a lexical
-  error on standard output, although the language now provides `argv()` and
-  `eprint(...)` (Section 18.8). Exit status is **deferred** (Section 16).
+- **Fixed driver input and output.** The lexer driver still reads the fixed
+  relative path `input.txt` and reports a lexical error on standard output,
+  although the language now provides `argv()`, `eprint(...)`, and `exit(...)`
+  (Section 18.8). Those driver capabilities are separate from the lexer itself.
 
 None of these differences changes the language: they are properties of this
 experimental implementation, and the reference lexer remains authoritative.
@@ -2555,8 +2570,8 @@ resolved function. The built-ins are expanded: `print` and `eprint` become comma
 expressions of the runtime helpers for each argument's type, separated by the
 space helper and terminated by the newline helper, which has type void and is the
 built-in's own type; `length` becomes the array, map, or string length helper
-chosen by the argument's type; and `has`, `substring`, `read_file`, and `argv` are
-one runtime call each. Arguments
+chosen by the argument's type; and `has`, `substring`, `read_file`, `argv`, and
+`exit` are one runtime call each. Arguments
 are rendered left to right and the first failure among them stops the call, so a call
 is never emitted with a hole where an argument failed. The built-ins whose argument
 is a container choose their length or membership helper from the argument's type, and

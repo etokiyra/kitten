@@ -63,6 +63,7 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         NotBuiltin { return "-"; }
         Print { return "Print"; }
         Eprint { return "Eprint"; }
+        Exit { return "Exit"; }
         Length { return "Length"; }
         ReadFile { return "ReadFile"; }
         Argv { return "Argv"; }

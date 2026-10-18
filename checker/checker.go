@@ -290,6 +290,12 @@ func (c *checker) builtinFunctions() map[string]*Function {
 			Variadic:     true,
 			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
 		},
+		"exit": {
+			Name:           "exit",
+			ParameterTypes: []*Type{IntType},
+			ReturnType:     VoidType,
+			Builtin:        BuiltinExit,
+		},
 		"length": {
 			Name:       "length",
 			ReturnType: IntType,

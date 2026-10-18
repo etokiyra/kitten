@@ -45,6 +45,9 @@ const (
 	// BuiltinEprint is the variadic standard-error writer.
 	BuiltinEprint
 
+	// BuiltinExit terminates the process with an int status.
+	BuiltinExit
+
 	// BuiltinLength returns the length of an array.
 	BuiltinLength
 

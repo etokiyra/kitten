@@ -63,6 +63,16 @@ func callCases() []callCase {
 }
 `,
 	}, {
+		description: "exit with an int expression",
+		root: `fn stop(int code) {
+    exit(code);
+}
+fn main() {
+    stop(1 + 2);
+    exit(-1);
+}
+`,
+	}, {
 		description: "argv built-in",
 		root: `fn main() {
     print(length(argv()));

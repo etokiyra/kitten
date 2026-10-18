@@ -262,6 +262,14 @@ int64_t ktn_rt_map_length(const ktn_map *map);
 _Noreturn void ktn_rt_fail(const char *message);
 
 /*
+ * Flushes standard output and then standard error and terminates the process
+ * with status. It does not validate or convert the status: on POSIX systems only
+ * the low eight bits are observable, so 256 is observed as 0 and -1 as 255. The
+ * failing runtime path uses the same flush sequence before exiting with status 1.
+ */
+_Noreturn void ktn_rt_exit(int64_t status);
+
+/*
  * Reads the entire contents of the regular file at path into a new,
  * GC-managed string and returns it. An empty file yields the empty string.
  *

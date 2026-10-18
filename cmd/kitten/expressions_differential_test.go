@@ -791,6 +791,15 @@ func expressionCases() []expressionCase {
 }
 `,
 	}, {
+		description: "exit calls in expression position",
+		root: `fn stop(int code) {
+    exit(code);
+}
+fn main() {
+    stop(1 + 2);
+}
+`,
+	}, {
 		description: "expressions around control flow",
 		root: `fn main() {
     int i = 0;

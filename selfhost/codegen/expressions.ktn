@@ -712,6 +712,9 @@ fn call_expression(ExpressionContext context, Expr callee, Expr[] arguments, int
     if (builtin == BuiltinKind.Eprint) {
         return eprint_expression(context, arguments, argument_count);
     }
+    if (builtin == BuiltinKind.Exit) {
+        return builtin_call_expression(context, callee, exit_function(), "exit", arguments, argument_count, 1);
+    }
     if (builtin == BuiltinKind.Length) {
         return length_expression(context, callee, arguments, argument_count);
     }

@@ -86,6 +86,9 @@ const (
 	// FailFunction reports a fatal runtime error and terminates the program.
 	FailFunction = "ktn_rt_fail"
 
+	// ExitFunction terminates the process with a chosen status after flushing.
+	ExitFunction = "ktn_rt_exit"
+
 	// PrintIntFunction, PrintFloatFunction, PrintBoolFunction, and
 	// PrintStringFunction write one value of the corresponding primitive type.
 	PrintIntFunction    = "ktn_rt_print_int"

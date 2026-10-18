@@ -154,6 +154,16 @@ func unitCases() []unitCase {
 }
 `,
 	}, {
+		description: "exit in a whole unit",
+		root: `fn stop(int code) {
+    exit(code);
+}
+fn main() {
+    stop(1 + 2);
+    exit(-1);
+}
+`,
+	}, {
 		description: "a main whose body does something",
 		root: `fn main() {
     int index = 0;

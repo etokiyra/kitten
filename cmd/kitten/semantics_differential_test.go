@@ -182,6 +182,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "Print"
 	case checker.BuiltinEprint:
 		return "Eprint"
+	case checker.BuiltinExit:
+		return "Exit"
 	case checker.BuiltinLength:
 		return "Length"
 	case checker.BuiltinReadFile:

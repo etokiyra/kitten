@@ -262,6 +262,7 @@ public enum BuiltinKind {
     NotBuiltin,
     Print,
     Eprint,
+    Exit,
     Length,
     ReadFile,
     Argv,
@@ -517,6 +518,18 @@ public fn builtin_functions() -> map[string]Function {
         allowed_types = allowed_print_types(),
         allowed_count = 4
     };
+    builtins["exit"] = Function {
+        name = "exit",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = exit_parameter_types(),
+        return_type = primitive_type(TypeKind.Void, "void"),
+        module = 0,
+        builtin = BuiltinKind.Exit,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
     builtins["length"] = Function {
         name = "length",
         parameter_names = new string[1],
@@ -591,11 +604,18 @@ fn allowed_print_types() -> Type[] {
 }
 
 // read_file_parameter_types returns the parameter types of read_file. The
-// reference carries them for every non-variadic built-in; only read_file has
-// any, because the others are checked by dedicated rules.
+// reference carries them for every non-variadic built-in; only read_file and exit
+// have any, because the others are checked by dedicated rules.
 fn read_file_parameter_types() -> Type[] {
     Type[] types = new Type[1];
     types[0] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+// exit_parameter_types returns the parameter types of exit.
+fn exit_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.Int, "int");
     return types;
 }
 

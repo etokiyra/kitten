@@ -55,6 +55,9 @@ public fn init_function() -> string { return "ktn_rt_init"; }
 public fn set_args_function() -> string { return "ktn_rt_set_args"; }
 public fn argv_function() -> string { return "ktn_rt_argv"; }
 
+// exit_function terminates the process after the runtime flushes both streams.
+public fn exit_function() -> string { return "ktn_rt_exit"; }
+
 // string_concat_function and string_equal_function are the runtime helpers a
 // string "+", "==", or "!=" becomes. A Kitten string is a length-carrying
 // pointer, so "+" is a concatenation and "==" compares content rather than

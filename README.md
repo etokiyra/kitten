@@ -347,14 +347,15 @@ It is also the only way a self-hosting claim means anything.
 | --- | --- |
 | Lexer | 772 inputs |
 | Parser + AST | 262 inputs |
-| Checker + semantic model | 1,866 inputs, byte-identical |
+| Checker + semantic model | 1,873 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 80 whole units, 3,060 lines |
+| Entry point and translation-unit assembly | 83 whole units, 3,122 lines |
 | Module loader | 20 targeted trees, 14 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
-| Generated programs executed | 31 program runs under GCC and Clang, outputs compared |
+| `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
+| Generated programs executed | 43 program runs under GCC and Clang, outputs compared |
 
 </details>
 
@@ -369,8 +370,10 @@ parser, checker, and generator. Phase 5.1 added the `argv()` built-in end to end
 both pipelines, with the generated C entry point capturing the process argument
 vector before user `main` runs. Phase 5.2 added `eprint(...)`, which writes
 diagnostics to standard error with the same formatting as `print`; the runtime
-fixture captures stdout and stderr separately through both pipelines. Two loader
-limits remain: a missing or unreadable file
+fixture captures stdout and stderr separately through both pipelines. Phase 5.3
+added `exit(status)`, which flushes stdout and then stderr before terminating; the
+runtime fixture checks stdout, stderr, and the exact status, including POSIX
+low-eight-bit behavior. Two loader limits remain: a missing or unreadable file
 is still fatal because SPEC.md defers recoverable file input, and a relative root needs
 a working-directory primitive. Those are the 4E.2 decision and the driver phase, not
 open generator questions.

@@ -243,6 +243,7 @@ func checkerCorpus(t *testing.T) []checkerCase {
 	add("map operations", "fn main() {\n    map[string]int table = new map[string]int;\n    table[\"a\"] = 1;\n    table[\"a\"] += 2;\n    int v = table[\"a\"];\n    bool present = has(table, \"a\");\n    int n = length(table);\n}\n")
 	add("string operations", "fn main() {\n    string s = \"hello\";\n    int n = length(s);\n    int b = s[0];\n    string t = substring(s, 1, 2);\n    bool same = s == \"hello\";\n}\n")
 	add("builtins", "fn main() {\n    print(1, 2.5, true, \"x\");\n    eprint(1, 2.5, true, \"x\");\n    print(length(new int[1]));\n    print(read_file(\"x\") == \"\");\n    print(length(argv()), argv()[0]);\n}\n")
+	add("exit built-in", "fn stop(int code) {\n    exit(code);\n    exit(1 + 2);\n}\nfn main() {\n}\n")
 	add("control flow", "fn main() {\n    int i = 0;\n    if (i == 0) {\n        i = 1;\n    } else if (i == 1) {\n        i = 2;\n    } else {\n        i = 3;\n    }\n    while (i > 0) {\n        i--;\n    }\n    for (int j = 0; j < 3; j++) {\n        i += j;\n    }\n    for (;;) {\n    }\n}\n")
 	add("nested blocks and shadowing", "fn main() {\n    int x = 1;\n    {\n        int x = 2;\n        {\n            int x = 3;\n        }\n    }\n    if (true) {\n        int x = 4;\n    }\n}\n")
 	add("forward references", "fn main() {\n    print(later());\n    Point p = make();\n}\nfn later() -> int {\n    return 1;\n}\nstruct Point { int x; }\nfn make() -> Point {\n    return Point { x = 1 };\n}\n")
@@ -367,6 +368,12 @@ func checkerCorpus(t *testing.T) []checkerCase {
 		"fn f() { string text = argv(); }\n",
 		"fn f() { eprint(); }\n",
 		"fn f() { eprint(new int[1]); }\n",
+		"fn f() { exit(); }\n",
+		"fn f() { exit(1, 2); }\n",
+		"fn f() { exit(\"x\"); }\n",
+		"fn f() { exit(1.5); }\n",
+		"fn f() { exit(true); }\n",
+		"fn f() -> int { exit(1); }\n",
 
 		// Indexing.
 		"fn f() { int x = 1; int y = x[0]; }\n",

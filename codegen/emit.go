@@ -508,6 +508,12 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		return g.printExpression(expression)
 	case checker.BuiltinEprint:
 		return g.eprintExpression(expression)
+	case checker.BuiltinExit:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", runtime.ExitFunction, argument), nil
 	case checker.BuiltinLength:
 		argumentType, err := g.expressionType(expression.Arguments[0])
 		if err != nil {

@@ -38,17 +38,31 @@
 #include <string.h>
 
 /*
+ * Flushes both output streams in the order a process exit must preserve: stdout
+ * first, then stderr. Every terminating path shares this sequence.
+ */
+static void ktn_rt_flush_streams(void) {
+    fflush(stdout);
+    fflush(stderr);
+}
+
+/*
  * Reports an unrecoverable runtime error to standard error and terminates the
  * program. Used for conditions that cannot be recovered from, such as an
  * out-of-range array index, an allocation that would overflow, or inspecting a
  * null union reference.
  */
 void ktn_rt_fail(const char *message) {
-    fflush(stdout);
+    ktn_rt_flush_streams();
     fputs("kitten: ", stderr);
     fputs(message, stderr);
     fputc('\n', stderr);
-    exit(1);
+    ktn_rt_exit(1);
+}
+
+void ktn_rt_exit(int64_t status) {
+    ktn_rt_flush_streams();
+    exit((int)status);
 }
 
 /*
@@ -534,5 +548,5 @@ void ktn_rt_eprint_newline(void) {
     /* Keep output written by earlier print calls ahead of this diagnostic. */
     fflush(stdout);
     fputc('\n', stderr);
-    fflush(stderr);
+    ktn_rt_flush_streams();
 }
