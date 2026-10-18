@@ -240,10 +240,12 @@ buffer on `ERANGE`. Phase 8.7 added the compiler-reserved `<runtime>` synthetic
 module and its harness-only injection hook, runtime-only intrinsics, C lowering,
 and the MIT `runtime/ktn/memory.ktn` helper source. The primitive checklist is
 complete. Phase 9.0 produced the design-only `proposals/purr-in-kitten.md` for
-rewriting `purr`, `purr new`, and `purr.toml`; it is **PROPOSED, not adopted**,
-and added no code. The next implementation candidates are the proposed
-environment/capture/temp-directory primitives or the native-backend design
-slice. The Kitten loader/driver can now accept relative roots in a separate
+rewriting `purr`, `purr new`, and `purr.toml`; it is **ADOPTED as the plan;
+implementation in progress**. Phase 9.1 implemented its first step, the `try_getenv`
+built-in and predeclared `EnvResult` union, in both pipelines and the MIT C
+runtime. The next implementation step is 9.2's `try_find_program` and
+`try_run_capture`, followed by temp directories, TOML, `purr new`, and `purr`
+build/run parity. The Kitten loader/driver can now accept relative roots in a separate
 later change. File writing now unblocks `purr new` and process launch makes
 `purr run`-style tooling writable in Kitten, both as separate later phases. A
 SPEC cleanup of Go/C-flavored wording remains a later candidate. The native

@@ -1145,6 +1145,15 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_getenv call and EnvResult match",
+		root: `fn main() {
+    match (try_getenv("PATH")) {
+        Set(value) { print(value); }
+        Unset { print("unset"); }
+    }
+}
+`,
+	}, {
 		description: "try_current_directory call and result match",
 		root: `fn main() {
     match (try_current_directory()) {

@@ -1,12 +1,13 @@
 # `purr` written in Kitten
 
-> **PROPOSED, not adopted.**
+> **ADOPTED (plan); implementation in progress.**
 >
-> This is a design-only proposal. It changes no compiler, checker, generator,
-> loader, runtime, self-hosted source, or test code. No `purr` command described
-> here is implemented unless explicitly marked **already implemented**.
+> The human approved this plan on 2026-10-18. Implementation proceeds one commit
+> per step in the order below. Only the `try_getenv`/`EnvResult` step is
+> implemented so far; no `purr` command described here is implemented unless
+> explicitly marked **already implemented**.
 >
-> Date: 2026-10-18. Starting commit: `bbc0343`.
+> Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
 > Scope: the `purr` binary's structure, `purr build`, `purr run`, `purr new`,
 > the first `purr.toml` subset, and the project layout. `add`, `install`, `test`,
@@ -45,6 +46,40 @@
 - Until Goal 2 lands, the Kitten `purr` still invokes a C compiler and links
   libgc. That is an explicit temporary build requirement, not part of the final
   zero-dependency design.
+
+### 1.1 Approved answers and implementation status
+
+The human approved the plan and answered the open questions:
+
+1. The new `purr` may list `new` in help. The Go CLI's help is not frozen;
+   parity compares everything except the help command list, which gets its own
+   pinned text.
+2. The strict package-name and version grammar in Section 7 is accepted.
+3. Library builds report a documented, clear error for now. No no-entry-point
+   codegen mode is added yet.
+4. Project discovery is the current directory only for now; parent search may be
+   added later.
+5. The capture policy is accepted: stdin is `/dev/null`, each stream has a
+   16 MiB cap, and a NUL in captured output is an error.
+6. `purr new` does not run `git init`.
+7. Generated projects have no license file or prompt; their files belong to the
+   user.
+8. The repository-root `purr.ktn` layout is accepted.
+
+Implementation status:
+
+| Step | Status |
+|---|---|
+| 1. `try_getenv` / `EnvResult` | **implemented in 9.1** |
+| 2. `try_find_program` / `try_run_capture` | proposed, next |
+| 3. `try_create_temp_directory` | proposed |
+| 4. Embedded runtime generation | proposed |
+| 5. TOML subset parser | proposed |
+| 6. `purr new` | proposed |
+| 7. Kitten `purr` source-mode build/run | proposed |
+| 8. Project mode | proposed |
+| 9. Library object mode | proposed, deferred |
+| 10. Full parity suite / Go CLI freeze | proposed |
 
 ## 2. Audit: the current Go CLI is the parity specification
 
@@ -162,12 +197,12 @@ the prelude/reserved-name machinery where a result union is predeclared, and
 all differential corpora. Each item below is a separate proposed feature commit,
 not part of the design-only phase.
 
-### 3.1 `try_getenv`
+### 3.1 `try_getenv` (implemented in 9.1)
 
 **Needed for:** `purr build`/`run` discovering `CC`; `purr` reading `PATH` and
 `TMPDIR`; project/tool configuration later.
 
-**Proposal.**
+**Implemented shape.**
 
 ```text
 try_getenv(string name) -> EnvResult
@@ -175,33 +210,37 @@ try_getenv(string name) -> EnvResult
 
 ```kitten
 union EnvResult {
-    Ok { string value; }
-    Missing
+    Set { string value; }
+    Unset
 }
 ```
 
-`Missing` is separate from `Ok { value = "" }`. The name is passed as stored;
-Kitten strings cannot contain NUL. Failure does not exist at this level; a
-missing variable is data.
+`Unset` is separate from `Set { value = "" }`. An empty name, or a name
+containing `=`, is `Unset`, mirroring `getenv` returning no match. The value is
+a fresh GC-managed copy of the OS bytes, including bytes above `0x7F`; NUL cannot
+occur because Kitten strings cannot contain it. There is no setter; `try_run`
+continues to inherit the environment unchanged.
 
 Runtime ABI:
 
 ```c
-bool ktn_rt_try_getenv(const ktn_string *name,
-                       const ktn_string **value,
-                       bool *present);
+bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value);
 ```
 
-On success `*value` is a fresh GC-managed copy and `*present` reports whether
-the variable exists. A null result slot is a fatal runtime error.
+It returns true and stores the copied value when the variable exists, including
+an empty value, and false when unset.
 
-Checker/generator impact:
+Checker/generator impact as implemented:
 
-- predeclared `EnvResult` with `EnvResult` reserved in every program, injected
-  on use through the existing prelude table after the current fixed order;
-- `try_getenv` registered late like the other prelude builtins;
-- one non-static generated helper, `ktn_prelude_<N>_try_getenv`;
-- C helper returns `EnvResult.Ok` or `EnvResult.Missing`.
+- predeclared `EnvResult` is reserved in every program and appended on use after
+  `CurrentDirectoryResult` in the single `<prelude>` module;
+- `try_getenv` is registered late like the other prelude builtins;
+- one non-static helper, `ktn_prelude_<N>_try_getenv`, builds `Set` or `Unset`;
+- the C runtime uses `getenv` and copies before returning.
+
+The future native runtime must read the environment from the process's initial
+stack (`envp`), because there is no libc `getenv` there. That is not implemented
+now.
 
 **Blocks:** `build` and `run` (compiler discovery); `new` does not need it.
 
@@ -899,7 +938,7 @@ proposal.
 - **No Go reference for `new`/TOML.** Independent expectations are required;
   the design must not pretend byte parity where none exists.
 
-## 16. Questions only the human can answer
+## 16. Open questions (approved answers are recorded in Section 1.1)
 
 1. During parity, should global `purr help` stay byte-identical to the Go CLI
    (and omit `new`), or may it list `new` and make help an approved parity

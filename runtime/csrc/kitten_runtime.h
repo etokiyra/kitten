@@ -541,6 +541,15 @@ bool ktn_rt_try_current_directory(const ktn_string **path,
                                   const ktn_string **message);
 
 /*
+ * Reads one environment variable. Returns true and stores a fresh GC-managed
+ * copy of its value when the variable exists, including when the value is the
+ * empty string. Returns false when the variable is unset, the name is empty, or
+ * the name contains '='. PWD is an ordinary variable here; no libc ordering or
+ * shell expansion is involved.
+ */
+bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

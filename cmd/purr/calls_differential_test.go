@@ -320,6 +320,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "environment result through call arguments",
+		root: `fn inspect(EnvResult result) -> int {
+    match (result) {
+        Set(value) { return length(value); }
+        Unset { return -1; }
+    }
+}
+fn main() {
+    print(inspect(try_getenv("PATH")));
+}
+`,
+	}, {
 		description: "current directory result through call arguments",
 		root: `fn inspect(CurrentDirectoryResult result) -> int {
     match (result) {

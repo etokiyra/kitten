@@ -422,6 +422,37 @@ fn main() {
     print(try_current_directory());
 }
 `)
+	add("try_getenv and EnvResult", `fn describe(EnvResult result) -> int {
+    match (result) {
+        Set(value) { return length(value); }
+        Unset { return -1; }
+    }
+}
+fn main() {
+    EnvResult direct_set = EnvResult.Set { value = "x" };
+    EnvResult direct_unset = EnvResult.Unset;
+    print(describe(try_getenv("PATH")), describe(direct_set), describe(direct_unset));
+}
+`)
+	add("try_getenv only", `fn main() {
+    match (try_getenv("PATH")) {
+        Set(value) { print(value); }
+        Unset { print("unset"); }
+    }
+}
+`)
+	add("try_getenv with try_run", `fn main() {
+    try_getenv("PATH");
+    try_run("/bin/true", new string[0]);
+}
+`)
+	add("shadowed try_getenv still injects its prelude", `fn try_getenv(string name) -> int {
+    return 1;
+}
+fn main() {
+    print(try_getenv("x"));
+}
+`)
 	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
     return 1;
 }
@@ -674,6 +705,14 @@ fn main() {
 		"fn f() { try_current_directory(1); }\n",
 		"fn f() { try_current_directory(\"x\"); }\n",
 		"fn f() { try_current_directory(1, 2); }\n",
+		"fn f() { match (try_getenv(\"x\")) { Set(value) { } } }\n",
+		"fn f() { try_getenv(); }\n",
+		"fn f() { try_getenv(1); }\n",
+		"fn f() { try_getenv(\"x\", \"y\"); }\n",
+		"fn EnvResult() {}\n",
+		"struct EnvResult {}\n",
+		"enum EnvResult { A }\n",
+		"union EnvResult { A }\n",
 		"fn CurrentDirectoryResult() {}\n",
 		"struct CurrentDirectoryResult {}\n",
 		"enum CurrentDirectoryResult { A }\n",
@@ -855,6 +894,17 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_getenv from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_getenv("PATH")));
+}
+`, `public fn classify(EnvResult result) -> int {
+    match (result) {
+        Set(value) { return length(value); }
+        Unset { return -1; }
     }
 }
 `)

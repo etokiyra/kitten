@@ -1036,11 +1036,11 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Twenty functions are provided by the language: `print`, `eprint`, `exit`,
+Twenty-one functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
-`try_list_directory`, `try_run`, `try_current_directory`, `int_from_byte`,
-`byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
+`try_list_directory`, `try_run`, `try_current_directory`, `try_getenv`,
+`int_from_byte`, `byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1199,33 +1199,41 @@ the same name shadows the built-in.
       Ok { string path; }
       Failed { string message; }
   }
+
+  union EnvResult {
+      Set { string value; }
+      Unset
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
   `FileResult.Ok`. `FileResult.Failed { message = ... }`,
   `ListDirectoryResult.Ok { entries = ... }`, `ListDirectoryResult.Failed`,
   `RunResult.Ok { status = ... }`, `RunResult.Failed { message = ... }`,
-  `CurrentDirectoryResult.Ok { path = ... }`, and
-  `CurrentDirectoryResult.Failed { message = ... }` are ordinary variant
+  `CurrentDirectoryResult.Ok { path = ... }`,
+  `CurrentDirectoryResult.Failed { message = ... }`,
+  `EnvResult.Set { value = ... }`, and `EnvResult.Unset` are ordinary variant
   constructions.
-- The five predeclared union names `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, `RunResult`, and `CurrentDirectoryResult` are reserved
-  in **every** program: any user top-level declaration with one of those names
-  is an error, whether or not the corresponding implicit type is introduced.
+- The six predeclared union names `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, and `EnvResult`
+  are reserved in **every** program: any user top-level declaration with one of
+  those names is an error, whether or not the corresponding implicit type is
+  introduced.
 - `file` and `directory` built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, with each
-  union's fixed source text concatenated directly (each block ends with its
-  closing brace and newline). A program using
+  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
+  with each union's fixed source text concatenated directly (each block ends
+  with its closing brace and newline). A program using
   only `try_read_file` therefore gets exactly the existing `ReadFileResult`
   prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
   `try_read_file`: an identifier call named `try_write_file` (even if shadowed
   by a user function) introduces `FileResult` and its generated helper; the same
-  applies to the other new built-ins, including `try_run`/`RunResult` and
-  `try_current_directory`/`CurrentDirectoryResult`. A program with no new built-in and no
+  applies to the other new built-ins, including `try_run`/`RunResult`,
+  `try_current_directory`/`CurrentDirectoryResult`, and
+  `try_getenv`/`EnvResult`. A program with no new built-in and no
   `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
@@ -1365,6 +1373,30 @@ the same name shadows the built-in.
   with `getwd: no such file or directory`.
 - Calling it with any argument is an error. Its return type is
   `CurrentDirectoryResult`, and it is not variadic.
+
+**`try_getenv`**
+
+- `try_getenv(name)` takes exactly one `string` and returns `EnvResult`:
+
+  ```kitten
+  union EnvResult {
+      Set { string value; }
+      Unset
+  }
+  ```
+
+- It reads the process environment. A variable set to the empty string returns
+  `Set { value = "" }`; a variable that is not present returns `Unset`. An empty
+  name, or a name containing `=`, returns `Unset`, matching `getenv` returning
+  no match. The value is copied as the bytes stored by the OS, including bytes
+  above `0x7F`, and is a fresh GC-managed string. NUL cannot occur because
+  Kitten strings cannot contain it.
+- There is no setter: `setenv` is not provided, and `try_run` continues to
+  inherit the environment unchanged. The future native runtime must read the
+  environment from the process's initial stack (`envp`), because there is no
+  libc `getenv` in that runtime.
+- Calling it with the wrong number of arguments or a non-`string` argument is
+  an error. Its return type is `EnvResult`, and it is not variadic.
 
 **`int_from_byte`**
 
@@ -1523,7 +1555,7 @@ is **deferred**.
   `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_try_write_file`,
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
   `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
-  `ktn_rt_try_current_directory`, `ktn_rt_exit`, the
+  `ktn_rt_try_current_directory`, `ktn_rt_try_getenv`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -2051,6 +2083,12 @@ loader prefix.
   absolute current-directory path. It ignores `$PWD`, has no `chdir`
   counterpart, grows its buffer on `ERANGE`, and reports a removed directory as
   `getwd: no such file or directory`. The path is a fresh GC-managed string.
+- `try_getenv(name) -> EnvResult` returns the environment value as `Set`, or
+  `Unset` for an absent variable, an empty name, or a name containing `=`. The
+  empty-string value is distinct from `Unset`. Environment values are copied
+  bytes and are not modifiable through this API; `try_run` inherits the
+  environment unchanged. The future native runtime must read `envp` from the
+  process's initial stack.
 
 Current-working-directory changes, recursive removal, atomic replacement, and
 file metadata beyond the operations above are **not** implemented.
@@ -2166,6 +2204,9 @@ The following are **not** implemented and must not be assumed:
     `RunResult.Ok`; only a start failure is `Failed`.
 13. `try_current_directory` returns the kernel's absolute current-directory
     path, ignores `$PWD`, and has no `chdir` counterpart.
+14. `try_getenv` returns `EnvResult.Set` for present variables (including an
+    empty value) and `EnvResult.Unset` otherwise; it has no setter and leaves
+    the environment unchanged.
 
 ---
 

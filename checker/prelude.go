@@ -42,6 +42,12 @@ const (
     Failed { string message; }
 }
 `
+
+	envResultPrelude = `public union EnvResult {
+    Set { string value; }
+    Unset
+}
+`
 )
 
 // preludeModulePath and runtimeModulePath identify the two compiler-reserved
@@ -75,12 +81,13 @@ type preludeUses struct {
 	listDirectory    bool
 	run              bool
 	currentDirectory bool
+	environment      bool
 }
 
 // any reports whether any prelude built-in is used.
 func (u preludeUses) any() bool {
 	return u.readFile || u.writeFile || u.writeBytes || u.createDirectory ||
-		u.remove || u.listDirectory || u.run || u.currentDirectory
+		u.remove || u.listDirectory || u.run || u.currentDirectory || u.environment
 }
 
 // preludeSource assembles the fixed prelude source for the used built-ins. The
@@ -102,6 +109,9 @@ func preludeSource(uses preludeUses) string {
 	}
 	if uses.currentDirectory {
 		source.WriteString(currentDirectoryResultPrelude)
+	}
+	if uses.environment {
+		source.WriteString(envResultPrelude)
 	}
 	return source.String()
 }
@@ -125,7 +135,7 @@ func parseSyntheticModule(path, source string) (*parser.Module, error) {
 	return &parser.Module{Path: path, Program: program}, nil
 }
 
-// scanPreludeUses scans every module for syntactic calls to the eight prelude
+// scanPreludeUses scans every module for syntactic calls to the nine prelude
 // built-ins. It is deliberately syntactic: a user function with one of these
 // names may cause the prelude to be injected unused, but helpers are non-static
 // and no semantic rule depends on the false positive.
@@ -139,6 +149,7 @@ func scanPreludeUses(modules []*parser.Module) preludeUses {
 		listDirectory:    usesCallee(modules, "try_list_directory"),
 		run:              usesCallee(modules, "try_run"),
 		currentDirectory: usesCallee(modules, "try_current_directory"),
+		environment:      usesCallee(modules, "try_getenv"),
 	}
 }
 
@@ -304,6 +315,7 @@ var preludeReservedNames = map[string]bool{
 	"ListDirectoryResult":    true,
 	"RunResult":              true,
 	"CurrentDirectoryResult": true,
+	"EnvResult":              true,
 }
 
 // registerPreludeBuiltins adds the built-ins whose calls triggered the prelude.
@@ -326,6 +338,7 @@ func (c *checker) registerPreludeBuiltins(uses preludeUses) error {
 		{uses.listDirectory, "try_list_directory", []*Type{StringType}, "ListDirectoryResult", BuiltinTryListDirectory},
 		{uses.run, "try_run", []*Type{StringType, c.arrayType(StringType)}, "RunResult", BuiltinTryRun},
 		{uses.currentDirectory, "try_current_directory", []*Type{}, "CurrentDirectoryResult", BuiltinTryCurrentDirectory},
+		{uses.environment, "try_getenv", []*Type{StringType}, "EnvResult", BuiltinTryGetenv},
 	}
 	for _, entry := range registrations {
 		if !entry.used {

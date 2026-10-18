@@ -127,6 +127,9 @@ const (
 	// TryCurrentDirectoryFunction returns the absolute current directory.
 	TryCurrentDirectoryFunction = "ktn_rt_try_current_directory"
 
+	// TryGetenvFunction reads one environment variable.
+	TryGetenvFunction = "ktn_rt_try_getenv"
+
 	// Runtime-module raw-memory and syscall helpers.
 	RawLoad8Function   = "ktn_rt_raw_load8"
 	RawStore8Function  = "ktn_rt_raw_store8"

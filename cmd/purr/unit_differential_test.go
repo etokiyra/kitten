@@ -790,6 +790,7 @@ fn main() {
     try_list_directory("f");
     try_run("/bin/true", new string[0]);
     try_current_directory();
+    try_getenv("PATH");
 }
 `,
 	}, {
@@ -886,6 +887,39 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_getenv with EnvResult",
+		root: `fn main() {
+    match (try_getenv("PATH")) {
+        Set(value) { print(value); }
+        Unset { print("unset"); }
+    }
+}
+`,
+	}, {
+		description: "direct EnvResult construction",
+		root: `fn main() {
+    try_getenv("PATH");
+    EnvResult set = EnvResult.Set { value = "x" };
+    EnvResult unset = EnvResult.Unset;
+    match (set) { Set(value) { print(value); } Unset { print("unset"); } }
+    match (unset) { Set(value) { print(value); } Unset { print("unset"); } }
+}
+`,
+	}, {
+		description: "try_getenv from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_getenv("PATH")));
+}
+`,
+		imported: `public fn classify(EnvResult result) -> int {
+    match (result) {
+        Set(value) { return length(value); }
+        Unset { return -1; }
+    }
+}
+`,
+	}, {
 		description: "a shadowed try_write_file still emits the prelude helper",
 		root: `fn try_write_file(string path, string text) -> int {
     return 1;
@@ -910,6 +944,15 @@ fn main() {
 }
 fn main() {
     print(try_current_directory());
+}
+`,
+	}, {
+		description: "a shadowed try_getenv still emits the prelude helper",
+		root: `fn try_getenv(string name) -> int {
+    return 1;
+}
+fn main() {
+    print(try_getenv("x"));
 }
 `,
 	}, {

@@ -81,6 +81,9 @@ const (
 	// BuiltinTryCurrentDirectory returns the absolute current directory.
 	BuiltinTryCurrentDirectory
 
+	// BuiltinTryGetenv reads one environment variable.
+	BuiltinTryGetenv
+
 	// BuiltinRawLoad8, BuiltinRawStore8, BuiltinRawLoad64, and
 	// BuiltinRawStore64 are runtime-module memory intrinsics.
 	BuiltinRawLoad8

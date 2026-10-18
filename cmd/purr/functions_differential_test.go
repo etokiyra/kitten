@@ -486,6 +486,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "EnvResult parameters",
+		root: `fn describe(EnvResult result) -> int {
+    match (result) {
+        Set(value) { return length(value); }
+        Unset { return -1; }
+    }
+}
+fn main() {
+    print(describe(try_getenv("PATH")));
+}
+`,
+	}, {
 		description: "CurrentDirectoryResult parameters",
 		root: `fn describe(CurrentDirectoryResult result) -> int {
     match (result) {

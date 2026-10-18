@@ -348,7 +348,11 @@ fn emit_all_prelude_helper_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(run_helper)) {
         return run_helper;
     }
-    return emit_current_directory_prelude_helper_section(emitter);
+    EmitStep current_directory_helper = emit_current_directory_prelude_helper_section(emitter);
+    if (!emit_ok(current_directory_helper)) {
+        return current_directory_helper;
+    }
+    return emit_env_prelude_helper_section(emitter);
 }
 
 // emit_read_file_prelude_helper_section emits the helper that turns the
@@ -662,6 +666,58 @@ fn emit_current_directory_prelude_helper_section(DeclarationEmitter emitter) -> 
     EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
     if (!emit_ok(failed)) {
         return failed;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) {
+        return close;
+    }
+    return emit_line(emitter, "");
+}
+
+// emit_env_prelude_helper_section emits the EnvResult helper for try_getenv.
+fn emit_env_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.builtins, "try_getenv")) {
+        return EmitStep.Ok;
+    }
+    if (!has(emitter.model.visible_types, "EnvResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared EnvResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["EnvResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared EnvResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, "try_getenv") + "(const ktn_string *ktn_name) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep value = emit_line(emitter, "const ktn_string *ktn_value = NULL;");
+    if (!emit_ok(value)) {
+        return value;
+    }
+    EmitStep condition = emit_line(emitter, "if (" + try_getenv_function() + "(ktn_name, &ktn_value)) {");
+    if (!emit_ok(condition)) {
+        return condition;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep set = emit_line(emitter, "return " + variant_constructor_name(union_type, "Set") + "(ktn_value);");
+    if (!emit_ok(set)) {
+        return set;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) {
+        return close_if;
+    }
+    EmitStep unset = emit_line(emitter, "return " + variant_constructor_name(union_type, "Unset") + "();");
+    if (!emit_ok(unset)) {
+        return unset;
     }
     emitter.indent = emitter.indent - 1;
     EmitStep close = emit_line(emitter, "}");

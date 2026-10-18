@@ -564,7 +564,10 @@ func (g *generator) emitPreludeHelper() error {
 	if err := g.emitRunPreludeHelper(); err != nil {
 		return err
 	}
-	return g.emitCurrentDirectoryPreludeHelper()
+	if err := g.emitCurrentDirectoryPreludeHelper(); err != nil {
+		return err
+	}
+	return g.emitEnvPreludeHelper()
 }
 
 // emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
@@ -729,6 +732,31 @@ func (g *generator) emitCurrentDirectoryPreludeHelper() error {
 	g.indent--
 	g.line("}")
 	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitEnvPreludeHelper emits the EnvResult helper for try_getenv.
+func (g *generator) emitEnvPreludeHelper() error {
+	if _, ok := g.checked.Builtins["try_getenv"]; !ok {
+		return nil
+	}
+	unionType, err := g.preludeUnionType("EnvResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_name) {", cStruct, preludeHelperName(unionType.Module, "try_getenv"))
+	g.indent++
+	g.line("const ktn_string *ktn_value = NULL;")
+	g.line("if (%s(ktn_name, &ktn_value)) {", runtime.TryGetenvFunction)
+	g.indent++
+	g.line("return %s(ktn_value);", variantConstructorName(unionType, "Set"))
+	g.indent--
+	g.line("}")
+	g.line("return %s();", variantConstructorName(unionType, "Unset"))
 	g.indent--
 	g.line("}")
 	g.line("")

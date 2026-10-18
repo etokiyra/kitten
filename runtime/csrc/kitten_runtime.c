@@ -736,6 +736,27 @@ bool ktn_rt_try_run(const ktn_string *program, const ktn_array *args, int64_t *s
     return false;
 }
 
+bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value) {
+    if (value == NULL) {
+        ktn_rt_fail("try_getenv received a null result slot");
+    }
+    *value = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(name);
+    if (checked->length == 0 || strchr(checked->data, '=') != NULL) {
+        return false;
+    }
+    const char *found = getenv(checked->data);
+    if (found == NULL) {
+        return false;
+    }
+    size_t length = strlen(found);
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    memcpy(ktn_rt_string_bytes(result), found, length);
+    *value = result;
+    return true;
+}
+
 bool ktn_rt_try_current_directory(const ktn_string **path, const ktn_string **message) {
     if (path == NULL || message == NULL) {
         ktn_rt_fail("try_current_directory received a null result slot");

@@ -731,6 +731,8 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 		return g.preludeCall(expression, "try_run", 2)
 	case checker.BuiltinTryCurrentDirectory:
 		return g.preludeCall(expression, "try_current_directory", 0)
+	case checker.BuiltinTryGetenv:
+		return g.preludeCall(expression, "try_getenv", 1)
 	case checker.BuiltinRawLoad8:
 		return g.intrinsicCall(expression, runtime.RawLoad8Function, 1)
 	case checker.BuiltinRawStore8:
