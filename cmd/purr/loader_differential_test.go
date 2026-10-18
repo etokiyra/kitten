@@ -9,10 +9,10 @@ package main
 // same root and compares the two renderings byte for byte, so order, ids,
 // canonical paths, and diagnostics all have to agree.
 //
-// Missing and unreadable files are out of scope: SPEC.md Section 22.2 makes
-// read_file fatal and Section 22.9 defers recoverable I/O. The loader corpus
-// therefore contains only readable files; selfhost/loader/README.md records the
-// exclusion.
+// Read failures are part of the comparison: the Kitten loader uses
+// try_read_file, so missing, unreadable, and directory paths must render the
+// reference's no-position "cannot read source file: ..." diagnostic exactly.
+// The loader corpus therefore includes readable trees plus read-error trees.
 //
 // The full-path test drives selfhost/loadunit.ktn, which loads, checks, and emits
 // a unit entirely with the Kitten-written stages, and compares that unit with the
@@ -114,6 +114,8 @@ func renderGoLoad(t *testing.T, rootPath string) string {
 type loaderCase struct {
 	description string
 	files       map[string]string
+	directories []string
+	unreadable  []string
 	root        string
 }
 
@@ -285,6 +287,101 @@ func loaderCases() []loaderCase {
 			},
 			root: "main.ktn",
 		},
+		{
+			description: "missing root",
+			files:       map[string]string{},
+			root:        "missing.ktn",
+		},
+		{
+			description: "missing root with a cleaned spelling",
+			files:       map[string]string{},
+			root:        "sub/../missing.ktn",
+		},
+		{
+			description: "missing import",
+			files: map[string]string{
+				"main.ktn": "import \"missing.ktn\";\nfn main() {\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "missing import with a cleaned spelling",
+			files: map[string]string{
+				"main.ktn": "import \"sub/../missing.ktn\";\nfn main() {\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "missing import reached through a nested import",
+			files: map[string]string{
+				"main.ktn": "import \"a.ktn\";\nfn main() {\n}\n",
+				"a.ktn":    "import \"missing.ktn\";\npublic fn a() -> int {\n    return 1;\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "an unreadable root is skipped as root",
+			files: map[string]string{
+				"main.ktn": "fn main() {\n}\n",
+			},
+			unreadable: []string{"main.ktn"},
+			root:       "main.ktn",
+		},
+		{
+			description: "an unreadable import is skipped as root",
+			files: map[string]string{
+				"main.ktn":       "import \"unreadable.ktn\";\nfn main() {\n}\n",
+				"unreadable.ktn": "public fn lib() -> int {\n    return 1;\n}\n",
+			},
+			unreadable: []string{"unreadable.ktn"},
+			root:       "main.ktn",
+		},
+		{
+			description: "a directory as the root",
+			files:       map[string]string{},
+			directories: []string{"only-directory"},
+			root:        "only-directory",
+		},
+		{
+			description: "a directory as an import",
+			files: map[string]string{
+				"main.ktn": "import \"only-directory\";\nfn main() {\n}\n",
+			},
+			directories: []string{"only-directory"},
+			root:        "main.ktn",
+		},
+		{
+			description: "a parse error before a later missing import",
+			files: map[string]string{
+				"main.ktn": "import \"bad.ktn\";\nimport \"missing.ktn\";\nfn main() {\n}\n",
+				"bad.ktn":  "public fn broken() -> int {\n    return 1\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "a missing import before a later parse error",
+			files: map[string]string{
+				"main.ktn": "import \"missing.ktn\";\nimport \"bad.ktn\";\nfn main() {\n}\n",
+				"bad.ktn":  "public fn broken() -> int {\n    return 1\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "a missing import reached through a cycle",
+			files: map[string]string{
+				"main.ktn": "import \"a.ktn\";\nfn main() {\n}\n",
+				"a.ktn":    "import \"b.ktn\";\npublic fn a() -> int {\n    return 1;\n}\n",
+				"b.ktn":    "import \"a.ktn\";\nimport \"missing.ktn\";\npublic fn b() -> int {\n    return 1;\n}\n",
+			},
+			root: "main.ktn",
+		},
+		{
+			description: "an outside-root import that does not exist",
+			files: map[string]string{
+				"main.ktn": "import \"../missing.ktn\";\nfn main() {\n}\n",
+			},
+			root: "main.ktn",
+		},
 	}
 }
 
@@ -297,10 +394,27 @@ func TestKittenLoaderMatchesReference(t *testing.T) {
 	probeDirectory := t.TempDir()
 
 	compared := 0
+	skipped := 0
 	for _, testCase := range loaderCases() {
+		if len(testCase.unreadable) > 0 && os.Geteuid() == 0 {
+			skipped++
+			continue
+		}
 		sourceDirectory := t.TempDir()
 		for name, source := range testCase.files {
 			writeSourceFile(t, filepath.Join(sourceDirectory, filepath.FromSlash(name)), source)
+		}
+		for _, name := range testCase.directories {
+			if err := os.MkdirAll(filepath.Join(sourceDirectory, filepath.FromSlash(name)), 0o755); err != nil {
+				t.Fatalf("%s: creating directory %s: %v", testCase.description, name, err)
+			}
+		}
+		for _, name := range testCase.unreadable {
+			path := filepath.Join(sourceDirectory, filepath.FromSlash(name))
+			if err := os.Chmod(path, 0o000); err != nil {
+				t.Fatalf("%s: chmod %s: %v", testCase.description, name, err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
 		}
 		rootPath := sourceDirectory + string(os.PathSeparator) + filepath.FromSlash(testCase.root)
 
@@ -313,10 +427,10 @@ func TestKittenLoaderMatchesReference(t *testing.T) {
 		compared++
 	}
 
-	if compared != len(loaderCases()) {
-		t.Fatalf("%d of %d targeted loader cases were compared", compared, len(loaderCases()))
+	if compared+skipped != len(loaderCases()) {
+		t.Fatalf("%d compared and %d skipped for %d targeted loader cases", compared, skipped, len(loaderCases()))
 	}
-	t.Logf("loader: %d targeted trees identical to the reference loader", compared)
+	t.Logf("loader: %d targeted trees identical to the reference loader, %d skipped as root", compared, skipped)
 }
 
 // TestKittenLoaderTestsModules compares the loader over tests/modules, the real

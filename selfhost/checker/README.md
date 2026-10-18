@@ -230,8 +230,8 @@ builtin itself is registered only after the prelude type has been collected, so
 its return type is the prelude's resolved type.
 
 The loader does **not** inject the prelude; this is the checker's responsibility,
-exactly as in the Go reference. Loader read-error parity is still deferred to
-5.5, where the loader will use `try_read_file` without involving this prelude.
+exactly as in the Go reference. Loader read-error parity landed in 5.5: the loader
+uses `try_read_file` for source reads without involving this prelude.
 
 ## Coverage
 

@@ -296,6 +296,5 @@ stage 1, stage 2, and stage 3 generate byte-identical C for the compiler source,
 stage 2 reproduces the Go reference for every fixture.
 
 The remaining limits are stated precisely in the README: Go still builds stage 1, a C
-compiler and the temporary POSIX wrapper are required, the runtime is C, missing-file
-diagnostics are not yet matched, and the `purr` ecosystem and native backend have not
-started. Nothing here claims full independence from Go.
+compiler and the temporary POSIX wrapper are required, the runtime is C, and the
+`purr` ecosystem and native backend have not started. Nothing here claims full independence from Go.

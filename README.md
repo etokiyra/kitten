@@ -261,7 +261,7 @@ go build -o purr ./cmd/purr
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
-| Built-ins | `print`, `length`, `substring`, `has`, `read_file` |
+| Built-ins | `print`, `length`, `substring`, `has`, `read_file`, `try_read_file` |
 | Fixtures | every program under `tests/` compiles, runs, and matches its expected output |
 
 **Not there yet:** the standard library beyond the built-ins above, generics, traits or
@@ -350,7 +350,7 @@ It is also the only way a self-hosting claim means anything.
 | Checker + semantic model | 1,886 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
 | Entry point and translation-unit assembly | 90 whole units, 3,541 lines |
-| Module loader | 20 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
+| Module loader | 33 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
@@ -374,12 +374,12 @@ the Go reference's generated C byte for byte.**
 **What is still not independent.** Go still builds stage 1; the bootstrap has not
 left the pipeline. A C compiler and the temporary POSIX wrapper
 (`selfhost/driver/purr-bootstrap.sh`) are still required, and the runtime is still C.
-Missing or unreadable imports are **not** matched yet: the Go pipeline and the
-Kitten-written checker and generator now agree on `try_read_file` and
-`ReadFileResult` (5.4c), but the loader's read-error parity (5.5) is still
-pending, so the Kitten loader's failures remain fatal through `read_file`. Relative source paths are made
-absolute by the wrapper; the driver itself requires an absolute path. Goal 2 (no
-C) and Goal 3 (the `purr` ecosystem) have not started.
+There is no known behavioral gap against the Go reference in the covered
+corpora. Missing, unreadable, and directory imports are **matched** by the
+Kitten loader, which now uses `try_read_file`; its diagnostics agree with the Go
+loader's. Relative source paths are made absolute by the wrapper; the driver
+itself requires an absolute path. Goal 2 (no C) and Goal 3 (the `purr`
+ecosystem) have not started.
 
 To reproduce the fixpoint by hand:
 

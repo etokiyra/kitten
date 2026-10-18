@@ -929,20 +929,19 @@ Running `go test -count=1 -v -run TestKittenFixtures ./cmd/purr/` reports:
 ## What is deliberately not here
 
 - **Production integration of the loader.** The Kitten-written loader lives under
-  `selfhost/loader` and discovers imports for an absolute root path, but `purr
-  build` still uses the Go loader. Missing and unreadable files remain fatal
-  through `read_file` until 4E.2 decides recoverable file input.
+  `selfhost/loader` and discovers imports for an absolute root path, including
+  missing/unreadable-file diagnostics, but `purr build` still uses the Go loader.
 - **Writing the unit anywhere but standard output.** The unit driver prints the C;
   the self-hosted runtime offers no file writing, no command-line arguments, and no
   program-selected exit status.
 
 Kitten is not self-hosting, and these phases do not make it so: the backend emits
 complete translation units for every expression kind the language has and the
-Kitten-written loader discovers imports for an absolute root path, but a full
-compiler still needs a driver that writes and builds, recoverable file input for
-missing-file diagnostics, and a bootstrap in which the Kitten-written compiler
-compiles its own source. Until then the Go compiler remains the bootstrap
-reference and the only pipeline `purr build` and `purr run` use: the lexer, the
+Kitten-written loader discovers imports for an absolute root path and reports read
+errors, but a full compiler still needs a driver that writes and builds, and a
+bootstrap in which the Kitten-written compiler compiles its own source. Until
+then the Go compiler remains the bootstrap reference and the only pipeline
+`purr build` and `purr run` use: the lexer, the
 parser, the checker, and the generator's helper, declaration, expression,
 literal-pool, statement, and unit layers are Kitten, and the loader core is Kitten
 too, while the production loader integration, the pipeline that writes and

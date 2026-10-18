@@ -5,7 +5,8 @@ and returns the ordered module set the Kitten-written checker and C generator
 consume. It mirrors `loader/loader.go`: the same canonical paths, depth-first
 pre-order, ids equal to positions in that order, one module per canonical path,
 cycles allowed, duplicate and diamond imports deduplicated, and the same
-diagnostics for paths outside the root and for lexical or syntax errors.
+diagnostics for paths outside the root, read failures, and lexical or syntax
+errors.
 
 It is a self-hosted component, not part of the production pipeline. `purr build`
 and `purr run` still use the Go loader, which remains authoritative.
@@ -54,7 +55,8 @@ the loader uses; nothing in them reads the filesystem.
    - reject a canonical path outside the resolution root with
      `import resolves outside the root directory <rootDirectory>`, naming the
      canonical path and carrying no line or column;
-   - call `read_file` for the source;
+   - call `try_read_file` for the source, turning a failure into the
+     no-position `cannot read source file: <message>` error;
    - lex and parse, wrapping a failure with the module's canonical path and the
      frontend's line, column, and message;
    - register the module and append it to the ordered list **before** loading its
@@ -81,20 +83,17 @@ separator boundary (`/rooted` is not inside `/root`).
 A filename such as `..hidden.ktn` is an ordinary component; only the exact
 component `..` is a parent.
 
-## Two documented exclusions
+## Documented exclusion
 
 **An absolute root path is required.** The self-hosted runtime exposes no working
 directory, so a relative root cannot be made absolute the way `filepath.Abs` does.
 The harness always supplies an absolute root. The reference loader also accepts
 relative roots; that difference is not exercised here.
 
-**Missing and unreadable files are fatal and unmatched.** SPEC.md Section 22.2
-defines `read_file` as fatal on a missing, unreadable, non-regular, oversized, or
-failed read, and Section 22.9 defers recoverable I/O errors. The loader therefore
-calls `read_file` directly; it cannot return the reference loader's
-`cannot read source file: ...` diagnostic. There is no file-exists primitive and
-no preloaded manifest. This remains the 4E.2 gap, blocked on a SPEC decision for
-recoverable file input.
+**Read failures are matched.** The loader calls `try_read_file`; a missing,
+unreadable, or directory path becomes the reference's no-position
+`cannot read source file: ...` error for the canonical path. The
+`within_directory` check still runs before the read.
 
 ## Running the drivers
 
@@ -132,11 +131,12 @@ single diagnostic line otherwise.
 `cmd/purr/loader_differential_test.go` compares against `loader.Load` for the
 same absolute root:
 
-- **20 targeted trees**, covering a simple import, diamonds, cycles, self-import,
+- **33 targeted trees**, covering a simple import, diamonds, cycles, self-import,
   duplicate spellings, nested directories, `..` inside and outside the root,
   modules imported from two places, imports among declarations, redundant
-  separators, absolute-looking imports, dot-prefixed filenames, and lexical and
-  syntax errors in imported modules;
+  separators, absolute-looking imports, dot-prefixed filenames, lexical and
+  syntax errors in imported modules, missing and unreadable roots and imports,
+  directories, and error ordering through cycles;
 - **`tests/modules/`**, the real nested fixture, with its actual canonical paths;
 - **15 multi-file checker corpus programs**, materialized as `input.txt` and
   `input2.txt`, including malformed modules;
@@ -150,8 +150,6 @@ pipeline under both.
 
 ## What is not here
 
-- Recoverable file input and therefore missing/unreadable-file diagnostics
-  (4E.2; needs a SPEC decision).
 - Relative root paths (no working-directory primitive).
 - A compiler CLI: the drivers read a fixed path, print to standard output, and
   write no files or exit status. Those driver capabilities are a later phase.

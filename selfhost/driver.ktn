@@ -14,9 +14,8 @@
 // to a temporary file, copies the runtime, and invokes the C compiler. The
 // driver itself parses no options and invokes no other process.
 //
-// Missing or unreadable source files are fatal through read_file (SPEC.md
-// Section 22.2). Their diagnostics are not matched against the reference loader
-// until the postponed ReadFileResult work.
+// Missing, unreadable, and directory source paths are reported by the loader as
+// the reference's no-position "cannot read source file: ..." diagnostic.
 
 import "checker/checker.ktn";
 import "checker/model.ktn";

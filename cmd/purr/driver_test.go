@@ -197,12 +197,14 @@ func TestKittenDriverWrapperArgumentsAndStatus(t *testing.T) {
 	t.Logf("driver: wrapper passed arguments, propagated status 7, and used the default output name")
 }
 
-// TestKittenDriverDiagnostics compares stage 1 and wrapper usage errors with the
-// Go CLI and checks the documented exclusions.
+// TestKittenDriverDiagnostics compares stage 1 and stage 2 diagnostics and
+// wrapper usage errors with the Go CLI, including missing roots and imports.
 func TestKittenDriverDiagnostics(t *testing.T) {
 	stage1 := buildStage1(t)
 	wrapper := wrapperPath(t)
 	environment := wrapperEnvironment(stage1, t)
+	stage2 := filepath.Join(t.TempDir(), "purr-stage2")
+	buildStageThroughWrapper(t, wrapper, stage1, repoPath(t, "..", "..", "selfhost", "driver.ktn"), stage2)
 
 	directory := t.TempDir()
 	write := func(name, source string) string {
@@ -225,6 +227,8 @@ func TestKittenDriverDiagnostics(t *testing.T) {
 		{"syntax error", write("syntax.ktn", "fn main( {\n}\n")},
 		{"import syntax error", write("importsyntax.ktn", "import \"bad.ktn\";\nfn main() {\n}\n")},
 		{"outside root", write("inside/outside.ktn", "import \"../outside.ktn\";\nfn main() {\n}\n")},
+		{"missing import", write("missing-import.ktn", "import \"not-there.ktn\";\nfn main() {\n}\n")},
+		{"missing root", filepath.Join(directory, "missing-root.ktn")},
 	}
 	// The imported module must exist with a syntax error for the import case.
 	if err := os.WriteFile(filepath.Join(directory, "bad.ktn"), []byte("fn broken( {\n"), 0o644); err != nil {
@@ -234,10 +238,15 @@ func TestKittenDriverDiagnostics(t *testing.T) {
 	for _, testCase := range cases {
 		var goStdout, goStderr bytes.Buffer
 		goStatus := run([]string{"build", testCase.path}, &goStdout, &goStderr)
-		stageResult := runExternal(t, stage1, []string{testCase.path}, directory, nil)
-		if stageResult.status != goStatus || stageResult.stderr != goStderr.String() || stageResult.stdout != goStdout.String() {
-			t.Errorf("%s: driver differs from the Go CLI\nstatus: %d vs %d\nstderr:\n%s\nwant:\n%s\nstdout:\n%s\nwant:\n%s",
-				testCase.name, stageResult.status, goStatus, stageResult.stderr, goStderr.String(), stageResult.stdout, goStdout.String())
+		for _, driver := range []struct {
+			name string
+			path string
+		}{{"stage 1", stage1}, {"stage 2", stage2}} {
+			stageResult := runExternal(t, driver.path, []string{testCase.path}, directory, nil)
+			if stageResult.status != goStatus || stageResult.stderr != goStderr.String() || stageResult.stdout != goStdout.String() {
+				t.Errorf("%s: %s differs from the Go CLI\nstatus: %d vs %d\nstderr:\n%s\nwant:\n%s\nstdout:\n%s\nwant:\n%s",
+					testCase.name, driver.name, stageResult.status, goStatus, stageResult.stderr, goStderr.String(), stageResult.stdout, goStdout.String())
+			}
 		}
 	}
 
@@ -256,10 +265,4 @@ func TestKittenDriverDiagnostics(t *testing.T) {
 		t.Errorf("relative path: status %d, stderr %q", relative.status, relative.stderr)
 	}
 
-	// A missing import is fatal and nonzero; its text is a documented exclusion.
-	missing := write("missing.ktn", "import \"not-there.ktn\";\nfn main() {\n}\n")
-	missingResult := runExternal(t, stage1, []string{missing}, directory, nil)
-	if missingResult.status == 0 || missingResult.stderr == "" {
-		t.Errorf("missing import: status %d, stderr %q", missingResult.status, missingResult.stderr)
-	}
 }

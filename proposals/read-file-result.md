@@ -1,10 +1,11 @@
 # Predeclared `ReadFileResult` and `try_read_file`
 
-> **ADOPTED; implementation is staged.**
+> **ADOPTED; implemented.**
 >
-> Phase 5.4b implements the runtime and Go-pipeline portion of this design. The
-> Kitten-written checker/generator (5.4c) and loader read-error parity (5.5)
-> remain pending. The Kitten pipeline cannot use `try_read_file` yet.
+> Phase 5.4b implemented the runtime and Go pipeline, Phase 5.4c the
+> Kitten-written checker/generator, and Phase 5.5 loader read-error parity.
+> Both pipelines and the loader now use `try_read_file`; the documented
+> missing/unreadable-file exclusion is closed.
 >
 > Date: 2026-10-18. Starting commit: `498a321`.
 >
@@ -582,8 +583,8 @@ documented, not introduced by this design.
 
 ## 9. Loader use in 5.5
 
-The loader will call `try_read_file(path)` for every module. On `Ok(text)` it
-lexes/parses exactly as today. On `Failed(message)` it returns:
+The loader calls `try_read_file(path)` for every module. On `Ok(text)` it
+lexes/parses exactly as before. On `Failed(message)` it returns:
 
 ```kitten
 LoadError {

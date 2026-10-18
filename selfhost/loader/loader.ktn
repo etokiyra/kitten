@@ -12,10 +12,10 @@
 // does. The reference loader also accepts relative roots; that difference is
 // documented in selfhost/loader/README.md and is not exercised here.
 //
-// A missing or unreadable file is fatal through the language's read_file built-in
-// (SPEC.md Section 22.2), not a value this loader can report. Recoverable file
-// input is deferred by Section 22.9, so missing imports are out of scope for this
-// phase and remain unmatched against the reference until 4E.2.
+// A missing, unreadable, or directory path is reported from try_read_file as a
+// loader failure with the canonical path and no position, matching the reference's
+// "cannot read source file: ..." diagnostic. The outside-root check runs before
+// the read, exactly as in the reference.
 
 import "../checker/state.ktn";
 import "../lexer/lexer.ktn";
@@ -144,10 +144,20 @@ fn load_module(LoaderState state, string path, int id) -> LoadStep {
         };
     }
 
-    // SPEC.md Section 22.2 makes a failed read fatal. A missing or unreadable
-    // file therefore terminates the program here rather than returning a
-    // LoadError; recoverable file input is deferred by Section 22.9.
-    string source = read_file(path);
+    // The outside-root check above runs before any read. A failed read becomes a
+    // loader failure with no position, just as os.ReadFile's error does in the
+    // reference loader.
+    string source = "";
+    match (try_read_file(path)) {
+        Failed(message) {
+            return LoadStep.Failed {
+                error = load_error(path, 0, 0, "cannot read source file: " + message)
+            };
+        }
+        Ok(text) {
+            source = text;
+        }
+    }
 
     match (lex_and_parse(path, source)) {
         Failed(error) {

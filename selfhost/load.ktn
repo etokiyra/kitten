@@ -19,9 +19,8 @@
 //
 // The root path is absolute because the self-hosted runtime has no working
 // directory. The harness writes input.txt and selects the working directory, so
-// this driver needs no command-line arguments. A missing or unreadable file is
-// fatal through read_file, as SPEC.md Section 22.2 defines, and is not a loader
-// diagnostic in this phase.
+// this driver needs no command-line arguments. Missing, unreadable, and directory
+// paths are reported as loader errors with no position.
 //
 // This is test infrastructure, not a compiler CLI: the output goes to standard
 // output and the driver writes no file.

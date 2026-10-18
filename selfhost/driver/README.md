@@ -89,19 +89,17 @@ PURR_BOOTSTRAP_DRIVER=/tmp/purr-stage1 \
   selfhost/driver/purr-bootstrap.sh run program.ktn alpha "" "two words"
 ```
 
-## Diagnostics and exclusions
+## Diagnostics and limits
 
 The driver reproduces the Go CLI's diagnostic text for loader, checker, and
 generator failures, including the file/line/column shape and the no-position
-loader form (`<path>: import resolves outside the root directory <root>`).
-Usage status is 2; compilation failures are status 1.
+loader form (`<path>: <message>`) for outside-root and read failures. Usage
+status is 2; compilation failures are status 1.
 
-**Missing/unreadable files are not matched.** The checker and generator now
-support `try_read_file` and `ReadFileResult` (5.4c), but the Kitten loader still
-calls the fatal `read_file` built-in (SPEC.md Section 22.2). A missing import
-therefore terminates the process with the runtime's fatal message rather than
-the Go loader's `cannot read source file: ...` diagnostic. Loader parity is 5.5
-and is not tested for text yet.
+**Read failures are matched.** The Kitten loader uses `try_read_file`, so a
+missing, unreadable, or directory root or import produces the Go loader's
+no-position `cannot read source file: ...` diagnostic. Both stage 1 and stage 2
+are compared byte for byte with the Go CLI's stderr and exit status.
 
 A relative path is accepted by the wrapper, which makes it absolute, matching the
 Go CLI. The driver itself rejects a relative path with status 2 because it has no
@@ -153,7 +151,7 @@ not on binary reproducibility.
   the Go CLI's stderr and status;
 - no-argument usage against the Go CLI;
 - the driver's relative-path status-2 contract; and
-- that a missing import is fatal and nonzero, without comparing its text.
+- that missing roots and missing imports match the Go CLI in stderr text and status.
 
 `TestKittenFixpoint` in the same file additionally builds stages 1–3, compares the
 C for `driver.ktn` across Go and all stages, checks stage-2 determinism and a

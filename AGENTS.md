@@ -162,11 +162,11 @@ under `selfhost/loader`, driven by `selfhost/load.ktn` and
 `selfhost/loadunit.ktn`: it loads an absolute root path into the same ordered module
 set as the Go loader, with the same canonical paths, ids, depth-first order, cycle
 and duplicate handling, outside-root diagnostic, and lex/parse diagnostics. All
-14 multi-file checker corpus programs, 20 targeted trees, and `tests/modules/` match
+15 multi-file checker corpus programs, 33 targeted trees, and `tests/modules/` match
 the reference loader byte for byte, and `tests/modules/` runs end-to-end through the
 fully Kitten-written loader, lexer, parser, checker, and generator. Missing and
-unreadable files and relative root paths are out of scope; Phase 4E.2 is blocked on
-a SPEC decision for recoverable file input and a working-directory primitive. Phase
+unreadable files were completed by 5.5; relative root paths remain out of scope
+because the self-hosted runtime has no working-directory primitive. Phase
 5.1 added the `argv()` built-in end to end in both pipelines: the generated C entry
 point now takes `argc`/`argv`, saves them with `ktn_rt_set_args`, and user code sees
 the vector through `ktn_rt_argv`. The phase also added a runtime test with zero, one,
@@ -183,10 +183,10 @@ wrapper `selfhost/driver/purr-bootstrap.sh`: the driver takes one absolute sourc
 emits byte-identical C on stdout, reports diagnostics on stderr, and uses exit
 statuses 0/1/2; the wrapper builds and runs fixtures and `tests/modules/` under
 GCC and Clang. The implementation order changed: `ReadFileResult`/`try_read_file`
-(5.4) and loader read-error parity (5.5) are postponed until after the fixpoint
-(5.7), whose design stays proposed and untouched. Until then a missing or
-unreadable file is fatal through `read_file` and its diagnostic is **not** matched
-against the reference loader. Phase 5.7 reached the C-level fixpoint: Go builds
+(5.4) and loader read-error parity (5.5) were postponed until after the fixpoint
+(5.7). Both are now complete: `try_read_file` is implemented in both pipelines,
+and the loader reports missing, unreadable, and directory paths with the
+reference's `cannot read source file: ` diagnostic. Phase 5.7 reached the C-level fixpoint: Go builds
 stage 1 from `selfhost/driver.ktn`, stage 1 builds stage 2, stage 2 builds stage 3,
 and the generated C for `driver.ktn` is byte-identical across Go and all three
 stages; stage 2 also reproduces the Go reference for all nine fixtures and
@@ -210,11 +210,13 @@ and registers the builtin after collecting the type; the generator emits the
 normal union and a non-static helper and lowers the call to it. The shared
 checker, semantic, expression, function, unit, declarations, and loader corpora
 grew, and a both-pipeline runtime fixture covers existing, empty, missing,
-directory, and unreadable paths under both compilers. The loader was deliberately
-untouched and still calls fatal `read_file`. Phase 5.5 (loader read-error parity)
-is next, using `try_read_file` and the `cannot read source file: ` prefix. A SPEC
-cleanup of Go/C-flavored wording remains a later candidate. Native backend,
-standard library, and file writing remain unauthorized.
+directory, and unreadable paths under both compilers. Phase 5.5 completed loader
+read-error parity: the Kitten loader uses `try_read_file`, returns the canonical
+path with no position and the `cannot read source file: ` prefix, keeps the
+outside-root check before the read, and matches the Go loader byte for byte,
+including through stage 1 and stage 2. A SPEC cleanup of Go/C-flavored wording
+remains a later candidate. Native backend, standard library, and file writing
+remain unauthorized.
 
 ### Adding a built-in
 
@@ -252,8 +254,8 @@ None of the self-hosted components is part of the production pipeline: `purr
 build` and `purr run` still use the Go lexer, parser, checker, generator, and
 loader, which remain authoritative. The Kitten-written driver and its POSIX
 wrapper are test infrastructure for the fixpoint, not the production CLI. Their
-deliberate differences (byte-oriented positions, an absolute-root Kitten loader
-with fatal missing-file reads, and no production driver integration) are
+deliberate differences (byte-oriented positions, an absolute-root Kitten loader,
+and no production driver integration) are
 documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
 `selfhost/parser/README.md`, `selfhost/checker/README.md`,
 `selfhost/codegen/README.md`, `selfhost/loader/README.md`, and
@@ -297,8 +299,8 @@ authorization after the design is approved.
    all nine top-level fixtures now compile and run through the Kitten backend;
    Phase 4E.1 added the Kitten-written module loader for absolute roots, with the
    same order, ids, paths, and diagnostics as Go over the loader corpus, and a
-   fully Kitten-written path through `tests/modules/`. Missing-file diagnostics and
-   relative roots are deferred to 4E.2, which needs a SPEC decision; Phase 5.1
+   fully Kitten-written path through `tests/modules/`. Relative roots remain
+   deferred because there is no working-directory primitive; Phase 5.1
    added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point;
    Phase 5.2 added `eprint(...)`, the flushing stderr helpers, and separate-stream
    runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,
@@ -306,7 +308,7 @@ authorization after the design is approved.
    driver and temporary POSIX-shell wrapper, with byte-identical C and native
    fixture execution under GCC and Clang; Phase 5.7 reached the C-level fixpoint;
    Phase 5.4c brought `try_read_file` and `ReadFileResult` to the Kitten-written
-   checker and generator. The loader read-error parity (5.5) remains next).
+   checker and generator; Phase 5.5 closed loader read-error parity).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is

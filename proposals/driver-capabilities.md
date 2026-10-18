@@ -1,16 +1,14 @@
 # Minimum driver capabilities for a Kitten-written compiler
 
-> **ADOPTED in principle; implementation is staged.**
+> **ADOPTED; implemented.**
 >
 > The human approved the eight decisions below. Phases 5.1 (`argv`), 5.2
-> (`eprint`), 5.3 (`exit`), and 5.6 (the Kitten driver and wrapper) are
-> implemented, and Phase 5.7 reached the C-level fixpoint. The order was revised
-> in Phase 5.6: `try_read_file` and the loader read-error parity are postponed
-> until after the fixpoint. Until then a missing/unreadable file is fatal through
-> `read_file` and is not matched.
+> (`eprint`), 5.3 (`exit`), 5.4b (runtime and Go pipeline), 5.4c (Kitten
+> checker/generator), 5.5 (loader read-error parity), 5.6 (the Kitten driver and
+> wrapper), and 5.7 (the C-level fixpoint) are implemented.
 >
-> Status: adopted, Phase 5.0 proposal; Phase 5.7 done; Phase 5.4b
-> (runtime + Go pipeline) done; 5.4c and 5.5 next. Date: 2026-10-18.
+> Status: adopted, Phase 5.0 proposal; Phases 5.4 and 5.5 done; Phase 5.7 done.
+> Date: 2026-10-18.
 >
 > **Adopted decisions**
 >
@@ -171,9 +169,9 @@ The remaining deferred lists were checked for driver requirements:
 - **25.6/26.6/27.6** — these record extension gaps of the lexer, parser, and
   checker, not new driver capabilities; the missing one is the compiler driver
   itself.
-- **28.12** — records writing/building, recoverable file input, relative roots,
-  and the driver capabilities. This proposal addresses the language/runtime
-  subset and leaves writing/building to the wrapper.
+- **28.12** — records writing/building, relative roots, and the driver
+  capabilities. This proposal addresses the language/runtime subset and leaves
+  writing/building to the wrapper.
 
 No capability beyond the items below was found necessary for the bootstrap.
 
@@ -556,10 +554,9 @@ to the bootstrap.
 ## 4. Proposed implementation order
 
 The order was revised in Phase 5.6 and the fixpoint is now done. `argv`,
-`eprint`, `exit`, the Kitten driver, and the fixpoint are implemented.
-`try_read_file`/`ReadFileResult` and loader read-error parity remain postponed
-until after the fixpoint and are next. Each step is one coherent commit with its
-own acceptance checks.
+`eprint`, `exit`, `try_read_file`/`ReadFileResult`, loader read-error parity, the
+Kitten driver, and the fixpoint are implemented. Each step is one coherent commit
+with its own acceptance checks.
 
 1. **`argv()` and the argument-carrying entry point.**
    - Runtime `ktn_rt_set_args`/`ktn_rt_argv`; Go and Kitten checkers/code
@@ -581,9 +578,9 @@ own acceptance checks.
      flushed before exit; stderr is flushed; the existing fatal-error tests still
      pass.
 
-4. **IN PROGRESS — `try_read_file` and `ReadFileResult`.** Phase 5.4b implemented
-   the runtime and Go pipeline; 5.4c (Kitten checker/generator) and 5.5 (loader
-   parity) remain. The design is adopted in `proposals/read-file-result.md`.
+4. **DONE — `try_read_file` and `ReadFileResult`.** Phase 5.4b implemented the
+   runtime and Go pipeline, 5.4c the Kitten checker/generator, and 5.5 the loader
+   read-error parity. The design is adopted in `proposals/read-file-result.md`.
    - Predeclared type in both checkers/generators; runtime result object and
      Go-compatible error formatting; existing `read_file` untouched.
    - Acceptance: the Phase 4E loader harness gains missing, unreadable, and
@@ -643,8 +640,9 @@ own acceptance checks.
 3. Is a POSIX-shell wrapper acceptable for the first fixpoint, or must the
    wrapper itself be Kitten (which would require file writing and process launch
    now)?
-4. Does the fixpoint acceptance include missing/unreadable-file diagnostics, or
-   is that allowed to remain 4E.2 after the happy-path fixpoint?
+4. **Answered: yes; completed in 5.5.** Does the fixpoint acceptance include
+   missing/unreadable-file diagnostics, or is that allowed to remain 4E.2 after
+   the happy-path fixpoint?
 5. Should read-failure parity cover every errno/operation shape, or only the
    common cases in the proposal's table?
 6. Should `eprint`/`exit` be built-ins permanently, or provisional until a

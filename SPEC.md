@@ -1766,7 +1766,8 @@ The following are **not** implemented and must not be assumed:
 5. Import cycles are allowed.
 6. Imported modules mangle top-level C names with their module number.
 7. The entry point must be in the root module.
-8. `read_file` is fatal on failure; recoverable I/O errors are deferred.
+8. `read_file` is fatal on failure; `try_read_file` returns a recoverable
+   `ReadFileResult`.
 9. The whole program is loaded and compiled together, with no caching.
 
 ---
@@ -2307,8 +2308,7 @@ still checks exactly the two modules it is given — `input.txt` as the root and
 `input2.txt` as an import — so that cross-module checking can be exercised without
 a loader. The Kitten-written loader under `selfhost/loader` discovers imports for an
 absolute root and feeds the checker directly through `selfhost/loadunit.ktn`; its
-two documented exclusions are a relative root and recoverable read failures
-(Sections 22.2, 22.4, and 22.9).
+documented exclusion is a relative root (Sections 22.2 and 22.4).
 
 ### 27.2 API
 
@@ -2798,20 +2798,18 @@ produce its expected output when compiled and run.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **Recoverable file input in the Kitten-written pipeline and relative root
-  paths.** The Go pipeline and the Kitten-written checker and generator implement
-  `try_read_file`; loader parity is pending 5.5. The Kitten-written loader still
-  requires an absolute root and calls the fatal `read_file`, so a missing or
-  unreadable file is fatal rather than a loader diagnostic. The self-hosted
-  runtime has no working directory (Sections 22.2 and 22.4).
+- **Relative root paths.** The Kitten-written loader reports missing, unreadable,
+  and directory paths as loader errors, but still requires an absolute root
+  because the self-hosted runtime has no working directory (Sections 22.2 and
+  22.4).
 - File writing, directory operations, and process launch, none of which the
   self-hosted runtime offers.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,
 and the generator's helper, declaration, expression, literal-pool, statement, and
 unit layers are written in Kitten, and every expression kind the language has is now
-emitted; but the loader's missing-file behavior and relative roots still need a
-language decision, and production integration, the pipeline that writes and compiles
-the output, and the production compiler are Go. The Go compiler must therefore remain
+emitted; but relative roots still need a language decision, and production
+integration, the pipeline that writes and compiles the output, and the production
+compiler are Go. The Go compiler must therefore remain
 the bootstrap reference until the Kitten-written compiler can compile its own source
 through a Kitten-written pipeline and reproduce the same behavior.

@@ -8,8 +8,8 @@
 // parser, checker, and generator.
 //
 // The root path is absolute because the self-hosted runtime has no working
-// directory. A failure prints one diagnostic line and no C. A missing or
-// unreadable file is fatal through read_file, as SPEC.md Section 22.2 defines.
+// directory. A failure prints one diagnostic line and no C. Missing, unreadable,
+// and directory paths are loader errors with no position.
 //
 // This is test infrastructure, not a compiler CLI: the unit goes to standard
 // output and nothing writes a file, invokes a C compiler, or sets an exit status.
