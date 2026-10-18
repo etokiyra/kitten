@@ -1036,11 +1036,11 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Eighteen functions are provided by the language: `print`, `eprint`, `exit`,
+Nineteen functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
-`try_list_directory`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
-`bytes_to_string`. All are represented in the semantic environment rather than
+`try_list_directory`, `try_run`, `int_from_byte`, `byte_from_int`,
+`string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1175,7 +1175,7 @@ the same name shadows the built-in.
   error.
 - Its return type is `ReadFileResult`, and it is not variadic.
 
-**File and directory result types and prelude injection**
+**File, directory, and process result types and prelude injection**
 
 - The language also provides two predeclared public unions:
 
@@ -1189,29 +1189,34 @@ the same name shadows the built-in.
       Ok { string[] entries; }
       Failed { string message; }
   }
+
+  union RunResult {
+      Ok { int status; }
+      Failed { string message; }
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
   `FileResult.Ok`. `FileResult.Failed { message = ... }`,
-  `ListDirectoryResult.Ok { entries = ... }`, and
-  `ListDirectoryResult.Failed { message = ... }` are ordinary variant
-  constructions.
-- The three predeclared union names `ReadFileResult`, `FileResult`, and
-  `ListDirectoryResult` are reserved in **every** program: any user top-level
-  declaration with one of those names is an error, whether or not the
-  corresponding implicit type is introduced.
+  `ListDirectoryResult.Ok { entries = ... }`, `ListDirectoryResult.Failed`,
+  `RunResult.Ok { status = ... }`, and `RunResult.Failed { message = ... }` are
+  ordinary variant constructions.
+- The four predeclared union names `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, and `RunResult` are reserved in **every** program: any
+  user top-level declaration with one of those names is an error, whether or not
+  the corresponding implicit type is introduced.
 - `file` and `directory` built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, with each union's fixed source text concatenated
-  directly (each block ends with its closing brace and newline). A program using
+  `ListDirectoryResult`, `RunResult`, with each union's fixed source text
+  concatenated directly (each block ends with its closing brace and newline). A program using
   only `try_read_file` therefore gets exactly the existing `ReadFileResult`
   prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
   `try_read_file`: an identifier call named `try_write_file` (even if shadowed
   by a user function) introduces `FileResult` and its generated helper; the same
-  applies to the other new built-ins. A program with no new built-in and no
+  applies to the other new built-ins, including `try_run` and `RunResult`. A program with no new built-in and no
   `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
@@ -1288,6 +1293,44 @@ the same name shadows the built-in.
   directory entries is `readdirent <path>: <reason>`. There is no loader prefix.
 - Calling it with the wrong number of arguments or a non-`string` argument is an
   error. Its return type is `ListDirectoryResult`, and it is not variadic.
+
+**`try_run`**
+
+- `try_run(program, args)` takes exactly one `string` program path and one
+  `string[]` argument array. It executes `program` **directly** with
+  `execve`-style semantics. It does not invoke a shell, search `PATH`, perform
+  word splitting, or add quoting. A `program` containing no slash is resolved
+  relative to the current working directory, exactly as `execv` would; it is
+  **not** looked up in `PATH`. `argv[0]` is `program` as given, and the elements
+  of `args` become `argv[1]`, `argv[2]`, and so on in order. Empty-string
+  arguments are passed intact. Kitten strings cannot contain NUL, so no NUL
+  validation is needed.
+- The child inherits the environment, the current working directory, and file
+  descriptors 0, 1, and 2. Before forking, the runtime flushes standard output
+  and then standard error, so buffered Kitten output precedes child output and
+  is not duplicated into the child. There is no stdin redirection, output
+  capture, environment control, or timeout; those are **deferred**.
+- `RunResult` is the predeclared result union:
+
+  ```kitten
+  union RunResult {
+      Ok { int status; }
+      Failed { string message; }
+  }
+  ```
+
+- A child that runs and exits normally returns `RunResult.Ok { status = n }`,
+  where `n` is its exit status in `0..255`. A child terminated by signal `s`
+  returns `Ok { status = 128 + s }`. A stopped child is not reported; the
+  runtime waits until it terminates. A nonzero child status is still `Ok`, never
+  `Failed`.
+- Failure to start the program (missing file, not executable, a directory, a
+  resource limit, and so on) returns `RunResult.Failed { message = ... }` with
+  `fork/exec <program>: <reason>`, using the same lower-case Go-compatible reason
+  mapping as the file and directory built-ins. There is no loader prefix.
+- Calling it with the wrong number of arguments, a non-`string` program, or a
+  non-`string[]` argument array is an error. Its return type is `RunResult`, and
+  it is not variadic.
 
 **`int_from_byte`**
 
@@ -1445,7 +1488,8 @@ is **deferred**.
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
   `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_try_write_file`,
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
-  `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_exit`, the
+  `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
+  `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -1914,10 +1958,18 @@ loader prefix.
   is not represented, while `try_write_bytes` can write NUL bytes and
   `string_to_bytes`/`bytes_to_string` preserve byte content except for the
   NUL restriction on `bytes_to_string`.
+- `try_run(program, args) -> RunResult` executes a program directly with the
+  inherited environment, working directory, and standard descriptors. The
+  runtime flushes both streams before forking, passes `program` as `argv[0]`,
+  and passes each string in `args` unchanged as the remaining arguments. It
+  does not use a shell or search `PATH`; a name without a slash is resolved
+  relative to the current working directory. A normal exit yields its `0..255`
+  status; a signal termination yields `128 + signal`. A failure to start is a
+  recoverable `fork/exec <program>: <reason>`. Output capture, stdin
+  redirection, environment control, and timeouts are **deferred**.
 
-Process launch, current-working-directory changes, recursive removal, atomic
-replacement, and file metadata beyond the operations above are **not**
-implemented.
+Current-working-directory changes, recursive removal, atomic replacement, and
+file metadata beyond the operations above are **not** implemented.
 
 ### 22.3 Visibility and name resolution
 
@@ -2000,6 +2052,8 @@ The following are **not** implemented and must not be assumed:
   paths.
 - Metadata, recursive operations, atomic replacement, and other filesystem
   operations beyond the built-ins in Section 18.8.
+- Output capture, stdin redirection, environment control, and process timeouts.
+
 - Separate compilation or incremental builds; the whole program is reloaded and
   recompiled each time.
 - Compiled module caching.
@@ -2022,6 +2076,9 @@ The following are **not** implemented and must not be assumed:
     a corresponding call is present, and use Go-compatible error text.
 11. `try_list_directory` returns sorted entry names only; `try_remove` is never
     recursive.
+12. `try_run` executes directly, inherits the environment, working directory,
+    and standard descriptors, and reports normal or signal exit statuses as
+    `RunResult.Ok`; only a start failure is `Failed`.
 
 ---
 
@@ -3055,7 +3112,7 @@ produce its expected output when compiled and run.
   and directory paths as loader errors, but still requires an absolute root
   because the self-hosted runtime has no working directory (Sections 22.2 and
   22.4).
-- Process launch, and driver integration of the file-writing and directory
+- Driver integration of process launch and the file-writing and directory
   operations; the self-hosted driver does not use them.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,

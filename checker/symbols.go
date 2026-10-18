@@ -75,6 +75,9 @@ const (
 	// BuiltinTryListDirectory lists sorted directory entry names.
 	BuiltinTryListDirectory
 
+	// BuiltinTryRun launches a process and returns its status.
+	BuiltinTryRun
+
 	// BuiltinMapHas reports whether a map contains a key.
 	BuiltinMapHas
 

@@ -558,7 +558,10 @@ func (g *generator) emitPreludeHelper() error {
 	if err := g.emitReadFilePreludeHelper(); err != nil {
 		return err
 	}
-	return g.emitFileDirectoryPreludeHelpers()
+	if err := g.emitFileDirectoryPreludeHelpers(); err != nil {
+		return err
+	}
+	return g.emitRunPreludeHelper()
 }
 
 // emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
@@ -668,6 +671,32 @@ func (g *generator) emitListDirectoryPreludeHelper() error {
 	g.line("if (%s(ktn_path, &ktn_entries, &ktn_message)) {", runtime.TryListDirectoryFunction)
 	g.indent++
 	g.line("return %s(ktn_entries);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitRunPreludeHelper emits the RunResult helper for try_run.
+func (g *generator) emitRunPreludeHelper() error {
+	if _, ok := g.checked.Builtins["try_run"]; !ok {
+		return nil
+	}
+	unionType, err := g.preludeUnionType("RunResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_program, ktn_array *ktn_args) {", cStruct, preludeHelperName(unionType.Module, "try_run"))
+	g.indent++
+	g.line("int64_t ktn_status = 0;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s(ktn_program, ktn_args, &ktn_status, &ktn_message)) {", runtime.TryRunFunction)
+	g.indent++
+	g.line("return %s(ktn_status);", variantConstructorName(unionType, "Ok"))
 	g.indent--
 	g.line("}")
 	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))

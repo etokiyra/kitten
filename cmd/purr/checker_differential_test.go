@@ -358,6 +358,39 @@ fn main() {
     print(try_write_file("x", "y"));
 }
 `)
+	add("try_run and RunResult", `fn describe(RunResult result) -> int {
+    match (result) {
+        Ok(status) { return status; }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    string[] args = new string[0];
+    RunResult direct_ok = RunResult.Ok { status = 3 };
+    RunResult direct_failed = RunResult.Failed { message = "m" };
+    print(describe(try_run("/bin/true", args)));
+    print(describe(direct_ok), describe(direct_failed));
+}
+`)
+	add("try_run only", `fn main() {
+    match (try_run("/bin/true", new string[0])) {
+        Ok(status) { print(status); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_read_file with try_run", `fn main() {
+    try_read_file("x");
+    try_run("/bin/true", new string[0]);
+}
+`)
+	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
+    return 1;
+}
+fn main() {
+    print(try_run("x", new string[0]));
+}
+`)
 	add("bitwise and shift operators", `fn main() {
     int mask = 0xFF;
     int bits = 0b1010;
@@ -592,6 +625,17 @@ fn main() {
 		"fn f() { try_remove(1); }\n",
 		"fn f() { try_list_directory(); }\n",
 		"fn f() { try_list_directory(1); }\n",
+		"fn f() { match (try_run(\"/bin/true\", new string[0])) { Ok(status) { } } }\n",
+		"fn f() { try_run(); }\n",
+		"fn f() { try_run(\"/bin/true\"); }\n",
+		"fn f() { try_run(\"/bin/true\", new string[0], 1); }\n",
+		"fn f() { try_run(1, new string[0]); }\n",
+		"fn f() { try_run(\"/bin/true\", \"x\"); }\n",
+		"fn f() { try_run(\"/bin/true\", new int[0]); }\n",
+		"fn RunResult() {}\n",
+		"struct RunResult {}\n",
+		"enum RunResult { A }\n",
+		"union RunResult { A }\n",
 		"fn FileResult() {}\n",
 		"struct FileResult {}\n",
 		"enum FileResult { A }\n",
@@ -765,6 +809,17 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_run from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_run("/bin/true", new string[0])));
+}
+`, `public fn classify(RunResult result) -> int {
+    match (result) {
+        Ok(status) { return status; }
+        Failed(message) { return -1; }
     }
 }
 `)

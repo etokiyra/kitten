@@ -788,6 +788,7 @@ fn main() {
     try_create_directory("d");
     try_remove("e");
     try_list_directory("f");
+    try_run("/bin/true", new string[0]);
 }
 `,
 	}, {
@@ -820,12 +821,53 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_run with RunResult",
+		root: `fn main() {
+    match (try_run("/bin/true", new string[0])) {
+        Ok(status) { print(status); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "direct RunResult construction",
+		root: `fn main() {
+    try_run("/bin/true", new string[0]);
+    RunResult ok = RunResult.Ok { status = 3 };
+    RunResult failed = RunResult.Failed { message = "m" };
+    match (ok) { Ok(status) { print(status); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "try_run from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_run("/bin/true", new string[0])));
+}
+`,
+		imported: `public fn classify(RunResult result) -> int {
+    match (result) {
+        Ok(status) { return status; }
+        Failed(message) { return -1; }
+    }
+}
+`,
+	}, {
 		description: "a shadowed try_write_file still emits the prelude helper",
 		root: `fn try_write_file(string path, string text) -> int {
     return 1;
 }
 fn main() {
     print(try_write_file("x", "y"));
+}
+`,
+	}, {
+		description: "a shadowed try_run still emits the prelude helper",
+		root: `fn try_run(string program, string[] args) -> int {
+    return 1;
+}
+fn main() {
+    print(try_run("x", new string[0]));
 }
 `,
 	}, {

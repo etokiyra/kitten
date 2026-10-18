@@ -261,7 +261,7 @@ go build -o purr ./cmd/purr
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
-| Built-ins | `print`, `eprint`, `exit`, `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`, `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`, `try_list_directory`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, `bytes_to_string` |
+| Built-ins | `print`, `eprint`, `exit`, `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`, `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`, `try_list_directory`, `try_run`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, `bytes_to_string` |
 | Fixtures | every program under `tests/` compiles, runs, and matches its expected output |
 
 **Not there yet:** the standard library beyond the built-ins above, generics, traits or
@@ -347,9 +347,9 @@ It is also the only way a self-hosting claim means anything.
 | --- | --- |
 | Lexer | 1,076 inputs |
 | Parser + AST | 289 inputs |
-| Checker + semantic model | 1,947 inputs, byte-identical |
+| Checker + semantic model | 1,963 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 114 whole units, 5,285 lines |
+| Entry point and translation-unit assembly | 124 whole units, 6,047 lines |
 | Module loader | 33 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
@@ -357,11 +357,12 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 140 program runs under GCC and Clang, outputs compared |
+| Generated programs executed | 170 program runs under GCC and Clang, outputs compared |
 | Defined arithmetic/bitwise/byte runtime | wrapping, shifts, byte arrays, conversions, and failures through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 | File/directory runtime | writes, bytes, truncation, mkdir, remove, sorted listing, Go-identical errors, and permission paths through both pipelines |
 | Descriptor leak check | 2,000 failing writes under a 16-descriptor limit |
+| `try_run` runtime | statuses, signals, inherited environment/cwd/fds, argument preservation, ordering, and start failures through both pipelines; a 2,000-run leak loop and zombie check |
 
 </details>
 

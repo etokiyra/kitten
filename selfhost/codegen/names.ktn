@@ -130,6 +130,7 @@ public fn try_write_bytes_function() -> string { return "ktn_rt_try_write_bytes"
 public fn try_create_directory_function() -> string { return "ktn_rt_try_create_directory"; }
 public fn try_remove_function() -> string { return "ktn_rt_try_remove"; }
 public fn try_list_directory_function() -> string { return "ktn_rt_try_list_directory"; }
+public fn try_run_function() -> string { return "ktn_rt_try_run"; }
 public fn string_to_bytes_function() -> string { return "ktn_rt_string_to_bytes"; }
 public fn bytes_to_string_function() -> string { return "ktn_rt_bytes_to_string"; }
 

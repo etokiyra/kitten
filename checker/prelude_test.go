@@ -22,7 +22,9 @@ func TestPreludeSourceSubsets(t *testing.T) {
 		{"write and list", preludeUses{writeFile: true, listDirectory: true}, fileResultPrelude + listDirectoryResultPrelude},
 		{"read and write", preludeUses{readFile: true, writeBytes: true}, readFileResultPrelude + fileResultPrelude},
 		{"read list", preludeUses{readFile: true, listDirectory: true}, readFileResultPrelude + listDirectoryResultPrelude},
-		{"all", preludeUses{readFile: true, writeFile: true, writeBytes: true, createDirectory: true, remove: true, listDirectory: true}, readFileResultPrelude + fileResultPrelude + listDirectoryResultPrelude},
+		{"run only", preludeUses{run: true}, runResultPrelude},
+		{"read and run", preludeUses{readFile: true, run: true}, readFileResultPrelude + runResultPrelude},
+		{"all", preludeUses{readFile: true, writeFile: true, writeBytes: true, createDirectory: true, remove: true, listDirectory: true, run: true}, readFileResultPrelude + fileResultPrelude + listDirectoryResultPrelude + runResultPrelude},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -41,14 +43,15 @@ func TestPreludeModuleSubsets(t *testing.T) {
 		unusedTypes []string
 		builtin     string
 	}{
-		{"no trigger", "fn main() {\n}\n", nil, []string{"ReadFileResult", "FileResult", "ListDirectoryResult"}, ""},
-		{"read", "fn main() {\n    try_read_file(\"x\");\n}\n", []string{"ReadFileResult"}, []string{"FileResult", "ListDirectoryResult"}, "try_read_file"},
-		{"write", "fn main() {\n    try_write_file(\"x\", \"y\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult"}, "try_write_file"},
-		{"write bytes", "fn main() {\n    try_write_bytes(\"x\", new byte[1]);\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult"}, "try_write_bytes"},
-		{"create", "fn main() {\n    try_create_directory(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult"}, "try_create_directory"},
-		{"remove", "fn main() {\n    try_remove(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult"}, "try_remove"},
-		{"list", "fn main() {\n    try_list_directory(\"x\");\n}\n", []string{"ListDirectoryResult"}, []string{"ReadFileResult", "FileResult"}, "try_list_directory"},
-		{"read and write", "fn main() {\n    try_read_file(\"x\");\n    try_write_file(\"y\", \"z\");\n}\n", []string{"ReadFileResult", "FileResult"}, []string{"ListDirectoryResult"}, "try_write_file"},
+		{"no trigger", "fn main() {\n}\n", nil, []string{"ReadFileResult", "FileResult", "ListDirectoryResult", "RunResult"}, ""},
+		{"read", "fn main() {\n    try_read_file(\"x\");\n}\n", []string{"ReadFileResult"}, []string{"FileResult", "ListDirectoryResult", "RunResult"}, "try_read_file"},
+		{"write", "fn main() {\n    try_write_file(\"x\", \"y\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult"}, "try_write_file"},
+		{"write bytes", "fn main() {\n    try_write_bytes(\"x\", new byte[1]);\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult"}, "try_write_bytes"},
+		{"create", "fn main() {\n    try_create_directory(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult"}, "try_create_directory"},
+		{"remove", "fn main() {\n    try_remove(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult"}, "try_remove"},
+		{"list", "fn main() {\n    try_list_directory(\"x\");\n}\n", []string{"ListDirectoryResult"}, []string{"ReadFileResult", "FileResult", "RunResult"}, "try_list_directory"},
+		{"run", "fn main() {\n    try_run(\"/bin/true\", new string[0]);\n}\n", []string{"RunResult"}, []string{"ReadFileResult", "FileResult", "ListDirectoryResult"}, "try_run"},
+		{"read and write", "fn main() {\n    try_read_file(\"x\");\n    try_write_file(\"y\", \"z\");\n}\n", []string{"ReadFileResult", "FileResult"}, []string{"ListDirectoryResult", "RunResult"}, "try_write_file"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -97,7 +100,7 @@ func TestFileAndDirectoryResultNamesAreReserved(t *testing.T) {
 		{"enum", "enum %s { A }\n"},
 		{"union", "union %s { A }\n"},
 	}
-	for _, typeName := range []string{"FileResult", "ListDirectoryResult"} {
+	for _, typeName := range []string{"FileResult", "ListDirectoryResult", "RunResult"} {
 		for _, kind := range kinds {
 			t.Run(typeName+"/"+kind.name, func(t *testing.T) {
 				source := strings.Replace(kind.source, "%s", typeName, 1)
@@ -121,6 +124,7 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
     try_create_directory("x");
     try_remove("x");
     try_list_directory("x");
+    try_run("/bin/true", new string[0]);
 }
 `
 	checked, err := CheckModules([]*parser.Module{parseTestModule(t, "input.txt", 0, source)})
@@ -132,7 +136,8 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
 	}
 	fileResult := checked.Types["FileResult"]
 	listResult := checked.Types["ListDirectoryResult"]
-	if fileResult == nil || listResult == nil {
+	runResult := checked.Types["RunResult"]
+	if fileResult == nil || listResult == nil || runResult == nil {
 		t.Fatalf("prelude result types are missing")
 	}
 	checks := []struct {
@@ -146,6 +151,7 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
 		{"try_create_directory", BuiltinTryCreateDirectory, 1, fileResult},
 		{"try_remove", BuiltinTryRemove, 1, fileResult},
 		{"try_list_directory", BuiltinTryListDirectory, 1, listResult},
+		{"try_run", BuiltinTryRun, 2, runResult},
 	}
 	for _, check := range checks {
 		function, ok := checked.Builtins[check.name]

@@ -121,6 +121,9 @@ const (
 	// TryListDirectoryFunction lists sorted entry names.
 	TryListDirectoryFunction = "ktn_rt_try_list_directory"
 
+	// TryRunFunction launches a program and reports its status or start error.
+	TryRunFunction = "ktn_rt_try_run"
+
 	// StringToBytesFunction returns a string's bytes as a byte array.
 	StringToBytesFunction = "ktn_rt_string_to_bytes"
 

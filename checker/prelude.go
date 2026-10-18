@@ -30,6 +30,12 @@ const (
     Failed { string message; }
 }
 `
+
+	runResultPrelude = `public union RunResult {
+    Ok { int status; }
+    Failed { string message; }
+}
+`
 )
 
 // preludeModulePath identifies the synthetic module. A user source file cannot
@@ -45,12 +51,13 @@ type preludeUses struct {
 	createDirectory bool
 	remove          bool
 	listDirectory   bool
+	run             bool
 }
 
 // any reports whether any prelude built-in is used.
 func (u preludeUses) any() bool {
 	return u.readFile || u.writeFile || u.writeBytes || u.createDirectory ||
-		u.remove || u.listDirectory
+		u.remove || u.listDirectory || u.run
 }
 
 // preludeSource assembles the fixed prelude source for the used built-ins. The
@@ -66,6 +73,9 @@ func preludeSource(uses preludeUses) string {
 	}
 	if uses.listDirectory {
 		source.WriteString(listDirectoryResultPrelude)
+	}
+	if uses.run {
+		source.WriteString(runResultPrelude)
 	}
 	return source.String()
 }
@@ -84,7 +94,7 @@ func parsePrelude(source string) (*parser.Module, error) {
 	return &parser.Module{Path: preludeModulePath, Program: program}, nil
 }
 
-// scanPreludeUses scans every module for syntactic calls to the six prelude
+// scanPreludeUses scans every module for syntactic calls to the seven prelude
 // built-ins. It is deliberately syntactic: a user function with one of these
 // names may cause the prelude to be injected unused, but helpers are non-static
 // and no semantic rule depends on the false positive.
@@ -96,6 +106,7 @@ func scanPreludeUses(modules []*parser.Module) preludeUses {
 		createDirectory: usesCallee(modules, "try_create_directory"),
 		remove:          usesCallee(modules, "try_remove"),
 		listDirectory:   usesCallee(modules, "try_list_directory"),
+		run:             usesCallee(modules, "try_run"),
 	}
 }
 
@@ -259,6 +270,7 @@ var preludeReservedNames = map[string]bool{
 	"ReadFileResult":      true,
 	"FileResult":          true,
 	"ListDirectoryResult": true,
+	"RunResult":           true,
 }
 
 // registerPreludeBuiltins adds the built-ins whose calls triggered the prelude.
@@ -279,6 +291,7 @@ func (c *checker) registerPreludeBuiltins(uses preludeUses) error {
 		{uses.createDirectory, "try_create_directory", []*Type{StringType}, "FileResult", BuiltinTryCreateDirectory},
 		{uses.remove, "try_remove", []*Type{StringType}, "FileResult", BuiltinTryRemove},
 		{uses.listDirectory, "try_list_directory", []*Type{StringType}, "ListDirectoryResult", BuiltinTryListDirectory},
+		{uses.run, "try_run", []*Type{StringType, c.arrayType(StringType)}, "RunResult", BuiltinTryRun},
 	}
 	for _, entry := range registrations {
 		if !entry.used {

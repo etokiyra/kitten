@@ -458,6 +458,20 @@ bool ktn_rt_try_list_directory(const ktn_string *path,
                                const ktn_string **message);
 
 /*
+ * Executes program directly with execve semantics, using args as argv[1..]
+ * and program as argv[0]. The child inherits the environment, working
+ * directory, and descriptors 0, 1, and 2. On success the child's exit status is
+ * stored in *status (128 + signal for a signal termination) and *message is
+ * NULL. A failure to start the program stores a Go-compatible
+ * "fork/exec <program>: <reason>" message and returns false; a nonzero child
+ * status is still success. Both output streams are flushed before forking.
+ */
+bool ktn_rt_try_run(const ktn_string *program,
+                    const ktn_array *args,
+                    int64_t *status,
+                    const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

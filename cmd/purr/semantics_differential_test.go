@@ -202,6 +202,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "TryRemove"
 	case checker.BuiltinTryListDirectory:
 		return "TryListDirectory"
+	case checker.BuiltinTryRun:
+		return "TryRun"
 	case checker.BuiltinMapHas:
 		return "MapHas"
 	case checker.BuiltinSubstring:

@@ -1145,6 +1145,15 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_run call and RunResult match",
+		root: `fn main() {
+    match (try_run("/bin/true", new string[0])) {
+        Ok(status) { print(status); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "file and directory prelude calls and matches",
 		root: `fn main() {
     match (try_write_file("x", "y")) {

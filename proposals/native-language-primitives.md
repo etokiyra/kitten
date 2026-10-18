@@ -10,11 +10,11 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1/8.2/8.3/8.4 status:** Section 2 (defined integer arithmetic),
+> **Phase 8.1/8.2/8.3/8.4/8.5 status:** Section 2 (defined integer arithmetic),
 > Section 3 (bitwise/shift operators and hex/binary literals), Section 4
-> (`byte` and `byte[]`), Section 5 (explicit conversions), and the file/directory
-> built-ins in Section 6 are **ADOPTED**. Sections 7 and 8 and the process part
-> of Section 6 remain **PROPOSED, not adopted**.
+> (`byte` and `byte[]`), Section 5 (explicit conversions), and Section 6
+> (recoverable file, directory, and process APIs) are **ADOPTED**. Sections 7
+> and 8 remain **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -610,7 +610,7 @@ Alternatives: `as` casts (new grammar and precedence; rejected for now),
 overloading by argument type (new dispatch; rejected), implicit byte
 conversions (forbidden by the decision).
 
-## 6. Recoverable file, directory, and process APIs (file/directory ADOPTED in Phase 8.4)
+## 6. Recoverable file, directory, and process APIs (ADOPTED in Phases 8.4 and 8.5)
 
 ### 6.1 Need
 
@@ -620,7 +620,7 @@ creation/listing/removal and file writes. These must be recoverable: a path
 failure is data, not a process termination. Reuse the 5.4 prelude decisions
 rather than adding generics.
 
-### 6.2 Predeclared source (FileResult and ListDirectoryResult adopted; RunResult and CurrentDirectoryResult proposed)
+### 6.2 Predeclared source (FileResult, ListDirectoryResult, and RunResult adopted; CurrentDirectoryResult proposed)
 
 Use these public unions, assembled only as needed (Section 6.3):
 
@@ -646,13 +646,13 @@ public union CurrentDirectoryResult {
 }
 ```
 
-`ReadFileResult` remains exactly as it is. The adopted names `FileResult` and
-`ListDirectoryResult` are reserved against every user top-level declaration in
-every program, whether or not a trigger fires, following the `ReadFileResult`
-rule. `RunResult` and `CurrentDirectoryResult` are reserved only when their
-proposed phases are adopted.
+`ReadFileResult` remains exactly as it is. The adopted names `FileResult`,
+`ListDirectoryResult`, and `RunResult` are reserved against every user top-level
+declaration in every program, whether or not a trigger fires, following the
+`ReadFileResult` rule. `CurrentDirectoryResult` is reserved only when its
+proposed phase is adopted.
 
-### 6.3 Built-ins and exact rules (file/directory adopted; try_run proposed)
+### 6.3 Built-ins and exact rules
 
 Add to Section 18.8:
 
@@ -691,6 +691,8 @@ try_run(string path, string[] arguments) -> RunResult
   `getcwd: ...`.
 - All built-ins are shadowable. A syntactic call triggers the corresponding
   prelude type even if the name is shadowed.
+- Output capture, stdin redirection, environment control, and timeouts are
+  **deferred**.
 
 ### 6.4 Prelude injection and cost
 
@@ -725,7 +727,7 @@ built-in: one `Function` entry and one non-static generated helper. The Go and
 Kitten checkers each duplicate the fragment text; differential whole-unit tests
 must compare the assembled module and generated C. The loader is unchanged.
 
-### 6.5 C lowering and runtime ABI (file/directory adopted; try_run proposed)
+### 6.5 C lowering and runtime ABI
 
 Generated helpers use the existing non-static pattern, for example:
 

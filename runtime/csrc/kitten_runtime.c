@@ -34,6 +34,8 @@
 
 #include "kitten_runtime.h"
 
+extern char **environ;
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /*
@@ -596,6 +599,128 @@ bool ktn_rt_try_read_file(const ktn_string *path, const ktn_string **text, const
     bytes[total] = '\0';
     *text = result;
     return true;
+}
+
+/* Builds the C argv vector in the parent. */
+static bool ktn_rt_build_argv(const ktn_string *program, const ktn_array *args, char ***argv_out, const ktn_string **message) {
+    if (args == NULL) {
+        ktn_rt_fail("try_run received a null argument array");
+    }
+    if (args->element_size != (int64_t)sizeof(const ktn_string *)) {
+        ktn_rt_fail("try_run received a non-string argument array");
+    }
+    int64_t count = args->length;
+    if ((uint64_t)count > SIZE_MAX / sizeof(char *) - 2) {
+        *message = ktn_rt_path_error_with_reason("fork/exec", program, "argument list too long");
+        return false;
+    }
+
+    char **argv = (char **)malloc(((size_t)count + 2) * sizeof(char *));
+    if (argv == NULL) {
+        *message = ktn_rt_path_error_with_reason("fork/exec", program, "cannot allocate argument vector");
+        return false;
+    }
+    argv[0] = (char *)program->data;
+    const ktn_string **items = (const ktn_string **)args->data;
+    for (int64_t index = 0; index < count; index++) {
+        const ktn_string *item = items[index];
+        argv[index + 1] = item == NULL ? (char *)"" : (char *)item->data;
+    }
+    argv[count + 1] = NULL;
+    *argv_out = argv;
+    return true;
+}
+
+bool ktn_rt_try_run(const ktn_string *program, const ktn_array *args, int64_t *status, const ktn_string **message) {
+    if (status == NULL || message == NULL) {
+        ktn_rt_fail("try_run received a null result slot");
+    }
+    *status = 0;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(program);
+    char **argv = NULL;
+    if (!ktn_rt_build_argv(checked, args, &argv, message)) {
+        return false;
+    }
+
+    int error_pipe[2];
+    if (pipe(error_pipe) != 0) {
+        int error = errno;
+        free(argv);
+        *message = ktn_rt_path_error("fork/exec", checked, error);
+        return false;
+    }
+    if (fcntl(error_pipe[1], F_SETFD, FD_CLOEXEC) != 0) {
+        int error = errno;
+        close(error_pipe[0]);
+        close(error_pipe[1]);
+        free(argv);
+        *message = ktn_rt_path_error("fork/exec", checked, error);
+        return false;
+    }
+
+    ktn_rt_flush_streams();
+    pid_t child = fork();
+    if (child < 0) {
+        int error = errno;
+        close(error_pipe[0]);
+        close(error_pipe[1]);
+        free(argv);
+        *message = ktn_rt_path_error("fork/exec", checked, error);
+        return false;
+    }
+    if (child == 0) {
+        close(error_pipe[0]);
+        execve(checked->data, argv, environ);
+        int child_error = errno;
+        ssize_t ignored = write(error_pipe[1], &child_error, sizeof(child_error));
+        (void)ignored;
+        _exit(127);
+    }
+
+    close(error_pipe[1]);
+    int child_error = 0;
+    ssize_t received;
+    int read_error = 0;
+    do {
+        received = read(error_pipe[0], &child_error, sizeof(child_error));
+    } while (received < 0 && errno == EINTR);
+    if (received < 0) {
+        read_error = errno;
+    }
+    close(error_pipe[0]);
+
+    int wait_status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &wait_status, 0);
+    } while (waited < 0 && errno == EINTR);
+    int wait_error = waited < 0 ? errno : 0;
+    free(argv);
+
+    if (waited < 0) {
+        *message = ktn_rt_path_error("wait", checked, wait_error);
+        return false;
+    }
+    if (received < 0) {
+        *message = ktn_rt_path_error("fork/exec", checked, read_error);
+        return false;
+    }
+    if (received > 0) {
+        *message = ktn_rt_path_error("fork/exec", checked, child_error);
+        return false;
+    }
+    if (WIFEXITED(wait_status)) {
+        *status = (int64_t)WEXITSTATUS(wait_status);
+        return true;
+    }
+    if (WIFSIGNALED(wait_status)) {
+        *status = (int64_t)(128 + WTERMSIG(wait_status));
+        return true;
+    }
+    *message = ktn_rt_plain_error("wait returned an unexpected status");
+    return false;
 }
 
 /* Writes every byte or reports the first write failure. */

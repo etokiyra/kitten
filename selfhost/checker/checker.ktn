@@ -210,7 +210,7 @@ fn collect_declaration(Checker checker, int module_index, Module module, Decl de
     match (declaration_name(declaration)) {
         Present(named) {
             if (module.path != prelude_module_path() &&
-                (named.name == "ReadFileResult" || named.name == "FileResult" || named.name == "ListDirectoryResult")) {
+                (named.name == "ReadFileResult" || named.name == "FileResult" || named.name == "ListDirectoryResult" || named.name == "RunResult")) {
                 return StepResult.Failed {
                     error = error_at(
                         checker,

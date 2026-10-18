@@ -340,7 +340,11 @@ fn emit_all_prelude_helper_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(read_helper)) {
         return read_helper;
     }
-    return emit_file_directory_prelude_helper_section(emitter);
+    EmitStep file_directory_helpers = emit_file_directory_prelude_helper_section(emitter);
+    if (!emit_ok(file_directory_helpers)) {
+        return file_directory_helpers;
+    }
+    return emit_run_prelude_helper_section(emitter);
 }
 
 // emit_read_file_prelude_helper_section emits the helper that turns the
@@ -530,6 +534,62 @@ fn emit_list_directory_prelude_helper(DeclarationEmitter emitter) -> EmitStep {
     }
     emitter.indent = emitter.indent + 1;
     EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_entries);");
+    if (!emit_ok(ok)) {
+        return ok;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) {
+        return close_if;
+    }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) {
+        return failed;
+    }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) {
+        return close;
+    }
+    return emit_line(emitter, "");
+}
+
+// emit_run_prelude_helper_section emits the RunResult helper for try_run.
+fn emit_run_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.builtins, "try_run")) {
+        return EmitStep.Ok;
+    }
+    if (!has(emitter.model.visible_types, "RunResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared RunResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["RunResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared RunResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, "try_run") + "(const ktn_string *ktn_program, ktn_array *ktn_args) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep status = emit_line(emitter, "int64_t ktn_status = 0;");
+    if (!emit_ok(status)) {
+        return status;
+    }
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) {
+        return message;
+    }
+    EmitStep condition = emit_line(emitter, "if (" + try_run_function() + "(ktn_program, ktn_args, &ktn_status, &ktn_message)) {");
+    if (!emit_ok(condition)) {
+        return condition;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_status);");
     if (!emit_ok(ok)) {
         return ok;
     }

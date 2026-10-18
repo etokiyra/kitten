@@ -486,6 +486,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "RunResult parameters",
+		root: `fn describe(RunResult result) -> int {
+    match (result) {
+        Ok(status) { return status; }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(describe(try_run("/bin/true", new string[0])));
+}
+`,
+	}, {
 		description: "file and directory result parameters",
 		root: `fn inspect(FileResult result) -> int {
     match (result) {
