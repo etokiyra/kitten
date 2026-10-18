@@ -791,6 +791,7 @@ fn main() {
     try_run("/bin/true", new string[0]);
     try_current_directory();
     try_getenv("PATH");
+    try_run_capture("/bin/true", new string[0]);
 }
 `,
 	}, {
@@ -920,6 +921,39 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_run_capture with CapturedRunResult",
+		root: `fn main() {
+    match (try_run_capture("/bin/true", new string[0])) {
+        Ok(status, out, err) { print(status, length(out), length(err)); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "direct CapturedRunResult construction",
+		root: `fn main() {
+    try_run_capture("/bin/true", new string[0]);
+    CapturedRunResult ok = CapturedRunResult.Ok { status = 0, stdout = "o", stderr = "e" };
+    CapturedRunResult failed = CapturedRunResult.Failed { message = "m" };
+    match (ok) { Ok(status, out, err) { print(status, out, err); } Failed(message) { print(message); } }
+    match (failed) { Ok(status, out, err) { print(status); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "try_run_capture from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_run_capture("/bin/true", new string[0])));
+}
+`,
+		imported: `public fn classify(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status + length(out) + length(err); }
+        Failed(message) { return -1; }
+    }
+}
+`,
+	}, {
 		description: "a shadowed try_write_file still emits the prelude helper",
 		root: `fn try_write_file(string path, string text) -> int {
     return 1;
@@ -953,6 +987,15 @@ fn main() {
 }
 fn main() {
     print(try_getenv("x"));
+}
+`,
+	}, {
+		description: "a shadowed try_run_capture still emits the prelude helper",
+		root: `fn try_run_capture(string program, string[] args) -> int {
+    return 1;
+}
+fn main() {
+    print(try_run_capture("x", new string[0]));
 }
 `,
 	}, {

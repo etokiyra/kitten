@@ -1036,11 +1036,12 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Twenty-one functions are provided by the language: `print`, `eprint`, `exit`,
+Twenty-two functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
-`try_list_directory`, `try_run`, `try_current_directory`, `try_getenv`,
-`int_from_byte`, `byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
+`try_list_directory`, `try_run`, `try_run_capture`, `try_current_directory`,
+`try_getenv`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
+`bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1204,6 +1205,11 @@ the same name shadows the built-in.
       Set { string value; }
       Unset
   }
+
+  union CapturedRunResult {
+      Ok { int status; string stdout; string stderr; }
+      Failed { string message; }
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
@@ -1212,28 +1218,29 @@ the same name shadows the built-in.
   `RunResult.Ok { status = ... }`, `RunResult.Failed { message = ... }`,
   `CurrentDirectoryResult.Ok { path = ... }`,
   `CurrentDirectoryResult.Failed { message = ... }`,
-  `EnvResult.Set { value = ... }`, and `EnvResult.Unset` are ordinary variant
-  constructions.
-- The six predeclared union names `ReadFileResult`, `FileResult`,
-  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, and `EnvResult`
-  are reserved in **every** program: any user top-level declaration with one of
-  those names is an error, whether or not the corresponding implicit type is
-  introduced.
+  `EnvResult.Set { value = ... }`, `EnvResult.Unset`,
+  `CapturedRunResult.Ok { ... }`, and `CapturedRunResult.Failed { ... }` are
+  ordinary variant constructions.
+- The seven predeclared union names `ReadFileResult`, `FileResult`,
+  `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`, and
+  `CapturedRunResult` are reserved in **every** program: any user top-level
+  declaration with one of those names is an error, whether or not the
+  corresponding implicit type is introduced.
 - `file` and `directory` built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
   `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
-  with each union's fixed source text concatenated directly (each block ends
-  with its closing brace and newline). A program using
+  `CapturedRunResult`, with each union's fixed source text concatenated directly
+  (each block ends with its closing brace and newline). A program using
   only `try_read_file` therefore gets exactly the existing `ReadFileResult`
   prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
   `try_read_file`: an identifier call named `try_write_file` (even if shadowed
   by a user function) introduces `FileResult` and its generated helper; the same
   applies to the other new built-ins, including `try_run`/`RunResult`,
-  `try_current_directory`/`CurrentDirectoryResult`, and
-  `try_getenv`/`EnvResult`. A program with no new built-in and no
+  `try_current_directory`/`CurrentDirectoryResult`,
+  `try_getenv`/`EnvResult`, and `try_run_capture`/`CapturedRunResult`. A program with no new built-in and no
   `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
@@ -1348,6 +1355,42 @@ the same name shadows the built-in.
 - Calling it with the wrong number of arguments, a non-`string` program, or a
   non-`string[]` argument array is an error. Its return type is `RunResult`, and
   it is not variadic.
+
+**`try_run_capture`**
+
+- `try_run_capture(program, args)` has exactly the execution semantics of
+  `try_run`: it executes `program` directly with no shell or `PATH` search;
+  `program` is `argv[0]`, `args` are `argv[1..]`, and the environment, working
+  directory, and umask are inherited. The parent flushes stdout and stderr
+  before forking. A normal exit yields `0..255`; a signal termination yields
+  `128 + signal`; a nonzero exit is `Ok`, never `Failed`.
+- The child's stdin is `/dev/null`. Its stdout and stderr are captured
+  separately into fresh GC-managed strings. A failure to start is
+  `Failed { message = "fork/exec <program>: <reason>" }`, using the same
+  Go-compatible reason mapping as `try_run`.
+- `CapturedRunResult` is the predeclared result union:
+
+  ```kitten
+  union CapturedRunResult {
+      Ok { int status; string stdout; string stderr; }
+      Failed { string message; }
+  }
+  ```
+
+- Each captured stream is capped at exactly 16 MiB (16,777,216 bytes). Exactly
+  that many bytes is allowed. If either stream would exceed it, the runtime
+  kills the child with `SIGKILL`, closes both pipes, reaps the child, and returns
+  `Failed` with
+  `run <program>: stdout exceeds the 16777216 byte limit` (or `stderr`).
+- A NUL byte in either captured stream is a `Failed` result after the child has
+  been reaped, with
+  `run <program>: stdout contains a NUL byte at offset <n>` (or `stderr`),
+  where `<n>` is the zero-based decimal offset of the first NUL. Bytes above
+  `0x7F` and invalid UTF-8 are preserved as bytes. A `byte[]`-returning variant
+  is **deferred**.
+- Calling it with the wrong number of arguments, a non-`string` program, or a
+  non-`string[]` argument array is an error. Its return type is
+  `CapturedRunResult`, and it is not variadic.
 
 **`try_current_directory`**
 
@@ -1555,7 +1598,8 @@ is **deferred**.
   `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_try_write_file`,
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
   `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
-  `ktn_rt_try_current_directory`, `ktn_rt_try_getenv`, `ktn_rt_exit`, the
+  `ktn_rt_try_current_directory`, `ktn_rt_try_getenv`,
+  `ktn_rt_try_run_capture`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -2089,6 +2133,10 @@ loader prefix.
   bytes and are not modifiable through this API; `try_run` inherits the
   environment unchanged. The future native runtime must read `envp` from the
   process's initial stack.
+- `try_run_capture(program, args) -> CapturedRunResult` executes exactly as
+  `try_run`, but with stdin from `/dev/null` and stdout/stderr captured into
+  separate strings. It caps each stream at 16 MiB and rejects NUL bytes with the
+  exact `run ...` messages above. A byte-array capture variant is deferred.
 
 Current-working-directory changes, recursive removal, atomic replacement, and
 file metadata beyond the operations above are **not** implemented.
@@ -2174,8 +2222,8 @@ The following are **not** implemented and must not be assumed:
   paths.
 - Metadata, recursive operations, atomic replacement, and other filesystem
   operations beyond the built-ins in Section 18.8.
-- Output capture, stdin redirection, environment control, process timeouts, and
-  changing the current directory.
+- A `byte[]`-returning capture variant, stdin redirection, environment control,
+  process timeouts, and changing the current directory.
 
 - Separate compilation or incremental builds; the whole program is reloaded and
   recompiled each time.
@@ -2207,6 +2255,9 @@ The following are **not** implemented and must not be assumed:
 14. `try_getenv` returns `EnvResult.Set` for present variables (including an
     empty value) and `EnvResult.Unset` otherwise; it has no setter and leaves
     the environment unchanged.
+15. `try_run_capture` uses `try_run` execution semantics with `/dev/null` stdin
+    and separate stdout/stderr strings, capped at 16 MiB per stream; NUL and
+    over-limit results are `Failed`.
 
 ---
 

@@ -1145,6 +1145,15 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_run_capture call and CapturedRunResult match",
+		root: `fn main() {
+    match (try_run_capture("/bin/true", new string[0])) {
+        Ok(status, out, err) { print(status, length(out), length(err)); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "try_getenv call and EnvResult match",
 		root: `fn main() {
     match (try_getenv("PATH")) {

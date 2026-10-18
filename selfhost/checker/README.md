@@ -206,7 +206,7 @@ is looked up by its module and name, which duplicate detection makes exact.
 
 A syntactic call whose callee is one of `try_read_file`, `try_write_file`,
 `try_write_bytes`, `try_create_directory`, `try_remove`,
-`try_list_directory`, `try_run`, `try_current_directory`, or `try_getenv` causes `check_modules` to append one synthetic module after
+`try_list_directory`, `try_run`, `try_run_capture`, `try_current_directory`, or `try_getenv` causes `check_modules` to append one synthetic module after
 every loaded module, at `id = module_count` and path `<prelude>`. The module
 contains only the result unions required by the calls, in the fixed order
 
@@ -217,6 +217,7 @@ contains only the result unions required by the calls, in the fixed order
 4. `RunResult` for `try_run`
 5. `CurrentDirectoryResult` for `try_current_directory`
 6. `EnvResult` for `try_getenv`
+7. `CapturedRunResult` for `try_run_capture`
 
 with each fixed block concatenated directly. A `try_read_file`-only program gets
 exactly the old source and C. A program with no matching call gets no extra
@@ -230,8 +231,9 @@ mangled name do not change.
 The trigger is deliberately syntactic: a user function with one of these names
 still injects its result union, and the generated helper is non-static and may be
 unused. The built-ins remain shadowable. The prelude type names `ReadFileResult`,
-`FileResult`, `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, and
-`EnvResult` are reserved against every user top-level declaration, whether or not the program has a trigger, with the reference's exact
+`FileResult`, `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`,
+`EnvResult`, and `CapturedRunResult` are reserved against every user top-level
+declaration, whether or not the program has a trigger, with the reference's exact
 diagnostic. A builtin itself is registered only after its result type has been
 collected, so its return type is the prelude's resolved type. The loader does
 **not** inject the prelude; this is the checker's responsibility.
@@ -265,12 +267,13 @@ binary operator with its operand rules, array creation, indexing and length, map
 and `has`, strings and `substring`, `print`'s variadic argument rule, conditions,
 `return`, the conservative return-path analysis, defined two's-complement
 integer arithmetic and decimal-literal range checking, and the implicit
-file/directory/process/environment prelude with its six reserved names, the bitwise/shift
+file/directory/process/environment/capture prelude with its seven reserved
+names, the bitwise/shift
 operators, hexadecimal/binary literal rules, the `byte` type and `byte[]`, the
 four byte/string conversion built-ins, the five recoverable file/directory
 built-ins, recoverable process launch with `try_run`/`RunResult`,
-`try_current_directory`/`CurrentDirectoryResult`, and
-`try_getenv`/`EnvResult`.
+`try_current_directory`/`CurrentDirectoryResult`,
+`try_getenv`/`EnvResult`, and `try_run_capture`/`CapturedRunResult`.
 
 The reference's nil-guards (`"a module contains a nil struct declaration"`,
 `"identifier is nil"`, `"unsupported expression %T"`, `"function %q has no
@@ -297,7 +300,7 @@ conversion remains deferred.
 ## Differential testing
 
 `cmd/purr/checker_differential_test.go` builds the checker once and runs it over
-a corpus of **1989 inputs**, comparing its rendering with the reference
+a corpus of **2004 inputs**, comparing its rendering with the reference
 implementation's rendering of the same input:
 
 ```sh
@@ -319,7 +322,7 @@ generator's. A self-hosted source that declares `import` statements is checked a
 a one-module program, so the corpus exercises the reference's undefined-name
 diagnostics on them rather than checking them cleanly.
 
-**All 1989 inputs render byte-identically**, so this is exact parity on
+**All 2004 inputs render byte-identically**, so this is exact parity on
 success/failure, error category, position, message, and the declaration counts
 reported on success. `TestKittenCheckerOutputFormat` additionally pins the
 rendering with hand-written expectations, and `TestEmptySecondModuleIsInert`
@@ -340,8 +343,8 @@ the same corpus. The rendering is one line per declaration and per annotated nod
 in a fixed walk order — the node's kind and position, its resolved type, its
 resolved symbol with the declaration position it denotes, and its variant — with
 types rendered structurally and named types carrying their module. It covers the
-annotations themselves rather than success counts: **1989 inputs, all identical,
-5665 annotated lines of which 5307 carry a fact** (the remainder are the callee
+annotations themselves rather than success counts: **2004 inputs, all identical,
+5808 annotated lines of which 5427 carry a fact** (the remainder are the callee
 nodes and type names that the reference leaves unannotated).
 
 `TestKittenSemanticsOutputFormat` pins the rendering, and

@@ -214,6 +214,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "TryCurrentDirectory"
 	case checker.BuiltinTryGetenv:
 		return "TryGetenv"
+	case checker.BuiltinTryRunCapture:
+		return "TryRunCapture"
 	case checker.BuiltinRawLoad8:
 		return "RawLoad8"
 	case checker.BuiltinRawStore8:

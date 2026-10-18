@@ -486,6 +486,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "CapturedRunResult parameters",
+		root: `fn describe(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status + length(out) + length(err); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(describe(try_run_capture("/bin/true", new string[0])));
+}
+`,
+	}, {
 		description: "EnvResult parameters",
 		root: `fn describe(EnvResult result) -> int {
     match (result) {

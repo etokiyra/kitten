@@ -84,6 +84,9 @@ const (
 	// BuiltinTryGetenv reads one environment variable.
 	BuiltinTryGetenv
 
+	// BuiltinTryRunCapture runs a program and captures its streams.
+	BuiltinTryRunCapture
+
 	// BuiltinRawLoad8, BuiltinRawStore8, BuiltinRawLoad64, and
 	// BuiltinRawStore64 are runtime-module memory intrinsics.
 	BuiltinRawLoad8

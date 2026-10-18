@@ -130,6 +130,9 @@ const (
 	// TryGetenvFunction reads one environment variable.
 	TryGetenvFunction = "ktn_rt_try_getenv"
 
+	// TryRunCaptureFunction runs a program and captures stdout/stderr.
+	TryRunCaptureFunction = "ktn_rt_try_run_capture"
+
 	// Runtime-module raw-memory and syscall helpers.
 	RawLoad8Function   = "ktn_rt_raw_load8"
 	RawStore8Function  = "ktn_rt_raw_store8"

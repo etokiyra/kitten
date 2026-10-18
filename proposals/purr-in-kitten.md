@@ -3,9 +3,10 @@
 > **ADOPTED (plan); implementation in progress.**
 >
 > The human approved this plan on 2026-10-18. Implementation proceeds one commit
-> per step in the order below. Only the `try_getenv`/`EnvResult` step is
-> implemented so far; no `purr` command described here is implemented unless
-> explicitly marked **already implemented**.
+> per step in the order below. The `try_getenv`/`EnvResult` and
+> `try_run_capture`/`CapturedRunResult` steps are implemented so far; no `purr`
+> command described here is implemented unless explicitly marked **already
+> implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -33,9 +34,11 @@
   inside a directory containing `purr.toml` use `src/main.ktn` or
   `src/lib.ktn`.
 - Add the smallest language/runtime capabilities the tool needs:
-  `try_getenv`, `try_find_program`, `try_run_capture`, and
+  `try_getenv`, `try_run_capture`, `try_file_info`, and
   `try_create_temp_directory`. Add `try_executable_path` later, not as a
-  `build`/`run` blocker because runtime sources are embedded.
+  `build`/`run` blocker because runtime sources are embedded. `try_find_program`
+  is deliberately dropped; PATH search will be Kitten code over `try_getenv`
+  and `try_file_info`.
 - Embed the runtime C sources as generated Kitten string constants. Do not
   require a runtime directory next to the installed binary.
 - `purr new` creates `NAME/.gitignore`, `NAME/purr.toml`, and
@@ -71,15 +74,16 @@ Implementation status:
 | Step | Status |
 |---|---|
 | 1. `try_getenv` / `EnvResult` | **implemented in 9.1** |
-| 2. `try_find_program` / `try_run_capture` | proposed, next |
-| 3. `try_create_temp_directory` | proposed |
-| 4. Embedded runtime generation | proposed |
-| 5. TOML subset parser | proposed |
-| 6. `purr new` | proposed |
-| 7. Kitten `purr` source-mode build/run | proposed |
-| 8. Project mode | proposed |
-| 9. Library object mode | proposed, deferred |
-| 10. Full parity suite / Go CLI freeze | proposed |
+| 2. `try_run_capture` | **implemented in 9.2** |
+| 3. `try_file_info` | proposed, next |
+| 4. `try_create_temp_directory` | proposed |
+| 5. Embedded runtime generation | proposed |
+| 6. TOML subset parser | proposed |
+| 7. `purr new` | proposed |
+| 8. Kitten `purr` source-mode build/run | proposed |
+| 9. Project mode | proposed |
+| 10. Library object mode | proposed, deferred |
+| 11. Full parity suite / Go CLI freeze | proposed |
 
 ## 2. Audit: the current Go CLI is the parity specification
 
@@ -244,57 +248,52 @@ now.
 
 **Blocks:** `build` and `run` (compiler discovery); `new` does not need it.
 
-### 3.2 `try_find_program`
+### 3.2 `try_file_info` (proposed; replaces `try_find_program`)
 
-**Needed for:** `CC` resolution and `cc`/`gcc`/`clang` discovery without a shell;
-`pkg-config` discovery; future installer/`self` tooling.
+**Design override:** the earlier `try_find_program` built-in is **dropped**.
+PATH search will be written in Kitten on top of `try_getenv("PATH")` plus this
+general file-information primitive. No find-program runtime primitive is
+implemented.
 
-`try_run` uses direct `execve` semantics and does not search `PATH`. Reusing a
-shell would violate the no-shell design, so the search must be a runtime
-primitive.
+**Needed for:** PATH search, project discovery, `purr new` existence checks,
+checking whether `target` is a directory, and future installer/`self` work.
 
 **Proposal.**
 
 ```text
-try_find_program(string name) -> ProgramResult
+try_file_info(string path) -> FileInfoResult
 ```
 
 ```kitten
-union ProgramResult {
-    Ok { string path; }
+union FileInfoResult {
+    Ok {
+        bool is_file;
+        bool is_directory;
+        bool is_symlink;
+        bool executable;
+        int size;
+    }
     Missing
     Failed { string message; }
 }
 ```
 
-- A name containing `/` is checked directly.
-- A name without `/` searches `PATH` entries left to right; an empty entry means
-  the current directory.
-- The result path is absolute and cleaned; it is suitable for `try_run`.
-- `Missing` means no executable was found; `Failed` carries a
-  permission/stat/other error in the runtime's Go-compatible path-error style.
-- Executability is checked with `access(path, X_OK)`; this does not execute the
-  candidate.
+- `lstat` classifies the path itself; a symlink sets `is_symlink` and does not
+  claim to be the target's file/directory kind.
+- `executable` uses `access(path, X_OK)` and therefore follows symlinks; it is
+  the bit PATH search needs.
+- `size` is the regular file's byte size, or 0 for directories and symlinks.
+- `Missing` means `ENOENT`/`ENOTDIR`; other failures use the Go-compatible
+  `stat <path>: <reason>` style.
+- No `follow_symlinks` flag is needed in the first version; a caller that wants
+  target metadata can add it later without changing existing fields.
 
-Runtime ABI:
+**Blocks:** PATH search and therefore `build`/`run`; `new` existence checks and
+project discovery also use it once project mode exists.
 
-```c
-bool ktn_rt_try_find_program(const ktn_string *name,
-                             const ktn_string **path,
-                             bool *found,
-                             const ktn_string **message);
-```
+### 3.3 `try_run_capture` (implemented in 9.2)
 
-**Blocks:** `build` and `run`; not `new`.
-
-### 3.3 `try_run_capture`
-
-**Needed for:** capturing `pkg-config` flags, `cc --version` probing, and the C
-compiler's stdout/stderr so `purr` can print the current
-`<source>: C compilation failed: ...` structure after the command finishes.
-`try_run` inherits the parent's stdio and cannot provide that.
-
-**Proposal.**
+**Implemented shape.**
 
 ```text
 try_run_capture(string program, string[] args) -> CapturedRunResult
@@ -307,20 +306,27 @@ union CapturedRunResult {
 }
 ```
 
-- Direct `execve` semantics: no shell, no PATH search (use `try_find_program`
-  first).
-- The child inherits the environment and working directory.
-- Standard input is `/dev/null`; stdout and stderr are captured separately.
-- A normal exit status is `0..255`; a signal termination is `128 + signal`.
-- A start failure is `Failed` with `fork/exec <program>: <reason>`.
-- A NUL byte in captured output cannot be represented in a Kitten string; make
-  that a defined `Failed` with `captured output contains a NUL byte` rather than
-  truncating.
-- Cap each stream (proposed `KTN_RT_MAX_CAPTURE` of 16 MiB) and fail with
-  `captured output exceeds the maximum size` rather than growing without bound.
-- Read both pipes while the child runs so a large diagnostic cannot deadlock.
-- Flush the parent's stdout and stderr before forking so buffered `purr` output
-  does not enter the child.
+It uses exactly `try_run`'s direct-exec semantics, including inherited
+environment/working directory/umask, `argv[0]`, status/signal mapping, and
+`fork/exec <program>: <reason>` start failures. stdin is `/dev/null`; stdout and
+stderr are captured separately. The parent flushes both streams before forking
+and reads both pipes concurrently with `poll` so neither can deadlock the other.
+
+Each stream is capped at exactly 16,777,216 bytes. Over-limit output kills and
+reaps the child and fails with:
+
+```text
+run <program>: stdout exceeds the 16777216 byte limit
+```
+
+(or `stderr`). A NUL byte in either stream fails after the child is reaped with:
+
+```text
+run <program>: stdout contains a NUL byte at offset <n>
+```
+
+(or `stderr`), where `<n>` is zero-based. Invalid UTF-8 and bytes above `0x7F`
+are preserved. A `byte[]`-returning variant is deferred.
 
 Runtime ABI:
 
@@ -401,7 +407,7 @@ Linux implementation reads `/proc/self/exe` with a growing buffer, like
   `try_create_directory` (one level, mode 0755).
 - Cleanup: `try_remove` (files, links, empty directories) after known files.
 - Running the built program: `try_run` (inherited stdio).
-- Compiler diagnostics: once `try_run_capture` exists.
+- Compiler diagnostics: `try_run_capture` supplies them.
 - Runtime source embedding: no runtime primitive; generated constants.
 - Output executable mode: the C compiler creates the executable mode; `purr`
   does not need `chmod` for its output. `purr new` needs only 0644 files and
@@ -412,7 +418,7 @@ Linux implementation reads `/proc/self/exe` with a growing buffer, like
 | Capability | `new` | `build` | `run` |
 |---|---:|---:|---:|
 | `try_getenv` | no | **yes** | **yes** |
-| `try_find_program` | no | **yes** | **yes** |
+| `try_file_info` | **yes** | **yes** | **yes** |
 | `try_run_capture` | no | **yes** | **yes** |
 | `try_create_temp_directory` | no | **yes** | **yes** |
 | `try_executable_path` | no | no | no |
@@ -499,7 +505,7 @@ temporary:
 
 - the C source emitted by the compiler and the MIT runtime sources are written
   to a temp directory;
-- `try_find_program` resolves `CC`/`cc`/`gcc`/`clang`;
+- Kitten code splits `PATH` and uses `try_file_info` to resolve `CC`/`cc`/`gcc`/`clang`;
 - `try_run_capture` runs `pkg-config` and the compiler;
 - the output executable is linked against libgc.
 
@@ -865,33 +871,34 @@ for bootstrap/reference and its tests are not the definition of `purr`.
 Each item is a separate commit after approval; none is authorized by this
 design-only phase.
 
-1. **Environment primitive** (`try_getenv` and `EnvResult`) — both checkers,
-   both generators, runtime, semantic model, corpora, reserved name, helper.
-   Acceptance: exact missing/empty values; compiler discovery can read `CC` and
-   `PATH`; no production behavior change.
-2. **Program lookup and capture** (`try_find_program`, `try_run_capture`) — both
-   pipelines and C runtime; capture both pipes, start failure text, no
-   deadlock, statuses. Acceptance: `pkg-config`/`cc` behavior and exact captured
-   output.
-3. **Temp directory** (`try_create_temp_directory`) — mode/unique/cleanup.
+1. **Environment primitive** (`try_getenv` and `EnvResult`) — implemented in
+   9.1. Acceptance: exact missing/empty values; compiler discovery can read
+   `CC` and `PATH`; no production behavior change.
+2. **Capture primitive** (`try_run_capture` and `CapturedRunResult`) —
+   implemented in 9.2. Acceptance: both pipes, start failure text, no deadlock,
+   exact limits and statuses.
+3. **File information** (`try_file_info`) — proposed for 9.3; PATH search is
+   then written in Kitten, with no `try_find_program` built-in.
+4. **Temp directory** (`try_create_temp_directory`) — mode/unique/cleanup.
    Acceptance: build/run temp trees and failure cleanup.
-4. **Embedded runtime generation** — generator, generated `purr/embedded.ktn`,
+5. **Embedded runtime generation** — generator, generated `purr/embedded.ktn`,
    drift test, MIT notice. Acceptance: regenerate byte-identical.
-5. **TOML subset parser** — `purr/manifest.ktn`, independent Kitten tests and
+6. **TOML subset parser** — `purr/manifest.ktn`, independent Kitten tests and
    exact errors. Acceptance: valid/unsupported corpus.
-6. **`purr new`** — CLI, templates, modes, cleanup, name validation. Acceptance:
+7. **`purr new`** — CLI, templates, modes, cleanup, name validation. Acceptance:
    exact tree/bytes/messages/modes, no license in templates.
-7. **Kitten `purr` root and source-mode build/run** — `purr.ktn`, compiler
+8. **Kitten `purr` root and source-mode build/run** — `purr.ktn`, compiler
    linkage, in-process build, C compiler subprocess, temp dirs, current
    diagnostics and statuses. Acceptance: legacy parity suite subset.
-8. **Project mode** — manifest discovery, target output, binary build/run.
+9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.
-9. **Library build** (if approved) — no-entry generation, object output.
-10. **Full parity suite and Go CLI freeze** — all legacy and new cases, fixpoint,
+10. **Library build** (if approved) — no-entry generation, object output.
+11. **Full parity suite and Go CLI freeze** — all legacy and new cases, fixpoint,
     release-build check. Acceptance: parity report and `cmd/purr` frozen.
 
 The recommended order matches the dependency chain: environment -> capture ->
-temp -> embedding -> TOML -> new -> build/run -> project -> library -> freeze.
+file_info -> temp -> embedding -> TOML -> new -> build/run -> project ->
+library -> freeze.
 
 ## 14. Out-of-scope commands and what each needs
 

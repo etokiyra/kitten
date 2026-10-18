@@ -320,6 +320,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "captured run result through call arguments",
+		root: `fn inspect(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status + length(out) + length(err); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(inspect(try_run_capture("/bin/true", new string[0])));
+}
+`,
+	}, {
 		description: "environment result through call arguments",
 		root: `fn inspect(EnvResult result) -> int {
     match (result) {

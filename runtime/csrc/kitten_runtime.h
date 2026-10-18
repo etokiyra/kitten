@@ -550,6 +550,21 @@ bool ktn_rt_try_current_directory(const ktn_string **path,
 bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value);
 
 /*
+ * Runs program with try_run's direct-exec semantics while putting stdin on
+ * /dev/null and capturing stdout and stderr separately. Each stream is capped
+ * at 16777216 bytes; exceeding the cap kills and reaps the child and fails with
+ * "run <program>: <stream> exceeds the 16777216 byte limit". A NUL byte in a
+ * captured stream fails after reaping with
+ * "run <program>: <stream> contains a NUL byte at offset <n>".
+ */
+bool ktn_rt_try_run_capture(const ktn_string *program,
+                            const ktn_array *args,
+                            int64_t *status,
+                            const ktn_string **out,
+                            const ktn_string **err,
+                            const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

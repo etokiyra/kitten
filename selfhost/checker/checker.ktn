@@ -244,7 +244,7 @@ fn collect_declaration(Checker checker, int module_index, Module module, Decl de
     match (declaration_name(declaration)) {
         Present(named) {
             if (!is_synthetic_module_path(module.path) &&
-                (named.name == "ReadFileResult" || named.name == "FileResult" || named.name == "ListDirectoryResult" || named.name == "RunResult" || named.name == "CurrentDirectoryResult" || named.name == "EnvResult")) {
+                (named.name == "ReadFileResult" || named.name == "FileResult" || named.name == "ListDirectoryResult" || named.name == "RunResult" || named.name == "CurrentDirectoryResult" || named.name == "EnvResult" || named.name == "CapturedRunResult")) {
                 return StepResult.Failed {
                     error = error_at(
                         checker,

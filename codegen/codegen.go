@@ -567,7 +567,10 @@ func (g *generator) emitPreludeHelper() error {
 	if err := g.emitCurrentDirectoryPreludeHelper(); err != nil {
 		return err
 	}
-	return g.emitEnvPreludeHelper()
+	if err := g.emitEnvPreludeHelper(); err != nil {
+		return err
+	}
+	return g.emitCapturePreludeHelper()
 }
 
 // emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
@@ -757,6 +760,34 @@ func (g *generator) emitEnvPreludeHelper() error {
 	g.indent--
 	g.line("}")
 	g.line("return %s();", variantConstructorName(unionType, "Unset"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitCapturePreludeHelper emits the CapturedRunResult helper.
+func (g *generator) emitCapturePreludeHelper() error {
+	if _, ok := g.checked.Builtins["try_run_capture"]; !ok {
+		return nil
+	}
+	unionType, err := g.preludeUnionType("CapturedRunResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_program, ktn_array *ktn_args) {", cStruct, preludeHelperName(unionType.Module, "try_run_capture"))
+	g.indent++
+	g.line("int64_t ktn_status = 0;")
+	g.line("const ktn_string *ktn_stdout = NULL;")
+	g.line("const ktn_string *ktn_stderr = NULL;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s(ktn_program, ktn_args, &ktn_status, &ktn_stdout, &ktn_stderr, &ktn_message)) {", runtime.TryRunCaptureFunction)
+	g.indent++
+	g.line("return %s(ktn_status, ktn_stdout, ktn_stderr);", variantConstructorName(unionType, "Ok"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
 	g.indent--
 	g.line("}")
 	g.line("")

@@ -453,6 +453,39 @@ fn main() {
     print(try_getenv("x"));
 }
 `)
+	add("try_run_capture and CapturedRunResult", `fn describe(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status + length(out) + length(err); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    string[] args = new string[0];
+    CapturedRunResult direct_ok = CapturedRunResult.Ok { status = 0, stdout = "o", stderr = "e" };
+    CapturedRunResult direct_failed = CapturedRunResult.Failed { message = "m" };
+    print(describe(try_run_capture("/bin/true", args)));
+    print(describe(direct_ok), describe(direct_failed));
+}
+`)
+	add("try_run_capture only", `fn main() {
+    match (try_run_capture("/bin/true", new string[0])) {
+        Ok(status, out, err) { print(status, length(out), length(err)); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_run_capture with try_getenv", `fn main() {
+    try_getenv("PATH");
+    try_run_capture("/bin/true", new string[0]);
+}
+`)
+	add("shadowed try_run_capture still injects its prelude", `fn try_run_capture(string program, string[] args) -> int {
+    return 1;
+}
+fn main() {
+    print(try_run_capture("x", new string[0]));
+}
+`)
 	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
     return 1;
 }
@@ -709,6 +742,16 @@ fn main() {
 		"fn f() { try_getenv(); }\n",
 		"fn f() { try_getenv(1); }\n",
 		"fn f() { try_getenv(\"x\", \"y\"); }\n",
+		"fn f() { match (try_run_capture(\"/bin/true\", new string[0])) { Ok(status, out, err) { } } }\n",
+		"fn f() { try_run_capture(); }\n",
+		"fn f() { try_run_capture(\"/bin/true\"); }\n",
+		"fn f() { try_run_capture(1, new string[0]); }\n",
+		"fn f() { try_run_capture(\"/bin/true\", \"x\"); }\n",
+		"fn f() { try_run_capture(\"/bin/true\", new int[0]); }\n",
+		"fn CapturedRunResult() {}\n",
+		"struct CapturedRunResult {}\n",
+		"enum CapturedRunResult { A }\n",
+		"union CapturedRunResult { A }\n",
 		"fn EnvResult() {}\n",
 		"struct EnvResult {}\n",
 		"enum EnvResult { A }\n",
@@ -894,6 +937,17 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_run_capture from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_run_capture("/bin/true", new string[0])));
+}
+`, `public fn classify(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status + length(out) + length(err); }
+        Failed(message) { return -1; }
     }
 }
 `)

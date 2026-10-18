@@ -39,6 +39,8 @@ extern char **environ;
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -734,6 +736,367 @@ bool ktn_rt_try_run(const ktn_string *program, const ktn_array *args, int64_t *s
     }
     *message = ktn_rt_plain_error("wait returned an unexpected status");
     return false;
+}
+
+#define KTN_RT_CAPTURE_LIMIT ((int64_t)16777216)
+
+struct ktn_rt_capture_buffer {
+    char *data;
+    size_t length;
+    size_t capacity;
+};
+
+static void ktn_rt_capture_free(struct ktn_rt_capture_buffer *buffer) {
+    free(buffer->data);
+    buffer->data = NULL;
+    buffer->length = 0;
+    buffer->capacity = 0;
+}
+
+/* Returns 1 on success, 0 when the capture limit would be exceeded, -1 on OOM. */
+static int ktn_rt_capture_append(struct ktn_rt_capture_buffer *buffer, const char *bytes, size_t count) {
+    if ((int64_t)count > KTN_RT_CAPTURE_LIMIT - (int64_t)buffer->length) {
+        return 0;
+    }
+    size_t needed = buffer->length + count;
+    if (needed > buffer->capacity) {
+        size_t capacity = buffer->capacity == 0 ? 4096 : buffer->capacity;
+        while (capacity < needed) {
+            if (capacity > SIZE_MAX / 2) {
+                return -1;
+            }
+            capacity *= 2;
+        }
+        char *grown = (char *)realloc(buffer->data, capacity);
+        if (grown == NULL) {
+            return -1;
+        }
+        buffer->data = grown;
+        buffer->capacity = capacity;
+    }
+    if (count > 0) {
+        memcpy(buffer->data + buffer->length, bytes, count);
+        buffer->length = needed;
+    }
+    return 1;
+}
+
+static const ktn_string *ktn_rt_capture_string(struct ktn_rt_capture_buffer *buffer) {
+    ktn_string *result = ktn_rt_string_allocate((int64_t)buffer->length);
+    if (buffer->length > 0) {
+        memcpy(ktn_rt_string_bytes(result), buffer->data, buffer->length);
+    }
+    return result;
+}
+
+static const ktn_string *ktn_rt_capture_message(const ktn_string *program, const char *stream, const char *suffix) {
+    char reason[160];
+    snprintf(reason, sizeof(reason), "%s %s", stream, suffix);
+    return ktn_rt_path_error_with_reason("run", program, reason);
+}
+
+static const ktn_string *ktn_rt_capture_nul_message(const ktn_string *program, const char *stream, int64_t offset) {
+    char reason[160];
+    snprintf(reason, sizeof(reason), "%s contains a NUL byte at offset %lld", stream, (long long)offset);
+    return ktn_rt_path_error_with_reason("run", program, reason);
+}
+
+static bool ktn_rt_make_capture_pipe(int descriptors[2]) {
+    if (pipe(descriptors) != 0) {
+        return false;
+    }
+    if (fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) != 0) {
+        int error = errno;
+        close(descriptors[0]);
+        close(descriptors[1]);
+        errno = error;
+        return false;
+    }
+    return true;
+}
+
+static pid_t ktn_rt_wait_capture(pid_t child, int *wait_status, int *wait_error) {
+    pid_t waited;
+    do {
+        waited = waitpid(child, wait_status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) {
+        *wait_error = errno;
+    }
+    return waited;
+}
+
+bool ktn_rt_try_run_capture(const ktn_string *program, const ktn_array *args,
+                            int64_t *status, const ktn_string **out,
+                            const ktn_string **err, const ktn_string **message) {
+    if (status == NULL || out == NULL || err == NULL || message == NULL) {
+        ktn_rt_fail("try_run_capture received a null result slot");
+    }
+    *status = 0;
+    *out = NULL;
+    *err = NULL;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(program);
+    char **argv = NULL;
+    if (!ktn_rt_build_argv(checked, args, &argv, message)) {
+        return false;
+    }
+
+    int null_descriptor = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (null_descriptor < 0) {
+        int error = errno;
+        free(argv);
+        *message = ktn_rt_path_error("run", checked, error);
+        return false;
+    }
+
+    int out_pipe[2];
+    int err_pipe[2];
+    int error_pipe[2];
+    if (!ktn_rt_make_capture_pipe(out_pipe)) {
+        int error = errno;
+        close(null_descriptor);
+        free(argv);
+        *message = ktn_rt_path_error("run", checked, error);
+        return false;
+    }
+    if (!ktn_rt_make_capture_pipe(err_pipe)) {
+        int error = errno;
+        close(null_descriptor);
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        free(argv);
+        *message = ktn_rt_path_error("run", checked, error);
+        return false;
+    }
+    if (!ktn_rt_make_capture_pipe(error_pipe)) {
+        int error = errno;
+        close(null_descriptor);
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        close(err_pipe[0]);
+        close(err_pipe[1]);
+        free(argv);
+        *message = ktn_rt_path_error("run", checked, error);
+        return false;
+    }
+
+    ktn_rt_flush_streams();
+    pid_t child = fork();
+    if (child < 0) {
+        int error = errno;
+        close(null_descriptor);
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        close(err_pipe[0]);
+        close(err_pipe[1]);
+        close(error_pipe[0]);
+        close(error_pipe[1]);
+        free(argv);
+        *message = ktn_rt_path_error("fork/exec", checked, error);
+        return false;
+    }
+    if (child == 0) {
+        close(out_pipe[0]);
+        close(err_pipe[0]);
+        close(error_pipe[0]);
+        if (dup2(null_descriptor, STDIN_FILENO) < 0 ||
+            dup2(out_pipe[1], STDOUT_FILENO) < 0 ||
+            dup2(err_pipe[1], STDERR_FILENO) < 0) {
+            int child_error = errno;
+            ssize_t ignored = write(error_pipe[1], &child_error, sizeof(child_error));
+            (void)ignored;
+            _exit(127);
+        }
+        close(null_descriptor);
+        close(out_pipe[1]);
+        close(err_pipe[1]);
+        execve(checked->data, argv, environ);
+        int child_error = errno;
+        ssize_t ignored = write(error_pipe[1], &child_error, sizeof(child_error));
+        (void)ignored;
+        _exit(127);
+    }
+
+    close(null_descriptor);
+    close(out_pipe[1]);
+    close(err_pipe[1]);
+    close(error_pipe[1]);
+
+    struct ktn_rt_capture_buffer captured_out = { NULL, 0, 0 };
+    struct ktn_rt_capture_buffer captured_err = { NULL, 0, 0 };
+    int child_error = 0;
+    bool child_error_received = false;
+    bool out_open = true;
+    bool err_open = true;
+    bool error_open = true;
+    bool failed = false;
+    const ktn_string *failure_message = NULL;
+
+    while (out_open || err_open || error_open) {
+        struct pollfd poll_descriptors[3];
+        int indexes[3];
+        int count = 0;
+        if (out_open) {
+            poll_descriptors[count].fd = out_pipe[0];
+            poll_descriptors[count].events = POLLIN;
+            poll_descriptors[count].revents = 0;
+            indexes[count] = 0;
+            count++;
+        }
+        if (err_open) {
+            poll_descriptors[count].fd = err_pipe[0];
+            poll_descriptors[count].events = POLLIN;
+            poll_descriptors[count].revents = 0;
+            indexes[count] = 1;
+            count++;
+        }
+        if (error_open) {
+            poll_descriptors[count].fd = error_pipe[0];
+            poll_descriptors[count].events = POLLIN;
+            poll_descriptors[count].revents = 0;
+            indexes[count] = 2;
+            count++;
+        }
+        int ready;
+        do {
+            ready = poll(poll_descriptors, (nfds_t)count, -1);
+        } while (ready < 0 && errno == EINTR);
+        if (ready < 0) {
+            failure_message = ktn_rt_path_error("run", checked, errno);
+            failed = true;
+            break;
+        }
+        for (int index = 0; index < count; index++) {
+            if (poll_descriptors[index].revents == 0) {
+                continue;
+            }
+            int stream = indexes[index];
+            int descriptor = poll_descriptors[index].fd;
+            if (stream == 2) {
+                ssize_t received;
+                do {
+                    received = read(descriptor, &child_error, sizeof(child_error));
+                } while (received < 0 && errno == EINTR);
+                if (received > 0) {
+                    child_error_received = true;
+                }
+                if (received <= 0) {
+                    close(descriptor);
+                    error_open = false;
+                }
+                continue;
+            }
+            char bytes[8192];
+            ssize_t received;
+            do {
+                received = read(descriptor, bytes, sizeof(bytes));
+            } while (received < 0 && errno == EINTR);
+            if (received > 0) {
+                int appended = ktn_rt_capture_append(stream == 0 ? &captured_out : &captured_err,
+                                                     bytes, (size_t)received);
+                if (appended == 0) {
+                    failure_message = ktn_rt_capture_message(checked, stream == 0 ? "stdout" : "stderr",
+                                                              "exceeds the 16777216 byte limit");
+                    failed = true;
+                    break;
+                }
+                if (appended < 0) {
+                    failure_message = ktn_rt_plain_error("capture allocation failed");
+                    failed = true;
+                    break;
+                }
+            } else if (received == 0) {
+                close(descriptor);
+                if (stream == 0) {
+                    out_open = false;
+                } else {
+                    err_open = false;
+                }
+            } else {
+                failure_message = ktn_rt_path_error("run", checked, errno);
+                failed = true;
+                break;
+            }
+        }
+        if (failed) {
+            break;
+        }
+    }
+
+    if (failed) {
+        kill(child, SIGKILL);
+    }
+    if (out_open) {
+        close(out_pipe[0]);
+    }
+    if (err_open) {
+        close(err_pipe[0]);
+    }
+    if (error_open) {
+        close(error_pipe[0]);
+    }
+
+    int wait_status = 0;
+    int wait_error = 0;
+    pid_t waited = ktn_rt_wait_capture(child, &wait_status, &wait_error);
+    free(argv);
+
+    if (failed) {
+        ktn_rt_capture_free(&captured_out);
+        ktn_rt_capture_free(&captured_err);
+        *message = failure_message;
+        return false;
+    }
+    if (waited < 0) {
+        ktn_rt_capture_free(&captured_out);
+        ktn_rt_capture_free(&captured_err);
+        *message = ktn_rt_path_error("wait", checked, wait_error);
+        return false;
+    }
+    if (child_error_received) {
+        ktn_rt_capture_free(&captured_out);
+        ktn_rt_capture_free(&captured_err);
+        *message = ktn_rt_path_error("fork/exec", checked, child_error);
+        return false;
+    }
+
+    if (!WIFEXITED(wait_status) && !WIFSIGNALED(wait_status)) {
+        ktn_rt_capture_free(&captured_out);
+        ktn_rt_capture_free(&captured_err);
+        *message = ktn_rt_plain_error("wait returned an unexpected status");
+        return false;
+    }
+    if (WIFEXITED(wait_status)) {
+        *status = (int64_t)WEXITSTATUS(wait_status);
+    } else {
+        *status = (int64_t)(128 + WTERMSIG(wait_status));
+    }
+
+    for (size_t index = 0; index < captured_out.length; index++) {
+        if (captured_out.data[index] == '\0') {
+            ktn_rt_capture_free(&captured_out);
+            ktn_rt_capture_free(&captured_err);
+            *message = ktn_rt_capture_nul_message(checked, "stdout", (int64_t)index);
+            return false;
+        }
+    }
+    for (size_t index = 0; index < captured_err.length; index++) {
+        if (captured_err.data[index] == '\0') {
+            ktn_rt_capture_free(&captured_out);
+            ktn_rt_capture_free(&captured_err);
+            *message = ktn_rt_capture_nul_message(checked, "stderr", (int64_t)index);
+            return false;
+        }
+    }
+
+    *out = ktn_rt_capture_string(&captured_out);
+    *err = ktn_rt_capture_string(&captured_err);
+    ktn_rt_capture_free(&captured_out);
+    ktn_rt_capture_free(&captured_err);
+    return true;
 }
 
 bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value) {

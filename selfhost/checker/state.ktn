@@ -275,6 +275,7 @@ public enum BuiltinKind {
     TryRun,
     TryCurrentDirectory,
     TryGetenv,
+    TryRunCapture,
     RawLoad8,
     RawStore8,
     RawLoad64,
