@@ -131,9 +131,10 @@ Two things make this a real project rather than a small one:
 **Finish line:** Kitten source goes in, a native executable comes out, with no C
 involved at any step.
 
-**Status:** not started. Deliberately so — `AGENTS.md` forbids beginning it without
-explicit authorization, precisely because it should not be attempted before the language
-is finished enough to be worth compiling.
+**Status:** design authorized, implementation not started. The zero-dependency
+design is in `proposals/zero-dependency-toolchain.md`; `AGENTS.md` still requires
+separate authorization before implementation, precisely because it should not be
+attempted before the language is finished enough to be worth compiling.
 
 ### 3. Independent ecosystem
 

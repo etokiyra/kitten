@@ -292,6 +292,7 @@ installed and configured.
 | `purr publish` | publish a package to the registry | planned |
 | `purr lsp` | a language server: diagnostics, completion, go-to-definition, hover, references | planned |
 | `purr self`, `purr component` | update the toolchain, add or refresh components | planned |
+| One-line installer | rustup-style install of `purr` and the whole toolchain: components, update model, completion, language server | planned, not designed; design after the zero-dependency path |
 | `purr.toml`, `purr.lock` | manifest and lockfile for reproducible builds | planned |
 | a registry | namespaced, versioned packages, fetched by `purr` itself | planned |
 

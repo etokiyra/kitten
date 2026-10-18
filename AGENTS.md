@@ -51,9 +51,12 @@ them to match buggy behavior.
 
 11. Make small, focused changes. One coherent change per commit, with a clear
     message.
-12. Do not begin future phases without explicit authorization. Do not implement
-    self-hosting, a native backend, or standard-library features without
-    explicit authorization.
+12. Do not begin future phases without explicit authorization. Phase 7.0
+    authorizes the **design** of Goal 2 (a native backend and a runtime with no
+    C), but not its implementation; implementation needs a separate, later
+    authorization after the design is approved. Do not implement self-hosting
+    beyond the proven C-level fixpoint, a native backend, or standard-library
+    features without explicit authorization.
 13. Update documentation when established behavior changes: `SPEC.md` for
     language behavior, `AGENTS.md` for process and architecture.
 
@@ -246,9 +249,12 @@ documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
 `selfhost/driver/README.md`.
 
 The C-level self-hosting fixpoint is reached, but full independence from Go is
-not: Go still builds stage 1. A native backend, a complete standard library, and
-file writing remain intentionally unimplemented; do not start them, or claim full
-self-hosting, without explicit authorization.
+not: Go still builds stage 1. The design of the zero-dependency native toolchain
+(Goal 2) is authorized by Phase 7.0 and lives in
+`proposals/zero-dependency-toolchain.md`; its implementation, a complete standard
+library, and file writing remain intentionally unimplemented. Do not start them,
+or claim full self-hosting or zero dependencies, without separate explicit
+authorization after the design is approved.
 
 ## Roadmap
 
@@ -293,8 +299,8 @@ self-hosting, without explicit authorization.
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is
    byte-identical across Go and all stages. Full independence remains open because
-   Go still builds stage 1; the postponed read-result/loader parity work and the
-   `purr` rename are the next candidates, not part of this finish line yet.
+   Go still builds stage 1; the postponed read-result/loader parity work is the
+   next candidate, not part of this finish line yet.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
    the runtime off C as well. This is independence from C.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
@@ -303,6 +309,10 @@ self-hosting, without explicit authorization.
    the toolchain, the language server and editor and shell completion, `purr new`
    scaffolding for binaries and libraries, dependency management, the registry,
    publishing, and the standard library that makes them useful.
+6. One-line installer (rustup-style) that installs `purr` and the whole
+   toolchain: components, update model, completion, and language server. **Planned,
+   not designed**; design it after the zero-dependency path is designed so it does
+   not advertise a toolchain that still needs Go, C, or libgc.
 
 The initial compiler is written in Go. The long-term goal is for Kitten to
 compile its own compiler, to stop depending on C, and to stand on its own
