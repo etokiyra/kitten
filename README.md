@@ -258,6 +258,7 @@ go build -o purr ./cmd/purr
 | Type checker | complete for the specified language, with diagnostics and positions |
 | C code generator | complete for the specified language; emits C, compiled by the host C compiler |
 | C runtime | strings, arrays, maps, file reading, printing, and the garbage collector |
+| Kitten `purr` CLI, `purr new`, and `purr.toml` | design only in `proposals/purr-in-kitten.md`; the Go CLI remains authoritative |
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
@@ -283,7 +284,7 @@ installed and configured.
 | Piece | What it does | Status |
 | --- | --- | --- |
 | `purr build`, `purr run` | compile a source file, or compile and execute it | **works** |
-| `purr new` | scaffold a project or a library with the standard layout | planned |
+| `purr new` | scaffold a project or a library with the standard layout | planned; design only in `proposals/purr-in-kitten.md` (not adopted) |
 | `purr add`, `purr remove` | manage dependencies in the manifest | planned |
 | `purr install` | fetch, build, and install a package in one command | planned |
 | `purr test` | compile and run a project's tests | planned |

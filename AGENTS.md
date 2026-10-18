@@ -239,13 +239,15 @@ prelude union, using the kernel's `getcwd` path, ignoring `$PWD`, and growing it
 buffer on `ERANGE`. Phase 8.7 added the compiler-reserved `<runtime>` synthetic
 module and its harness-only injection hook, runtime-only intrinsics, C lowering,
 and the MIT `runtime/ktn/memory.ktn` helper source. The primitive checklist is
-complete. The next candidates are designing `purr` in Kitten with an
-environment-variable primitive, or the native-backend design slice. The Kitten
-loader/driver can now accept relative roots in a separate later change. File
-writing now unblocks `purr new` and process launch makes `purr run`-style tooling
-writable in Kitten, both as separate later phases. A SPEC cleanup
-of Go/C-flavored wording remains a later candidate. The native backend and a
-standard library remain unauthorized.
+complete. Phase 9.0 produced the design-only `proposals/purr-in-kitten.md` for
+rewriting `purr`, `purr new`, and `purr.toml`; it is **PROPOSED, not adopted**,
+and added no code. The next implementation candidates are the proposed
+environment/capture/temp-directory primitives or the native-backend design
+slice. The Kitten loader/driver can now accept relative roots in a separate
+later change. File writing now unblocks `purr new` and process launch makes
+`purr run`-style tooling writable in Kitten, both as separate later phases. A
+SPEC cleanup of Go/C-flavored wording remains a later candidate. The native
+backend and a standard library remain unauthorized.
 
 ### Adding a built-in
 
