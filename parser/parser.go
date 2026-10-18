@@ -565,7 +565,7 @@ func (p *parser) parseBaseType() (*TypeRef, error) {
 		return p.parseMapType()
 	}
 	switch token.Kind {
-	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.Ident:
+	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.TypeByte, lexer.Ident:
 		p.advance()
 		return &TypeRef{At: positionOf(token), Name: token.Text}, nil
 	default:
@@ -672,7 +672,7 @@ func (p *parser) startsVariableDeclaration() bool {
 // isTypeKeyword reports whether a token kind begins a built-in type name.
 func isTypeKeyword(kind lexer.Kind) bool {
 	switch kind {
-	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.Map:
+	case lexer.TypeInt, lexer.TypeFloat, lexer.TypeBool, lexer.TypeString, lexer.TypeVoid, lexer.TypeByte, lexer.Map:
 		return true
 	default:
 		return false

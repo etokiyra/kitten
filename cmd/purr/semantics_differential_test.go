@@ -196,6 +196,14 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "MapHas"
 	case checker.BuiltinSubstring:
 		return "Substring"
+	case checker.BuiltinIntFromByte:
+		return "IntFromByte"
+	case checker.BuiltinByteFromInt:
+		return "ByteFromInt"
+	case checker.BuiltinStringToBytes:
+		return "StringToBytes"
+	case checker.BuiltinBytesToString:
+		return "BytesToString"
 	default:
 		return "?"
 	}

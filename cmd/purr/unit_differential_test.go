@@ -133,6 +133,69 @@ type unitCase struct {
 	rejected string
 }
 
+// byteSource exercises the byte type, byte arrays, byte-valued fields and map
+// values, and all four explicit conversions. It is shared with the runtime
+// fixture.
+const byteSource = `struct ByteBox {
+    byte value;
+    byte[] bytes;
+}
+union ByteValue {
+    B { byte value; byte[] bytes; }
+    Empty
+}
+fn make_bytes(byte first, byte[] rest) -> byte[] {
+    byte[] result = new byte[2];
+    result[0] = first;
+    result[1] = rest[0];
+    return result;
+}
+fn main() {
+    byte a = byte_from_int(65);
+    byte other = byte_from_int(65);
+    byte b = byte_from_int(256);
+    byte c = byte_from_int(-1);
+    byte d = byte_from_int(255);
+    print(int_from_byte(a), int_from_byte(b), int_from_byte(c), int_from_byte(d));
+    print(byte_from_int(0), byte_from_int(255));
+    print(a == other, a != b, a < b, a <= b, a > b, a >= b);
+    byte[] values = new byte[3];
+    values[0] = a;
+    values[1] = b;
+    print(length(values), int_from_byte(values[0]), int_from_byte(values[1]), int_from_byte(values[2]));
+    byte[] made = make_bytes(a, values);
+    print(length(made), int_from_byte(made[0]), int_from_byte(made[1]));
+    map[string]byte table = new map[string]byte;
+    table["k"] = d;
+    print(int_from_byte(table["k"]));
+    ByteBox box = ByteBox { value = a, bytes = made };
+    print(int_from_byte(box.value), length(box.bytes));
+    ByteValue value = ByteValue.B { value = b, bytes = made };
+    match (value) {
+        B(code, bytes) { print(int_from_byte(code), length(bytes)); }
+        Empty { print(0); }
+    }
+    byte[] empty = string_to_bytes("");
+    byte[] ascii = string_to_bytes("AZ");
+    print(length(empty), length(ascii), int_from_byte(ascii[0]), int_from_byte(ascii[1]));
+    byte[] converted = string_to_bytes("Aé");
+    print(length(converted), int_from_byte(converted[0]), int_from_byte(converted[2]));
+    string text = bytes_to_string(converted);
+    print(text);
+    int roundtrip = 0;
+    while (roundtrip < 256) {
+        byte value = byte_from_int(roundtrip);
+        if (int_from_byte(value) != roundtrip) {
+            print("bad round trip");
+        }
+        roundtrip++;
+    }
+    print("roundtrip");
+}
+`
+
+const byteExpected = "65 0 255 255\n0 255\ntrue true false false true true\n3 65 0 0\n2 65 65\n255\n65 2\n0 2\n0 2 65 90\n3 65 169\nAé\nroundtrip\n"
+
 // bitwiseSource exercises every bitwise operator, literal form, and shift
 // boundary. It is also used by the both-pipeline runtime fixture.
 const bitwiseSource = `fn main() {
@@ -655,6 +718,9 @@ fn main() {
 	}, {
 		description: "bitwise operators, literals, and shifts",
 		root:        bitwiseSource,
+	}, {
+		description: "byte values, arrays, and conversions",
+		root:        byteSource,
 	}, {
 		description: "try_read_file with the implicit prelude and helper",
 		root: `fn describe(ReadFileResult result) -> int {

@@ -25,6 +25,7 @@ public enum TypeKind {
     Float,
     Bool,
     String,
+    Byte,
     Void,
     Struct,
     Array,

@@ -253,6 +253,35 @@ int64_t ktn_rt_array_length(const ktn_array *array) {
     return array->length;
 }
 
+ktn_array *ktn_rt_string_to_bytes(const ktn_string *value) {
+    const ktn_string *checked = ktn_rt_string_value(value);
+    ktn_array *result = ktn_rt_array_new(checked->length, (int64_t)sizeof(uint8_t));
+    memcpy(result->data, checked->data, (size_t)checked->length);
+    return result;
+}
+
+const ktn_string *ktn_rt_bytes_to_string(const ktn_array *bytes) {
+    if (bytes == NULL) {
+        ktn_rt_fail("byte array is null");
+    }
+    if (bytes->element_size != (int64_t)sizeof(uint8_t)) {
+        ktn_rt_fail("byte array element size is not 1");
+    }
+
+    const uint8_t *data = (const uint8_t *)bytes->data;
+    for (int64_t index = 0; index < bytes->length; index++) {
+        if (data[index] == 0) {
+            char message[160];
+            snprintf(message, sizeof(message), "byte array contains a NUL byte at index %lld", (long long)index);
+            ktn_rt_fail(message);
+        }
+    }
+
+    ktn_string *result = ktn_rt_string_allocate(bytes->length);
+    memcpy(ktn_rt_string_bytes(result), data, (size_t)bytes->length);
+    return result;
+}
+
 /*
  * The process argument vector saved by ktn_rt_set_args. It is initialized to an
  * empty vector so that ktn_rt_argv is safe before the generated entry point has

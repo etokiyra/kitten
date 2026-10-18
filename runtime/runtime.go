@@ -106,6 +106,12 @@ const (
 	// string without terminating the program.
 	TryReadFileFunction = "ktn_rt_try_read_file"
 
+	// StringToBytesFunction returns a string's bytes as a byte array.
+	StringToBytesFunction = "ktn_rt_string_to_bytes"
+
+	// BytesToStringFunction returns a byte array as a string.
+	BytesToStringFunction = "ktn_rt_bytes_to_string"
+
 	// FailFunction reports a fatal runtime error and terminates the program.
 	FailFunction = "ktn_rt_fail"
 

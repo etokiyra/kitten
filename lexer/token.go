@@ -57,6 +57,7 @@ const (
 	TypeBool
 	TypeString
 	TypeVoid
+	TypeByte
 
 	// Boolean literals.
 	True
@@ -135,6 +136,7 @@ var kindNames = map[Kind]string{
 	TypeBool:   "TypeBool",
 	TypeString: "TypeString",
 	TypeVoid:   "TypeVoid",
+	TypeByte:   "TypeByte",
 
 	True:  "True",
 	False: "False",

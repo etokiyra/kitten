@@ -18,6 +18,9 @@ const (
 	// KindString is the string type.
 	KindString
 
+	// KindByte is the unsigned 8-bit integer type.
+	KindByte
+
 	// KindVoid is the type of a function that returns no value. It is never the
 	// type of a variable, parameter, or struct field.
 	KindVoid
@@ -133,6 +136,7 @@ var (
 	FloatType  = &Type{Kind: KindFloat, Name: "float"}
 	BoolType   = &Type{Kind: KindBool, Name: "bool"}
 	StringType = &Type{Kind: KindString, Name: "string"}
+	ByteType   = &Type{Kind: KindByte, Name: "byte"}
 	VoidType   = &Type{Kind: KindVoid, Name: "void"}
 )
 
@@ -142,6 +146,7 @@ var primitiveTypes = map[string]*Type{
 	"float":  FloatType,
 	"bool":   BoolType,
 	"string": StringType,
+	"byte":   ByteType,
 	"void":   VoidType,
 }
 

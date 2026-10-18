@@ -449,13 +449,14 @@ func parserCorpus(t *testing.T) []parserCase {
 	add("union recursive", "union Expression {\n    IntegerLiteral { int value; }\n    Add { Expression left; Expression right; }\n    Missing\n}\n")
 
 	// Function signatures.
-	add("function parameters", "fn f(int a, float b, bool c) {}\n")
-	add("function return types", "fn f() -> int {}\nfn g() -> void {}\nfn h() -> string {}\nfn i() -> int[] {}\nfn j() -> map[string]int {}\n")
+	add("function parameters", "fn f(int a, float b, bool c, byte d) {}\n")
+	add("function return types", "fn f() -> int {}\nfn g() -> void {}\nfn h() -> string {}\nfn i() -> int[] {}\nfn j() -> map[string]int {}\nfn k() -> byte {}\nfn l() -> byte[] {}\n")
 	add("function with everything", "public fn f(int[] a, map[string]int b) -> int[][] {}\n")
-	add("function parameter types", "fn f(S s, E e, int[] a, map[string]S m) {}\n")
+	add("function parameter types", "fn f(S s, E e, int[] a, map[string]S m, byte b, byte[] bytes) {}\n")
+	add("byte in every type position", "struct B { byte value; byte[] bytes; }\nunion U { B { byte value; byte[] bytes; } }\nfn f(byte a) -> byte { return a; }\nfn main() { byte x = byte_from_int(1); byte[] ys = new byte[2]; byte[][] grid = new byte[][1]; map[string]byte m = new map[string]byte; }\n")
 
 	// Type references on their own, through variable declarations.
-	types := []string{"int", "float", "bool", "string", "void", "S", "int[]", "int[][]", "int[][][]", "map[string]int", "map[string]int[]", "map[int]string", "map[string]map[string]int", "S[]"}
+	types := []string{"int", "float", "bool", "string", "void", "byte", "S", "int[]", "int[][]", "int[][][]", "byte[]", "byte[][]", "map[string]int", "map[string]byte", "map[string]int[]", "map[int]string", "map[string]map[string]int", "S[]"}
 	for _, typeName := range types {
 		add("type "+typeName, "fn main() {\n    "+typeName+" value;\n}\n")
 	}
@@ -574,7 +575,7 @@ func parserCorpus(t *testing.T) []parserCase {
 	add("variant literal", "fn main() {\n    a = U.Full { value = 1, label = \"x\" };\n}\n")
 	add("variant literal nested", "fn main() {\n    a = U.Outer { inner = U.Inner { v = 1 }, other = U.Empty };\n}\n")
 	add("variant and member together", "fn main() {\n    a = x.y;\n    b = U.V { f = 1 };\n}\n")
-	add("array creation", "fn main() {\n    a = new int[3];\n    b = new int[][2];\n    c = new S[n + 1];\n}\n")
+	add("array creation", "fn main() {\n    a = new int[3];\n    b = new int[][2];\n    c = new S[n + 1];\n    d = new byte[3];\n    e = new byte[][2];\n}\n")
 	add("map creation", "fn main() {\n    a = new map[string]int;\n    b = new map[string]int[];\n    c = new map[string]map[string]int;\n}\n")
 	add("collection operations", "fn main() {\n    a = new map[string]int;\n    a[\"k\"] = 1;\n    print(length(a), has(a, \"k\"));\n    print(substring(\"abc\", 0, 1));\n}\n")
 
@@ -604,6 +605,7 @@ func parserCorpus(t *testing.T) []parserCase {
 		"fn f() -> int",
 		"fn 1() {}",
 		"fn f() { int x }",
+		"fn f() { int byte = 1; }",
 		"fn f() { int x = }",
 		"fn f() { int }",
 		"fn f() { return }",

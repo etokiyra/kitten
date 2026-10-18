@@ -308,14 +308,14 @@ func (c *checker) builtinFunctions() map[string]*Function {
 			ReturnType:   VoidType,
 			Builtin:      BuiltinPrint,
 			Variadic:     true,
-			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
+			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType, ByteType},
 		},
 		"eprint": {
 			Name:         "eprint",
 			ReturnType:   VoidType,
 			Builtin:      BuiltinEprint,
 			Variadic:     true,
-			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType},
+			AllowedTypes: []*Type{IntType, FloatType, BoolType, StringType, ByteType},
 		},
 		"exit": {
 			Name:           "exit",
@@ -348,6 +348,30 @@ func (c *checker) builtinFunctions() map[string]*Function {
 			Name:       "substring",
 			ReturnType: StringType,
 			Builtin:    BuiltinSubstring,
+		},
+		"int_from_byte": {
+			Name:           "int_from_byte",
+			ParameterTypes: []*Type{ByteType},
+			ReturnType:     IntType,
+			Builtin:        BuiltinIntFromByte,
+		},
+		"byte_from_int": {
+			Name:           "byte_from_int",
+			ParameterTypes: []*Type{IntType},
+			ReturnType:     ByteType,
+			Builtin:        BuiltinByteFromInt,
+		},
+		"string_to_bytes": {
+			Name:           "string_to_bytes",
+			ParameterTypes: []*Type{StringType},
+			ReturnType:     c.arrayType(ByteType),
+			Builtin:        BuiltinStringToBytes,
+		},
+		"bytes_to_string": {
+			Name:           "bytes_to_string",
+			ParameterTypes: []*Type{c.arrayType(ByteType)},
+			ReturnType:     StringType,
+			Builtin:        BuiltinBytesToString,
 		},
 	}
 }

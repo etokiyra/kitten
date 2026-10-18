@@ -282,7 +282,7 @@ func lexerCorpus(t *testing.T) []lexerCase {
 
 	// Keywords and built-in type names, alone and in a small context.
 	keywords := []string{"struct", "if", "else", "while", "for", "return", "fn", "new", "import", "public", "private", "enum", "union", "match", "map"}
-	typeNames := []string{"int", "float", "bool", "string", "void"}
+	typeNames := []string{"int", "float", "bool", "string", "void", "byte"}
 	for _, word := range append(append([]string{}, keywords...), typeNames...) {
 		add("word "+word, word)
 		add("word "+word+" in context", "x = "+word+";")

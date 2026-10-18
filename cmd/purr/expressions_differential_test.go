@@ -1145,6 +1145,22 @@ fn main() {
 }
 `,
 	}, {
+		description: "byte values, arrays, and conversions",
+		root: `fn main() {
+    byte a = byte_from_int(65);
+    byte b = byte_from_int(256);
+    print(int_from_byte(a), int_from_byte(b));
+    print(a == b, a < b);
+    byte[] values = new byte[3];
+    values[0] = a;
+    print(length(values), int_from_byte(values[0]));
+    byte[] text = string_to_bytes("Aé");
+    print(length(text), int_from_byte(text[0]));
+    string round = bytes_to_string(text);
+    print(round);
+}
+`,
+	}, {
 		description: "bitwise and shift operators",
 		root: `fn main() {
     int mask = 0xF0;

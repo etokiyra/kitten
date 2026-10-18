@@ -83,13 +83,13 @@ token-or-error outcome of a single scan step.
 ## Differential testing
 
 `cmd/purr/differential_test.go` builds the Kitten lexer once and runs it over a
-corpus of 1,074 inputs, comparing the result with the Go lexer:
+corpus of 1,076 inputs, comparing the result with the Go lexer:
 
 ```sh
 go test -count=1 -v -run TestKittenLexer ./cmd/purr/
 ```
 
-The corpus covers every keyword, type name, and boolean literal; identifiers and
+The corpus covers every keyword, type name (including `byte`), and boolean literal; identifiers and
 keyword-prefix identifiers; every operator and punctuation mark, every ordered
 pair of operators, and juxtapositions that could be split differently; integer
 and floating-point boundaries, hexadecimal/binary literals and their error

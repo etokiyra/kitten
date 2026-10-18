@@ -104,7 +104,7 @@ grammar the Go reference parser accepts:
 
 - top-level `fn`, `struct`, `enum`, and `union` declarations with an optional
   `public` or `private` modifier, and `import "path";`;
-- types: the five built-in type names, user-defined names, `[]` array suffixes,
+- types: the six built-in type names including `byte`, user-defined names, `[]` array suffixes,
   and `map[K]V`;
 - statements: blocks, local declarations with an optional initializer,
   expression statements, `if`/`else if`/`else`, `while`, `for` with any of its
@@ -157,7 +157,7 @@ out-of-bounds write, and the differential corpus checks the bound on every input
 ## Differential testing
 
 `cmd/purr/parser_differential_test.go` builds the Kitten parser once and runs
-it over a corpus of 283 inputs, comparing its rendering with the reference
+it over a corpus of 289 inputs, comparing its rendering with the reference
 implementation's rendering of the same source:
 
 ```sh
@@ -173,7 +173,7 @@ operators, calls, member access, and blocks), collections and their literals,
 inputs, non-ASCII input both valid and invalid as UTF-8, every `.ktn` fixture,
 and the self-hosted sources themselves.
 
-Results: **278 of the 283 inputs render byte-identically**. The remaining five
+Results: **284 of the 289 inputs render byte-identically**. The remaining five
 contain a byte at or above 128, where the two implementations differ only in the
 documented lexer-level ways - a byte-oriented column, and a lexeme or message
 that Go renders by decoding UTF-8 - and the harness verifies those by comparing

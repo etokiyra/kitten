@@ -38,6 +38,7 @@ public fn type_text(Type value) -> string {
         Float { return value.name; }
         Bool { return value.name; }
         String { return value.name; }
+        Byte { return value.name; }
         Void { return value.name; }
     }
 }
@@ -70,6 +71,10 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         TryReadFile { return "TryReadFile"; }
         MapHas { return "MapHas"; }
         Substring { return "Substring"; }
+        IntFromByte { return "IntFromByte"; }
+        ByteFromInt { return "ByteFromInt"; }
+        StringToBytes { return "StringToBytes"; }
+        BytesToString { return "BytesToString"; }
     }
 }
 

@@ -40,6 +40,7 @@ var keywords = map[string]Kind{
 	"bool":   TypeBool,
 	"string": TypeString,
 	"void":   TypeVoid,
+	"byte":   TypeByte,
 
 	"true":  True,
 	"false": False,

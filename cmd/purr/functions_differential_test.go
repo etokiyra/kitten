@@ -486,6 +486,17 @@ fn main() {
 }
 `,
 	}, {
+		description: "byte parameters and byte arrays",
+		root: `fn first(byte value, byte[] values) -> byte {
+    return values[0];
+}
+fn main() {
+    byte value = byte_from_int(65);
+    byte[] values = new byte[2];
+    values[0] = value;
+}
+`,
+	}, {
 		description: "bitwise and shift expressions",
 		root: `fn mix(int value) -> int {
     int mask = 0xF0;

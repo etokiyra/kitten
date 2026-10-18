@@ -774,7 +774,45 @@ fn call_expression(ExpressionContext context, int node_id, Expr callee, Expr[] a
     if (builtin == BuiltinKind.TryReadFile) {
         return try_read_file_expression(context, node_id, callee, arguments, argument_count);
     }
+    if (builtin == BuiltinKind.IntFromByte) {
+        return int_from_byte_expression(context, callee, arguments, argument_count);
+    }
+    if (builtin == BuiltinKind.ByteFromInt) {
+        return byte_from_int_expression(context, callee, arguments, argument_count);
+    }
+    if (builtin == BuiltinKind.StringToBytes) {
+        return builtin_call_expression(context, callee, string_to_bytes_function(), "string_to_bytes", arguments, argument_count, 1);
+    }
+    if (builtin == BuiltinKind.BytesToString) {
+        return builtin_call_expression(context, callee, bytes_to_string_function(), "bytes_to_string", arguments, argument_count, 1);
+    }
     return user_call_expression(context, callee, arguments, argument_count);
+}
+
+// int_from_byte_expression lowers int_from_byte(value) to a C widening cast.
+fn int_from_byte_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    if (argument_count < 1) {
+        return wrong_builtin_arity(callee, "int_from_byte", argument_count);
+    }
+    match (emit_expression(context, arguments[0])) {
+        Failed(error) { return ExpressionResult.Failed { error = error }; }
+        Ok(rendered) {
+            return ExpressionResult.Ok { text = "((int64_t)(" + rendered + "))" };
+        }
+    }
+}
+
+// byte_from_int_expression lowers byte_from_int(value) to a defined low-byte cast.
+fn byte_from_int_expression(ExpressionContext context, Expr callee, Expr[] arguments, int argument_count) -> ExpressionResult {
+    if (argument_count < 1) {
+        return wrong_builtin_arity(callee, "byte_from_int", argument_count);
+    }
+    match (emit_expression(context, arguments[0])) {
+        Failed(error) { return ExpressionResult.Failed { error = error }; }
+        Ok(rendered) {
+            return ExpressionResult.Ok { text = "((uint8_t)((uint64_t)(" + rendered + ") & UINT64_C(0xFF)))" };
+        }
+    }
 }
 
 // try_read_file_expression lowers try_read_file(path) to the generated helper
@@ -913,6 +951,9 @@ fn print_helper(Type value) -> HelperResult {
     if (value.kind == TypeKind.String) {
         return HelperResult.Ok { text = print_string_function() };
     }
+    if (value.kind == TypeKind.Byte) {
+        return HelperResult.Ok { text = print_int_function() };
+    }
     return HelperResult.Failed {
         error = generate_error(0, 0, "print does not support values of type " + type_string(value))
     };
@@ -978,6 +1019,9 @@ fn eprint_helper(Type value) -> HelperResult {
     }
     if (value.kind == TypeKind.String) {
         return HelperResult.Ok { text = eprint_string_function() };
+    }
+    if (value.kind == TypeKind.Byte) {
+        return HelperResult.Ok { text = eprint_int_function() };
     }
     return HelperResult.Failed {
         error = generate_error(0, 0, "eprint does not support values of type " + type_string(value))

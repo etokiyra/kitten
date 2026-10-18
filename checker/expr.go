@@ -236,6 +236,9 @@ func (c *checker) checkRelational(operator string, left, right *Type, at parser.
 	if left != right {
 		return nil, c.errorAt(TypeMismatch, at, "operator %q requires operands of the same type, found %s and %s", operator, left, right)
 	}
+	if left == ByteType {
+		return BoolType, nil
+	}
 	if !left.IsNumeric() {
 		return nil, c.errorAt(InvalidOperator, at, "operator %q requires numeric operands, found %s", operator, left)
 	}

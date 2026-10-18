@@ -210,6 +210,9 @@ the beginning of the literal.
 not representable; it is written with arithmetic, such as
 `-9223372036854775807 - 1`, or as `0x8000000000000000`.
 
+There is no `byte` literal. A byte constant is written explicitly, for example
+`byte_from_int(65)` (Section 18.8).
+
 Not supported in this revision (and therefore not to be added without a
 specification change): octal forms, digit separators, numeric suffixes, and
 exponent notation.
@@ -537,8 +540,7 @@ outcome here.
 - Numeric conversions and promotion rules: **no implicit conversions** exist
   (Section 18.2). Explicit conversion syntax is **deferred**; there are no casts
   yet.
-- Whether additional numeric types (for example sized or unsigned integers)
-  exist.
+- Whether additional numeric types beyond `byte` exist.
 
 **Strings**
 
@@ -551,7 +553,8 @@ outcome here.
 - Runtime operations (length, concatenation, comparison). Concatenation (`+`,
   `+=`), value equality (`==`, `!=`), byte length, byte indexing, and byte
   ranges are implemented (Section 20).
-- Conversions between strings and other types, and code-point operations, are
+- String/bytes conversions are `string_to_bytes` and `bytes_to_string`
+  (Section 18.8). Numeric conversions and code-point operations remain
   **deferred** (Section 20.7).
 - Whether string interpolation or raw/multiline strings exist.
 - Whether the representation should also support embedded NUL bytes. It does
@@ -863,6 +866,7 @@ reports the first error it finds and stops. Every diagnostic carries a one-based
 | `float` | IEEE 754 binary64 floating-point value. |
 | `bool` | Boolean. |
 | `string` | String value. |
+| `byte` | Unsigned 8-bit integer, 0 through 255. |
 | `void` | No value. Permitted only as a function return type. |
 
 `int` and `float` widths are provisional language semantics, not a commitment
@@ -874,8 +878,9 @@ error.
 ### 18.2 Type compatibility
 
 Types are compared by **exact matching**, with no implicit conversions. An `int`
-is not interchangeable with a `float`, and mixing them in one operation is an
-error. There are no casts, and no generic or parameterized types.
+is not interchangeable with a `float` or a `byte`, and mixing them in one
+operation is an error. There are no casts and no generic or parameterized types;
+explicit conversions are the four built-ins in Section 18.8.
 
 A value of type `void` may not be used as a value: it may not be assigned,
 returned, passed as an argument, used as a condition or operand, or used to
@@ -893,6 +898,7 @@ initialize a variable or field.
 | `<` `<=` `>` `>=` | two `int`, or two `float` | `bool` |
 | unary `~` | one `int` | `int` |
 | `==` `!=` | two of the same primitive type | `bool` |
+| `<` `<=` `>` `>=` | two `byte` | `bool` |
 | `&&` `\|\|` | two `bool` | `bool` |
 | unary `-` | one `int` or `float` | the operand type |
 | unary `!` | one `bool` | `bool` |
@@ -905,8 +911,9 @@ Notes:
   two struct, or two array values is an error.
 - `-`, `*`, `/` are not defined for `string`.
 - `%` is not defined for `float`.
-- Relational operators are numeric-only; comparing `bool` or `string` values
-  with `<` is an error.
+- Relational operators are numeric-only, except that two `byte` values support
+  unsigned `<`, `<=`, `>`, and `>=`; comparing `bool`, `string`, or mixed
+  `byte`/`int` values with `<` is an error.
 - Equality is defined for the primitive types and enums. Comparing two struct
   values, two array values, two union values, or two map values with `==` is an
   error. Comparing two `string` values compares their contents, never their
@@ -936,6 +943,9 @@ Notes:
 - The bitwise operators `&`, `|`, `^`, `~`, `<<`, and `>>` are defined for
   `int` only. Shifts outside `0..63` fail at runtime rather than relying on C
   behavior; `>>` is arithmetic for negative values.
+- `byte` supports equality and unsigned relational comparison only. It has no
+  arithmetic, bitwise, shift, unary `-`, `~`, `++`, `--`, `+=`, or `-=`
+  operators. Convert explicitly with `int_from_byte` and `byte_from_int`.
 - `/` truncates toward zero. `%` is the remainder with the sign of the dividend.
   A zero divisor is a fatal runtime error with the message
   `integer division by zero`. `INT64_MIN / -1` is `INT64_MIN` and
@@ -1026,17 +1036,19 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Nine functions are provided by the language: `print`, `eprint`, `exit`,
-`length`, `argv`, `has`, `substring`, `read_file`, and `try_read_file`. All are
-represented in the semantic environment rather than special-cased in expression
-checking. A user-defined top-level declaration with the same name shadows the
-built-in.
+Thirteen functions are provided by the language: `print`, `eprint`, `exit`,
+`length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
+`int_from_byte`, `byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All
+are represented in the semantic environment rather than special-cased in
+expression checking. A user-defined top-level declaration with the same name
+shadows the built-in.
 
 **`print`**
 
 - It accepts **one or more** arguments, and every argument must be `int`,
-  `float`, `bool`, or `string`. Calling it with no arguments, or with a struct,
-  array, enum, union, or map value, is an error.
+  `float`, `bool`, `string`, or `byte`. A `byte` prints its unsigned decimal
+  value. Calling it with no arguments, or with a struct, array, enum, union, or
+  map value, is an error.
 - Its return type is `void`, so a call to `print` cannot be used as a value.
 - The output format is defined in Section 13 and the runtime in Section 19.4.
 
@@ -1162,6 +1174,48 @@ built-in.
   error.
 - Its return type is `ReadFileResult`, and it is not variadic.
 
+**`int_from_byte`**
+
+- `int_from_byte(value)` takes exactly one `byte` and returns the same numeric
+  value as an `int` in `0..255`.
+- Calling it with the wrong number of arguments or a non-`byte` argument is an
+  error.
+- Its return type is `int`.
+
+**`byte_from_int`**
+
+- `byte_from_int(value)` takes exactly one `int` and returns its low eight bits
+  as a `byte`, `0..255`. It wraps and never fails.
+- Calling it with the wrong number of arguments or a non-`int` argument is an
+  error.
+- Its return type is `byte`.
+
+**`string_to_bytes`**
+
+- `string_to_bytes(value)` takes exactly one `string` and returns a fresh
+  `byte[]` containing the string's bytes, in stored order and without the NUL
+  terminator.
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error.
+- Its return type is `byte[]`.
+
+**`bytes_to_string`**
+
+- `bytes_to_string(value)` takes exactly one `byte[]` and returns a fresh
+  `string` containing the same bytes.
+- A NUL byte anywhere in the array is a fatal runtime error with the message
+  `byte array contains a NUL byte at index <i>`, where `<i>` is decimal.
+- Calling it with the wrong number of arguments or a non-`byte[]` argument is an
+  error.
+- Its return type is `string`.
+
+`byte[]` is an ordinary array type. It is created with `new byte[n]`, is
+zero-filled, supports indexing and assignment with the existing bounds checks,
+and may be used as a parameter type, return type, struct field, union payload,
+and map value. Map keys remain `string`-only. String indexing and
+`length(string)` remain as they are: indexing yields an `int` byte value, and
+`length` yields the byte count.
+
 ### 18.9 Diagnostics
 
 The checker reports a single `Error` containing:
@@ -1178,7 +1232,8 @@ malformed or incomplete syntax trees.
 
 ### 18.10 Provisional decisions recorded
 
-1. `int` is signed 64-bit and `float` is IEEE 754 binary64.
+1. `int` is signed 64-bit, `float` is IEEE 754 binary64, and `byte` is
+   unsigned 8-bit.
 2. Types match exactly; there are no implicit conversions and no casts.
 3. `void` is only a function return type.
 4. `-> void` is equivalent to no return type.
@@ -1213,6 +1268,7 @@ are expected to evolve.
 | `int` | `int64_t` (signed 64-bit) |
 | `float` | `double` (IEEE 754 binary64) |
 | `bool` | `bool` (`<stdbool.h>`) |
+| `byte` | `uint8_t` (unsigned 8-bit) |
 | `string` | `const ktn_string *` (an immutable, length-carrying byte string) |
 | `void` | `void` (function return position only) |
 | struct type `S` | `ktn_s_S *` (a GC-managed object reference) |
@@ -1273,7 +1329,8 @@ is **deferred**.
   `ktn_rt_array_length`, `ktn_rt_set_args`, `ktn_rt_argv`, `ktn_rt_map_new`,
   `ktn_rt_map_set`, `ktn_rt_map_at`, `ktn_rt_map_has`, `ktn_rt_map_length`,
   `ktn_rt_read_file`, `ktn_rt_try_read_file`, `ktn_rt_exit`, the
-  `ktn_rt_i64_*` integer helpers, and the built-in print and eprint helpers.
+  `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
+  `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
   (to strings and to nested structs) and must be scanned; the runtime therefore
   uses the scanning allocator (`GC_MALLOC`), not the atomic one. Array element
@@ -1622,8 +1679,8 @@ This section records the implemented dynamic-array semantics. It is
 ### 21.8 Element types and zero values
 
 - Every element is zero-initialized when the array is created: `int` is `0`,
-  `float` is `0.0`, `bool` is `false`, `string` is the empty string, and a struct
-  or nested-array reference is null.
+  `float` is `0.0`, `bool` is `false`, `byte` is `0`, `string` is the empty
+  string, and a struct or nested-array reference is null.
 - Because the zero value of `string` is the empty string, a string element is
   safe to read and print before it is assigned (Section 20.1).
 - The zero value of a struct or nested-array element is a null reference. It

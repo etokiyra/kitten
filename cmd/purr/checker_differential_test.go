@@ -310,6 +310,46 @@ fn main() {
     int h = -8 >> count;
 }
 `)
+	add("byte values, arrays, and conversions", `struct ByteBox {
+    byte value;
+    byte[] bytes;
+}
+union ByteValue {
+    B { byte value; byte[] bytes; }
+    Empty
+}
+fn make_bytes(byte first, byte[] rest) -> byte[] {
+    byte[] result = new byte[2];
+    result[0] = first;
+    result[1] = rest[0];
+    return result;
+}
+fn main() {
+    byte a = byte_from_int(65);
+    byte b = byte_from_int(256);
+    byte[] values = new byte[3];
+    values[0] = a;
+    values[1] = b;
+    byte[] made = make_bytes(a, values);
+    print(a, b, int_from_byte(a), int_from_byte(values[1]));
+    print(a == b, a != b, a < b, a <= b, a > b, a >= b);
+    eprint(a);
+    map[string]byte table = new map[string]byte;
+    table["k"] = a;
+    print(int_from_byte(table["k"]));
+    ByteBox box = ByteBox { value = a, bytes = made };
+    print(int_from_byte(box.value), length(box.bytes));
+    ByteValue value = ByteValue.B { value = b, bytes = made };
+    match (value) {
+        B(code, bytes) { print(int_from_byte(code), length(bytes)); }
+        Empty { print(0); }
+    }
+    byte[] converted = string_to_bytes("Aé");
+    print(length(converted), int_from_byte(converted[0]), int_from_byte(converted[2]));
+    string text = bytes_to_string(converted);
+    print(text);
+}
+`)
 	add("control flow", "fn main() {\n    int i = 0;\n    if (i == 0) {\n        i = 1;\n    } else if (i == 1) {\n        i = 2;\n    } else {\n        i = 3;\n    }\n    while (i > 0) {\n        i--;\n    }\n    for (int j = 0; j < 3; j++) {\n        i += j;\n    }\n    for (;;) {\n    }\n}\n")
 	add("nested blocks and shadowing", "fn main() {\n    int x = 1;\n    {\n        int x = 2;\n        {\n            int x = 3;\n        }\n    }\n    if (true) {\n        int x = 4;\n    }\n}\n")
 	add("forward references", "fn main() {\n    print(later());\n    Point p = make();\n}\nfn later() -> int {\n    return 1;\n}\nstruct Point { int x; }\nfn make() -> Point {\n    return Point { x = 1 };\n}\n")
@@ -447,6 +487,26 @@ fn main() {
 		"fn f() { bool b = true; int x = ~b; }\n",
 		"fn f() { int x = 1 << true; }\n",
 		"fn f() { bool b = true; bool c = false; int a = 1; int x = a & b == c; }\n",
+		"fn f() { byte a = byte_from_int(1); byte b = a + a; }\n",
+		"fn f() { byte a = byte_from_int(1); byte b = a & a; }\n",
+		"fn f() { byte a = byte_from_int(1); byte b = -a; }\n",
+		"fn f() { byte a = byte_from_int(1); bool b = a == 1; }\n",
+		"fn f() { byte a = byte_from_int(1); bool b = a < 1; }\n",
+		"fn f() { int x = 1; byte b = x; }\n",
+		"fn f() { byte b = byte_from_int(1); int x = b; }\n",
+		"fn g(int value) {}\nfn f() { byte b = byte_from_int(1); g(b); }\n",
+		"fn f() { byte b = byte_from_int(1); if (b) {} }\n",
+		"fn f() { byte b = byte_from_int(1); b++; }\n",
+		"fn f() { byte b = byte_from_int(1); b += b; }\n",
+		"fn f() { map[byte]int m = new map[byte]int; }\n",
+		"fn f() { int x = int_from_byte(); }\n",
+		"fn f() { int x = int_from_byte(1); }\n",
+		"fn f() { byte b = byte_from_int(); }\n",
+		"fn f() { byte b = byte_from_int(true); }\n",
+		"fn f() { byte[] b = string_to_bytes(); }\n",
+		"fn f() { byte[] b = string_to_bytes(1); }\n",
+		"fn f() { string s = bytes_to_string(); }\n",
+		"fn f() { string s = bytes_to_string(\"x\"); }\n",
 		"fn f() { int x = 0x; }\n",
 		"fn f() { int x = 0b102; }\n",
 		"fn ReadFileResult() {}\n",

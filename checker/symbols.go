@@ -65,6 +65,18 @@ const (
 
 	// BuiltinSubstring returns a byte range of a string.
 	BuiltinSubstring
+
+	// BuiltinIntFromByte converts a byte to an int.
+	BuiltinIntFromByte
+
+	// BuiltinByteFromInt converts an int to its low byte.
+	BuiltinByteFromInt
+
+	// BuiltinStringToBytes returns a string's bytes as a byte array.
+	BuiltinStringToBytes
+
+	// BuiltinBytesToString returns a byte array as a string.
+	BuiltinBytesToString
 )
 
 // Function is a resolved function signature, either user-defined or built-in.

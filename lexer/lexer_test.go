@@ -102,6 +102,7 @@ func TestBuiltinTypes(t *testing.T) {
 		{"bool", TypeBool},
 		{"string", TypeString},
 		{"void", TypeVoid},
+		{"byte", TypeByte},
 	}
 
 	for _, testCase := range cases {

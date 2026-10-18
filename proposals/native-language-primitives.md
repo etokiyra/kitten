@@ -10,9 +10,10 @@
 > Date: 2026-10-18. Starting commit: `d95b5e1`.
 > Parent design: `proposals/zero-dependency-toolchain.md`.
 >
-> **Phase 8.1/8.2 status:** Section 2 (defined integer arithmetic) and
-> Section 3 (bitwise/shift operators and hex/binary literals) are **ADOPTED**.
-> Sections 4 through 8 remain **PROPOSED, not adopted**.
+> **Phase 8.1/8.2/8.3 status:** Section 2 (defined integer arithmetic),
+> Section 3 (bitwise/shift operators and hex/binary literals), Section 4
+> (`byte` and `byte[]`), and Section 5 (explicit conversions) are **ADOPTED**.
+> Sections 6 through 8 remain **PROPOSED, not adopted**.
 
 ## 0. Summary of the proposed decisions
 
@@ -469,7 +470,7 @@ tested; shift failure checks add a branch. Alternatives: runtime intrinsics only
 or a separate `>>>` unsigned shift (not proposed; the native backend can use
 `int_from_byte`/bit patterns).
 
-## 4. `byte` and `byte[]`
+## 4. `byte` and `byte[]` (ADOPTED in Phase 8.3)
 
 ### 4.1 Need
 
@@ -544,7 +545,7 @@ means users must convert often. Alternatives: `u8`/`uint8` to avoid collision;
 soft keyword; internal-only byte buffer. The human decision names `byte`, so the
 proposal accepts the rename.
 
-## 5. Explicit conversions
+## 5. Explicit conversions (ADOPTED in Phase 8.3)
 
 ### 5.1 Need and audit
 
@@ -572,8 +573,9 @@ Rules:
   length, containing the same bytes.
 - `bytes_to_string` copies the array bytes into a fresh immutable string. If
   any byte is NUL, it is a fatal runtime error:
-  `purr: string cannot contain a NUL byte`. (A recoverable result would add
-  another predeclared union; that is not proposed.)
+  `purr: byte array contains a NUL byte at index <i>`, where `<i>` is decimal.
+  (A recoverable result would add another predeclared union; that is not
+  proposed.)
 - All four are ordinary built-ins: exact arity, exact argument type, shadowable
   by a user declaration, and no implicit conversions.
 
@@ -595,8 +597,8 @@ internally.
 
 Runtime helpers return `ktn_array *`/`const ktn_string *`; the byte-array
 helper allocates `sizeof(uint8_t)` elements and copies the string bytes. The
-string helper checks the byte array length and NUL bytes, allocates a string,
-and copies the bytes.
+string helper checks the byte array length and each byte, reports the first
+NUL index, allocates a string, and copies the bytes.
 
 Files: both built-in tables/checkers, both call lowerings, both `names` files,
 `runtime/runtime.go`, `runtime/csrc`, checker/expression/unit/calls corpora, and

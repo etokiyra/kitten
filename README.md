@@ -261,7 +261,7 @@ go build -o purr ./cmd/purr
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
-| Built-ins | `print`, `length`, `substring`, `has`, `read_file`, `try_read_file` |
+| Built-ins | `print`, `eprint`, `exit`, `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`, `int_from_byte`, `byte_from_int`, `string_to_bytes`, `bytes_to_string` |
 | Fixtures | every program under `tests/` compiles, runs, and matches its expected output |
 
 **Not there yet:** the standard library beyond the built-ins above, generics, traits or
@@ -345,11 +345,11 @@ It is also the only way a self-hosting claim means anything.
 
 | Stage | Verified against the Go reference |
 | --- | --- |
-| Lexer | 1,074 inputs |
-| Parser + AST | 283 inputs |
-| Checker + semantic model | 1,897 inputs, byte-identical |
+| Lexer | 1,076 inputs |
+| Parser + AST | 289 inputs |
+| Checker + semantic model | 1,918 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
-| Entry point and translation-unit assembly | 96 whole units, 3,760 lines |
+| Entry point and translation-unit assembly | 98 whole units, 3,905 lines |
 | Module loader | 33 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
@@ -357,8 +357,8 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 89 program runs under GCC and Clang, outputs compared |
-| Defined arithmetic/bitwise runtime | wrapping, division, shifts, failures, and target-once through both pipelines |
+| Generated programs executed | 97 program runs under GCC and Clang, outputs compared |
+| Defined arithmetic/bitwise/byte runtime | wrapping, shifts, byte arrays, conversions, and failures through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 
 </details>

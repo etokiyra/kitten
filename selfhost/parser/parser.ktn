@@ -419,6 +419,7 @@ fn is_type_keyword(TokenKind kind) -> bool {
     if (kind == TokenKind.TypeBool) { return true; }
     if (kind == TokenKind.TypeString) { return true; }
     if (kind == TokenKind.TypeVoid) { return true; }
+    if (kind == TokenKind.TypeByte) { return true; }
     if (kind == TokenKind.Map) { return true; }
     return false;
 }
@@ -906,6 +907,7 @@ fn parse_base_type(Parser parser) -> TypeResult {
         token.kind == TokenKind.TypeBool ||
         token.kind == TokenKind.TypeString ||
         token.kind == TokenKind.TypeVoid ||
+        token.kind == TokenKind.TypeByte ||
         token.kind == TokenKind.Ident) {
         advance(parser);
         return TypeResult.Ok { type_ref = TypeRef.Named { node_id = new_type_ref_id(parser), name = token } };

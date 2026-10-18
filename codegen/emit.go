@@ -656,6 +656,30 @@ func (g *generator) callExpression(expression *parser.CallExpr) (string, error) 
 			return "", err
 		}
 		return fmt.Sprintf("%s(%s)", preludeTryReadFileHelperName(resultType.Module), argument), nil
+	case checker.BuiltinIntFromByte:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("((int64_t)(%s))", argument), nil
+	case checker.BuiltinByteFromInt:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("((uint8_t)((uint64_t)(%s) & UINT64_C(0xFF)))", argument), nil
+	case checker.BuiltinStringToBytes:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", runtime.StringToBytesFunction, argument), nil
+	case checker.BuiltinBytesToString:
+		argument, err := g.expression(expression.Arguments[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", runtime.BytesToStringFunction, argument), nil
 	}
 
 	identifier, ok := expression.Callee.(*parser.Identifier)
@@ -943,6 +967,8 @@ func printHelper(kittenType *checker.Type) (string, error) {
 		return runtime.PrintBoolFunction, nil
 	case checker.StringType:
 		return runtime.PrintStringFunction, nil
+	case checker.ByteType:
+		return runtime.PrintIntFunction, nil
 	default:
 		return "", fmt.Errorf("print does not support values of type %s", kittenType)
 	}
@@ -988,6 +1014,8 @@ func eprintHelper(kittenType *checker.Type) (string, error) {
 		return runtime.EprintBoolFunction, nil
 	case checker.StringType:
 		return runtime.EprintStringFunction, nil
+	case checker.ByteType:
+		return runtime.EprintIntFunction, nil
 	default:
 		return "", fmt.Errorf("eprint does not support values of type %s", kittenType)
 	}

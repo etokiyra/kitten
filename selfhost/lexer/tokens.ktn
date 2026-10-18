@@ -55,6 +55,7 @@ public enum TokenKind {
     TypeBool,
     TypeString,
     TypeVoid,
+    TypeByte,
 
     // Boolean literals.
     True,
@@ -163,6 +164,7 @@ public fn kind_name(TokenKind kind) -> string {
         TypeBool { return "TypeBool"; }
         TypeString { return "TypeString"; }
         TypeVoid { return "TypeVoid"; }
+        TypeByte { return "TypeByte"; }
         True { return "True"; }
         False { return "False"; }
         Plus { return "Plus"; }

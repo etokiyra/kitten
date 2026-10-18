@@ -301,6 +301,9 @@ fn check_relational(Checker checker, string operator, Type left, Type right, Pos
             error = error_at(checker, ErrorKind.TypeMismatch, at, "operator " + quoted(operator) + " requires operands of the same type, found " + type_string(left) + " and " + type_string(right))
         };
     }
+    if (left.kind == TypeKind.Byte) {
+        return TypeResult.Ok { type = primitive_type(TypeKind.Bool, "bool") };
+    }
     if (!is_numeric(left)) {
         return TypeResult.Failed {
             error = error_at(checker, ErrorKind.InvalidOperator, at, "operator " + quoted(operator) + " requires numeric operands, found " + type_string(left))

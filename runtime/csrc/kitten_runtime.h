@@ -178,6 +178,21 @@ void *ktn_rt_array_at(const ktn_array *array, int64_t index);
 int64_t ktn_rt_array_length(const ktn_array *array);
 
 /*
+ * Returns a fresh byte array containing the bytes of value. The result uses the
+ * ordinary array representation with an element size of one; a null string is
+ * the empty string. The string's terminator is not part of the result.
+ */
+ktn_array *ktn_rt_string_to_bytes(const ktn_string *value);
+
+/*
+ * Returns a fresh string containing the bytes of a byte array. A null array or
+ * an array whose element size is not one is a fatal runtime error. A NUL byte
+ * anywhere in the array is a fatal runtime error naming its index, because
+ * Kitten strings cannot contain NUL.
+ */
+const ktn_string *ktn_rt_bytes_to_string(const ktn_array *bytes);
+
+/*
  * Stores the process argument vector for a later ktn_rt_argv call. The
  * generated C entry point calls this once, before the Kitten main function
  * runs. The pointers remain valid for the lifetime of the process.

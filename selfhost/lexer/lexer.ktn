@@ -179,6 +179,7 @@ fn keyword_kind(string text) -> TokenKind {
     if (text == "bool") { return TokenKind.TypeBool; }
     if (text == "string") { return TokenKind.TypeString; }
     if (text == "void") { return TokenKind.TypeVoid; }
+    if (text == "byte") { return TokenKind.TypeByte; }
     if (text == "true") { return TokenKind.True; }
     if (text == "false") { return TokenKind.False; }
     return TokenKind.Ident;

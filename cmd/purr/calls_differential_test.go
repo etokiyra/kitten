@@ -320,6 +320,17 @@ fn main() {
 }
 `,
 	}, {
+		description: "byte values through call arguments",
+		root: `fn show(int value) {
+    print(value);
+}
+fn main() {
+    byte a = byte_from_int(65);
+    show(int_from_byte(a));
+    show(int_from_byte(byte_from_int(256)));
+}
+`,
+	}, {
 		description: "bitwise and shift operations through call arguments",
 		root: `fn show(int value) {
     print(value);

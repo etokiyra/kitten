@@ -125,6 +125,8 @@ public fn substring_function() -> string { return "ktn_rt_substring"; }
 public fn map_has_function() -> string { return "ktn_rt_map_has"; }
 public fn read_file_function() -> string { return "ktn_rt_read_file"; }
 public fn try_read_file_function() -> string { return "ktn_rt_try_read_file"; }
+public fn string_to_bytes_function() -> string { return "ktn_rt_string_to_bytes"; }
+public fn bytes_to_string_function() -> string { return "ktn_rt_bytes_to_string"; }
 
 // prelude_try_read_file_helper_name is the generated helper that builds the
 // predeclared ReadFileResult from the runtime's non-fatal read primitive.
@@ -296,6 +298,7 @@ public fn c_type(Type value) -> CTypeResult {
         Float { return CTypeResult.Ok { text = "double" }; }
         Bool { return CTypeResult.Ok { text = "bool" }; }
         String { return CTypeResult.Ok { text = "const ktn_string *" }; }
+        Byte { return CTypeResult.Ok { text = "uint8_t" }; }
         Void { return CTypeResult.Ok { text = "void" }; }
         Array { return CTypeResult.Ok { text = "ktn_array *" }; }
         Map { return CTypeResult.Ok { text = "ktn_map *" }; }

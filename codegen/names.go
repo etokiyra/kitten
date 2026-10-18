@@ -134,6 +134,8 @@ func cType(kittenType *checker.Type) (string, error) {
 		return "bool", nil
 	case kittenType == checker.StringType:
 		return "const ktn_string *", nil
+	case kittenType == checker.ByteType:
+		return "uint8_t", nil
 	case kittenType == checker.VoidType:
 		return "void", nil
 	case kittenType.Kind == checker.KindArray:

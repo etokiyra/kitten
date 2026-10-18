@@ -268,7 +268,11 @@ public enum BuiltinKind {
     Argv,
     TryReadFile,
     MapHas,
-    Substring
+    Substring,
+    IntFromByte,
+    ByteFromInt,
+    StringToBytes,
+    BytesToString
 }
 
 // Function is a resolved function signature, either user-defined or built-in.
@@ -505,7 +509,7 @@ public fn builtin_functions() -> map[string]Function {
         builtin = BuiltinKind.Print,
         variadic = true,
         allowed_types = allowed_print_types(),
-        allowed_count = 4
+        allowed_count = 5
     };
     builtins["eprint"] = Function {
         name = "eprint",
@@ -517,7 +521,7 @@ public fn builtin_functions() -> map[string]Function {
         builtin = BuiltinKind.Eprint,
         variadic = true,
         allowed_types = allowed_print_types(),
-        allowed_count = 4
+        allowed_count = 5
     };
     builtins["exit"] = Function {
         name = "exit",
@@ -591,16 +595,89 @@ public fn builtin_functions() -> map[string]Function {
         allowed_types = new Type[1],
         allowed_count = 0
     };
+    builtins["int_from_byte"] = Function {
+        name = "int_from_byte",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = byte_parameter_types(),
+        return_type = primitive_type(TypeKind.Int, "int"),
+        module = 0,
+        builtin = BuiltinKind.IntFromByte,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["byte_from_int"] = Function {
+        name = "byte_from_int",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = int_parameter_types(),
+        return_type = primitive_type(TypeKind.Byte, "byte"),
+        module = 0,
+        builtin = BuiltinKind.ByteFromInt,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["string_to_bytes"] = Function {
+        name = "string_to_bytes",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = string_parameter_types(),
+        return_type = array_type(primitive_type(TypeKind.Byte, "byte")),
+        module = 0,
+        builtin = BuiltinKind.StringToBytes,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
+    builtins["bytes_to_string"] = Function {
+        name = "bytes_to_string",
+        parameter_names = new string[1],
+        parameter_count = 1,
+        parameter_types = byte_array_parameter_types(),
+        return_type = primitive_type(TypeKind.String, "string"),
+        module = 0,
+        builtin = BuiltinKind.BytesToString,
+        variadic = false,
+        allowed_types = new Type[1],
+        allowed_count = 0
+    };
     return builtins;
+}
+
+fn byte_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.Byte, "byte");
+    return types;
+}
+
+fn int_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.Int, "int");
+    return types;
+}
+
+fn string_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = primitive_type(TypeKind.String, "string");
+    return types;
+}
+
+fn byte_array_parameter_types() -> Type[] {
+    Type[] types = new Type[1];
+    types[0] = array_type(primitive_type(TypeKind.Byte, "byte"));
+    return types;
 }
 
 // allowed_print_types returns the types print accepts, in the reference's order.
 fn allowed_print_types() -> Type[] {
-    Type[] types = new Type[4];
+    Type[] types = new Type[5];
     types[0] = primitive_type(TypeKind.Int, "int");
     types[1] = primitive_type(TypeKind.Float, "float");
     types[2] = primitive_type(TypeKind.Bool, "bool");
     types[3] = primitive_type(TypeKind.String, "string");
+    types[4] = primitive_type(TypeKind.Byte, "byte");
     return types;
 }
 
@@ -814,7 +891,7 @@ public fn resolve_type(Checker checker, TypeRef reference) -> TypeResult {
 
 // is_primitive_name reports whether a name is one of the built-in type names.
 public fn is_primitive_name(string name) -> bool {
-    return name == "int" || name == "float" || name == "bool" || name == "string" || name == "void";
+    return name == "int" || name == "float" || name == "bool" || name == "string" || name == "byte" || name == "void";
 }
 
 // primitive_by_name returns the built-in type with the given name.
@@ -827,6 +904,9 @@ public fn primitive_by_name(string name) -> Type {
     }
     if (name == "string") {
         return primitive_type(TypeKind.String, "string");
+    }
+    if (name == "byte") {
+        return primitive_type(TypeKind.Byte, "byte");
     }
     if (name == "void") {
         return primitive_type(TypeKind.Void, "void");

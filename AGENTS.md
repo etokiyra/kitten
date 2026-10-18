@@ -225,8 +225,10 @@ signed overflow. Phase 8.2 added `& | ^ ~ << >>`, C#-style precedence and
 arithmetic shifts, checked shift counts, and lowercase `0x`/`0b` literals with
 64-bit bit-pattern semantics and identical lexical/checker errors. Phase 8.3a
 renamed every `byte` identifier in Kitten source, fixtures, and embedded test
-source to `octet`, with no language change; Phase 8.3b (`byte`/`byte[]` and the
-keyword) is next. A SPEC cleanup
+source to `octet`, with no language change. Phase 8.3b added `byte` as a reserved
+unsigned 8-bit type, `byte[]`, byte comparisons and printing, and the four
+conversions `int_from_byte`, `byte_from_int`, `string_to_bytes`, and
+`bytes_to_string`. Phase 8.4 (file and directory APIs) is next. A SPEC cleanup
 of Go/C-flavored wording remains a later candidate. Native backend, standard
 library, and file writing remain unauthorized.
 
@@ -331,7 +333,8 @@ authorization after the design is approved.
    made integer arithmetic and decimal literal ranges defined in both pipelines
    and the C runtime; Phase 8.2 added bitwise/shift operators and hex/binary
    literals; Phase 8.3a freed the `byte` identifier by renaming it to `octet`
-   in source and fixtures).
+   in source and fixtures; Phase 8.3b added the `byte` type, `byte[]`, and
+   explicit byte/string conversions).
 3. Rewrite the compiler in Kitten and verify it through an actual bootstrap. This
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is
