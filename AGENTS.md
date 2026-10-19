@@ -249,10 +249,12 @@ built-in and predeclared `EnvResult` union, and Phase 9.2 implemented
 `try_file_info` and `FileInfoResult`, Phase 9.4 implemented
 `try_create_temp_directory` and `TempDirectoryResult`, Phase 9.5 embedded the C
 runtime sources in `purr/embedded.ktn`, Phase 9.6 implemented the `purr.toml`
-subset parser in `purr/manifest.ktn`, and Phase 9.7 implemented the `purr new`
-module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, in both pipelines.
-The next implementation step is 9.8's Kitten `purr` entry point, argument
-grammar, help/usage, and source-mode `build`/`run`, followed by project parity. `try_find_program` is
+subset parser in `purr/manifest.ktn`, Phase 9.7 implemented the `purr new`
+module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, and Phase 9.8a
+implemented the `purr-kt` entry point, help/usage, and `new` dispatch in
+`purr.ktn` and `purr/cli.ktn`, in both pipelines. `build` and `run` are
+recognized stubs. The next implementation step is 9.8b's in-process `build`
+command, followed by 9.8c `run` and the full parity suite. `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
 separate later change. File writing now unblocks `purr new` and process launch
@@ -308,6 +310,18 @@ recurses, and reports cleanup notes. Modes honor the umask; no chmod exists.
 `purr new` is not yet a user-facing command: the CLI entry point, argument
 parsing, and help belong to 9.8. Any change to the templates or cleanup behavior
 must update the both-pipeline tests in `cmd/purr/new_test.go`.
+
+### Kitten `purr` sidecar
+
+`purr.ktn` is the repository-root entry point; `purr/cli.ktn` parses argv and
+imports only `new.ktn`. It does not import `embedded.ktn` or anything under
+`selfhost/`, so `purr-kt` stays small. The binary name is always `purr-kt`; the
+Go CLI remains the authoritative `purr`. Help and usage name the program
+`purr` deterministically, never argv[0].
+
+`purr-kt` supports `help`, `new`, and the `build`/`run` stubs. 9.8b adds the
+in-process build path, 9.8c adds run and the full parity suite, and 9.9 is the
+Go-CLI freeze/name swap. Tests must keep the Go CLI behavior unchanged.
 
 ### Adding a built-in
 

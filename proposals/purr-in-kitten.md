@@ -81,11 +81,13 @@ Implementation status:
 | 4. `try_create_temp_directory` | **implemented in 9.4** |
 | 5. Embedded runtime generation | **implemented in 9.5** |
 | 6. TOML subset parser | **implemented in 9.6** |
-| 7. `purr new` | **implemented in 9.7 as module + probe; CLI in 9.8** |
-| 8. Kitten `purr` source-mode build/run | proposed, next |
+| 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
+| 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build/run stubs** |
+| 8b. Kitten `purr` build | proposed, next |
+| 8c. Kitten `purr` run + full parity | proposed |
 | 9. Project mode | proposed |
 | 10. Library object mode | proposed, deferred |
-| 11. Full parity suite / Go CLI freeze | proposed |
+| 11. Freeze / name swap | proposed (9.9 milestone) |
 
 ## 2. Audit: the current Go CLI is the parity specification
 
@@ -856,6 +858,33 @@ The CLI entry point, argument parsing in the final binary, and help remain for
 9.8. `purr new` is therefore a tested module and probe, not yet a user-facing
 command.
 
+### 8.5 Kitten `purr` sidecar (9.8a)
+
+`purr.ktn` is the repository-root entry point and `purr/cli.ktn` parses argv.
+The sidecar binary is always named `purr-kt`; the Go CLI remains the
+authoritative `purr`. The CLI module imports only `new.ktn` (and what that
+imports), so no compiler module is linked and the binary stays small.
+
+Implemented in 9.8a:
+
+- no arguments: usage on stderr, exit 2;
+- `help`, `-h`, `--help`: usage on stdout, exit 0, extra arguments ignored;
+- unknown command: `purr: unknown command "<name>"`, blank line, usage, stderr,
+  exit 2;
+- `new`: the 9.7 module and probe behavior, with output and statuses unchanged;
+- `build` and `run`: recognized stubs printing
+  `purr: command "<name>" is not implemented in this build yet`, then usage on
+  stderr, exit 2.
+
+The usage text is the Go text plus two lines, in this order:
+
+```text
+  purr new [--lib] <name>               Create a new project
+  purr help                             Show this help
+```
+
+The sidecar uses the deterministic program name `purr`, never `argv()[0]`.
+
 ## 9. Project mode and output naming
 
 Project mode activates only for `purr build`/`purr run` with no source argument
@@ -1054,14 +1083,19 @@ design-only phase.
 7. **`purr new`** — implemented in 9.7 as `purr/new.ktn` plus the
    `purr/new_probe.ktn` driver; exact tree/bytes/messages/modes, cleanup notes,
    no license in templates. The CLI entry point remains 9.8.
-8. **Kitten `purr` root and source-mode build/run** — next; `purr.ktn`,
-   compiler linkage, in-process build, C compiler subprocess, temp dirs, current
-   diagnostics and statuses. Acceptance: legacy parity suite subset.
+8. **Kitten `purr`**
+   8a. **Entry point, help, and `new`** — implemented in 9.8a as
+   `purr.ktn` + `purr/cli.ktn`; `build`/`run` are stubs.
+   8b. **In-process `build`** — next; compiler linkage, C compiler subprocess,
+   temp dirs, current diagnostics and statuses.
+   8c. **`run` and full parity suite** — compile to a temporary executable,
+   run it, preserve statuses, and pass the complete Go/Kitten parity suite.
 9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.
 10. **Library build** (if approved) — no-entry generation, object output.
-11. **Full parity suite and Go CLI freeze** — all legacy and new cases, fixpoint,
-    release-build check. Acceptance: parity report and `cmd/purr` frozen.
+11. **Freeze and name swap (9.9)** — all legacy and new cases, fixpoint,
+    release-build check. Acceptance: parity report, Go CLI frozen, and the
+    Kitten `purr` takes over the `purr` name.
 
 The recommended order matches the dependency chain: environment -> capture ->
 file_info -> temp -> embedding -> TOML -> new -> build/run -> project ->

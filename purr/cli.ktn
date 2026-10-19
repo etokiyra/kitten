@@ -1,0 +1,127 @@
+// purr/cli.ktn - the Kitten-written purr command surface.
+//
+// This build intentionally links only the new-project module, not the compiler.
+// build and run are recognized stubs until 9.8b/9.8c.
+
+import "new.ktn";
+
+fn usage_text() -> string {
+    return "Kitten compiler\n" +
+        "\n" +
+        "Usage:\n" +
+        "  purr build <file.ktn> [-o <output>]   Compile a Kitten source file\n" +
+        "  purr run <file.ktn>                   Compile and run a Kitten source file\n" +
+        "  purr new [--lib] <name>               Create a new project\n" +
+        "  purr help                             Show this help\n" +
+        "\n" +
+        "Options:\n" +
+        "  -o, --output <path>   Write the executable to <path> (build only)\n" +
+        "\n" +
+        "The C compiler is taken from CC, or discovered as cc, gcc, or clang.\n" +
+        "Kitten programs are linked against the Boehm garbage collector (libgc).";
+}
+
+fn quote_argument(string value) -> string {
+    string result = "\"";
+    int index = 0;
+    int size = length(value);
+    while (index < size) {
+        int octet = value[index];
+        if (octet == 34) {
+            result = result + "\\\"";
+        } else if (octet == 92) {
+            result = result + "\\\\";
+        } else if (octet == 10) {
+            result = result + "\\n";
+        } else if (octet == 9) {
+            result = result + "\\t";
+        } else if (octet == 13) {
+            result = result + "\\r";
+        } else if (octet < 32 || octet >= 127) {
+            result = result + "\\x" +
+                substring("0123456789abcdef", octet / 16, octet / 16 + 1) +
+                substring("0123456789abcdef", octet % 16, octet % 16 + 1);
+        } else {
+            result = result + substring(value, index, index + 1);
+        }
+        index++;
+    }
+    return result + "\"";
+}
+
+fn print_usage_to_stderr() {
+    eprint(usage_text());
+}
+
+fn run_new(string[] arguments, int count) {
+    bool library = false;
+    bool have_name = false;
+    bool bad = false;
+    string name = "";
+
+    int index = 2;
+    while (index < count) {
+        string argument = arguments[index];
+        if (argument == "--lib") {
+            if (library) {
+                bad = true;
+            } else {
+                library = true;
+            }
+        } else if (length(argument) > 0 && argument[0] == 45) { // '-'
+            bad = true;
+        } else if (have_name) {
+            bad = true;
+        } else {
+            name = argument;
+            have_name = true;
+        }
+        index++;
+    }
+
+    if (bad || !have_name) {
+        eprint("usage: purr new [--lib] <name>");
+        exit(2);
+    }
+
+    match (new_project(name, library)) {
+        Created(message) {
+            eprint(message);
+        }
+        Failed(message) {
+            eprint(message);
+            exit(1);
+        }
+    }
+}
+
+public fn run_cli() {
+    string[] arguments = argv();
+    int count = length(arguments);
+
+    if (count <= 1) {
+        print_usage_to_stderr();
+        exit(2);
+    }
+
+    string command = arguments[1];
+    if (command == "help" || command == "-h" || command == "--help") {
+        print(usage_text());
+        exit(0);
+    }
+    if (command == "new") {
+        run_new(arguments, count);
+        return;
+    }
+    if (command == "build" || command == "run") {
+        eprint("purr: command " + quote_argument(command) +
+            " is not implemented in this build yet");
+        print_usage_to_stderr();
+        exit(2);
+    }
+
+    eprint("purr: unknown command " + quote_argument(command));
+    eprint("");
+    print_usage_to_stderr();
+    exit(2);
+}

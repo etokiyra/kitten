@@ -1,0 +1,10 @@
+// purr.ktn - the Kitten-written purr entry point.
+//
+// This is the sidecar Kitten implementation, built as purr-kt. The Go CLI
+// remains the authoritative purr while build and run are still stubs.
+
+import "purr/cli.ktn";
+
+fn main() {
+    run_cli();
+}
