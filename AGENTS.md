@@ -248,9 +248,11 @@ built-in and predeclared `EnvResult` union, and Phase 9.2 implemented
 `try_run_capture` and `CapturedRunResult`, Phase 9.3 implemented
 `try_file_info` and `FileInfoResult`, Phase 9.4 implemented
 `try_create_temp_directory` and `TempDirectoryResult`, Phase 9.5 embedded the C
-runtime sources in `purr/embedded.ktn`, and Phase 9.6 implemented the
-`purr.toml` subset parser in `purr/manifest.ktn`, in both pipelines. The next
-implementation step is 9.7's `purr new`, followed by `purr` build/run parity. `try_find_program` is
+runtime sources in `purr/embedded.ktn`, Phase 9.6 implemented the `purr.toml`
+subset parser in `purr/manifest.ktn`, and Phase 9.7 implemented the `purr new`
+module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, in both pipelines.
+The next implementation step is 9.8's Kitten `purr` entry point, argument
+grammar, help/usage, and source-mode `build`/`run`, followed by project parity. `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
 separate later change. File writing now unblocks `purr new` and process launch
@@ -293,6 +295,19 @@ The pinned, randomized, both-pipeline, performance, and sanitizer tests live in
 `cmd/purr/manifest_test.go`; the independent Go oracle is in
 `cmd/purr/manifest_oracle_test.go`. Additional keys, `[dependencies]`, and a
 manifest writer remain deferred and must grow additively.
+
+### Project creation module
+
+`purr/new.ktn` implements `new_project(name, library)` and the `NewResult`
+union; `purr/new_probe.ktn` is the command-shaped test driver. The module
+imports `manifest.ktn` for name validation and uses only `try_file_info`,
+`try_create_directory`, `try_write_file`, and `try_remove` for filesystem work.
+It tracks only paths it created, removes them in reverse order on failure, never
+recurses, and reports cleanup notes. Modes honor the umask; no chmod exists.
+
+`purr new` is not yet a user-facing command: the CLI entry point, argument
+parsing, and help belong to 9.8. Any change to the templates or cleanup behavior
+must update the both-pipeline tests in `cmd/purr/new_test.go`.
 
 ### Adding a built-in
 

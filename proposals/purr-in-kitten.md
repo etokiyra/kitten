@@ -6,9 +6,9 @@
 > per step in the order below. The `try_getenv`/`EnvResult`,
 > `try_run_capture`/`CapturedRunResult`, `try_file_info`/`FileInfoResult`,
 > `try_create_temp_directory`/`TempDirectoryResult`, embedded runtime
-> generation, and the `purr.toml` subset parser steps are implemented so far;
-> no `purr` command described here is implemented unless explicitly marked
-> **already implemented**.
+> generation, the `purr.toml` subset parser, and the `purr new` module/probe are
+> implemented so far; no `purr` command described here is implemented unless
+> explicitly marked **already implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -81,8 +81,8 @@ Implementation status:
 | 4. `try_create_temp_directory` | **implemented in 9.4** |
 | 5. Embedded runtime generation | **implemented in 9.5** |
 | 6. TOML subset parser | **implemented in 9.6** |
-| 7. `purr new` | proposed, next |
-| 8. Kitten `purr` source-mode build/run | proposed |
+| 7. `purr new` | **implemented in 9.7 as module + probe; CLI in 9.8** |
+| 8. Kitten `purr` source-mode build/run | proposed, next |
 | 9. Project mode | proposed |
 | 10. Library object mode | proposed, deferred |
 | 11. Full parity suite / Go CLI freeze | proposed |
@@ -654,7 +654,9 @@ purr.toml:<line>:<column>: <message>
 Line and column are one-based; columns count bytes. CRLF is one line break and
 its CR contributes no column. The first error stops the parser. At end of file,
 the position is just past the last byte. Bytes at or above 0x7F and control
-bytes in echoed slots render as lowercase `\xNN`.
+bytes in echoed slots render as lowercase `\xNN`. A control byte after an
+invalid escape is echoed as `\\xNN` (two backslashes) by design, pinned by the
+parser tests.
 
 Messages:
 
@@ -719,39 +721,92 @@ required key or changing a value's meaning requires a manifest version decision
 and is not done silently. Additional keys, `[dependencies]`, arrays, writers,
 and project discovery remain deferred.
 
-## 8. `purr new`
+## 8. `purr new` (module and probe implemented in 9.7; CLI in 9.8)
 
-### 8.1 Behavior
+### 8.1 API and behavior
 
-```sh
-purr new hello-world
-purr new --lib catnip
+```kitten
+public union NewResult {
+    Created { string message; }
+    Failed { string message; }
+}
+
+public fn new_project(string name, bool library) -> NewResult
 ```
 
-Name validation is the manifest rule above. A name that is also a path
-(`a/b`, `..`, `.`) is rejected before touching the filesystem. The parent must
-exist; `new` creates one project directory, not a parent chain.
+`name` is both the package name and the directory name and must satisfy the
+manifest name rules exactly. Validation calls
+`manifest_name_error_text` from `purr/manifest.ktn`; the rules and `\xNN`
+echoing are not duplicated. It happens before any filesystem access.
 
-Success messages (proposed; Cargo-like, but plain and stable):
+The probe `purr/new_probe.ktn` implements the command-shaped surface:
 
 ```text
-     Created binary (application) `hello-world`
-     Created library `catnip`
+new_probe [--lib] <name>
 ```
 
-Exact files and modes:
+`--lib` may appear before or after the name. Any other flag, a second name, a
+missing name, or `--` is a usage error with exit 2. The probe prints `Created`
+messages to stderr, nothing to stdout, and exits 0; `Failed` messages go to
+stderr with exit 1.
+
+Because a name beginning with `-` is a flag under this grammar, `-x` is a usage
+error through the probe; the module API test calls `new_project("-x", false)` to
+pin the invalid-name behavior.
+
+Success messages, unquoted with exactly five leading spaces:
 
 ```text
-hello-world/          0755
-hello-world/.gitignore       0644
-hello-world/purr.toml        0644
-hello-world/src/             0755
-hello-world/src/main.ktn     0644
+     Created binary (application) hello-world
+     Created library catnip
 ```
 
-Library shape uses `src/lib.ktn` instead.
+Destination failure:
 
-### 8.2 Exact templates
+```text
+error: destination hello-world already exists
+```
+
+Filesystem failures are:
+
+```text
+error: <runtime message>
+```
+
+where `<runtime message>` is exactly the message the failed `try_*` built-in
+returned, with paths relative as built by `new_project`.
+
+### 8.2 Creation and cleanup
+
+1. Validate the name.
+2. `try_file_info(name)`: `Missing` continues; `Ok` for any file, directory, or
+   symlink (including a dangling symlink) is the destination-exists error;
+   `Failed` is `error: <message>`. Nothing is touched in these paths.
+3. `try_create_directory(name)`. A failure is reported and nothing is cleaned: a
+   concurrent creator owns that path.
+4. `try_create_directory(name + "/src")`.
+5. Write `.gitignore`, `purr.toml`, then `src/main.ktn` or `src/lib.ktn`.
+
+Only paths created by this invocation are tracked, in creation order. On any
+failure after step 3 they are removed in reverse order with `try_remove` only:
+files first, then `src`, then `name`. A failed write that nevertheless created a
+file is detected and tracked. No path outside the created list is removed, no
+removal is recursive, and a non-empty directory is left in place.
+
+If cleanup fails, removal continues for the remaining paths. The original error
+is followed by one line per leftover:
+
+```text
+       note: could not remove <path>: <runtime message>
+```
+
+with seven leading spaces.
+
+Modes honor the process umask; there is no chmod. `try_create_directory` requests
+`0755` and `try_write_file` requests `0644`, so umasks `022`, `077`, and `000`
+produce `0755/0644`, `0700/0600`, and `0755/0644` respectively.
+
+### 8.3 Exact templates
 
 `.gitignore`:
 
@@ -763,7 +818,7 @@ Library shape uses `src/lib.ktn` instead.
 
 ```text
 [package]
-name = "hello-world"
+name = "<name>"
 version = "0.1.0"
 ```
 
@@ -783,25 +838,23 @@ public fn add(int left, int right) -> int {
 }
 ```
 
-The name appears only in `purr.toml`; the source templates are name-independent
-so they can be compared exactly. The generated files carry **no license notice
-and no GPL or MIT obligation**; they belong to the user. `purr new` does not run
-`git init` and does not create a license file, README, lockfile, or target
-directory.
+Every file ends with one LF, uses four-space indentation, and has no tabs,
+license notice, README, lockfile, `target/`, or `git init`.
 
-### 8.3 Existing directory and failure cleanup
+### 8.4 Tests
 
-- If `NAME` exists as any kind of path, print
-  `error: destination `NAME` already exists` to stderr and exit 1; make no
-  changes.
-- Create the project directory, `src`, and the three files in order.
-- On any create/write failure, remove the files it created and then the
-  directories it created (deepest first), using `try_remove`; report the first
-  error and exit 1.
-- This is cleanup-complete, not crash-atomic. There is no rename primitive; a
-  process crash can leave a partial directory. Atomic staging with rename is
-  deferred until a `try_rename` primitive exists.
-- `new` does not overwrite or prompt.
+Both pipelines and both compilers cover binary/library success, exact trees,
+bytes, and modes under `022`, `077`, and `000`; `--lib` before and after; both
+generated projects parsing/compiling/running; generated-C parity; deterministic
+bytes; destination files, directories, dangling symlinks, and directory
+symlinks; read-only parents; a real step-4 failure via `umask 0777`; real steps
+5a/5b/5c write failures through byte-granular `RLIMIT_FSIZE` with `SIGXFSZ`
+ignored so cleanup runs; a model race and a model cleanup-note variant; usage
+and invalid-name cases; and Clang UBSan.
+
+The CLI entry point, argument parsing in the final binary, and help remain for
+9.8. `purr new` is therefore a tested module and probe, not yet a user-facing
+command.
 
 ## 9. Project mode and output naming
 
@@ -998,10 +1051,11 @@ design-only phase.
 6. **TOML subset parser** — implemented in 9.6; `purr/manifest.ktn`,
    pinned and randomized tests, exact errors. Acceptance: valid/unsupported
    corpus.
-7. **`purr new`** — next; CLI, templates, modes, cleanup, name validation. Acceptance:
-   exact tree/bytes/messages/modes, no license in templates.
-8. **Kitten `purr` root and source-mode build/run** — `purr.ktn`, compiler
-   linkage, in-process build, C compiler subprocess, temp dirs, current
+7. **`purr new`** — implemented in 9.7 as `purr/new.ktn` plus the
+   `purr/new_probe.ktn` driver; exact tree/bytes/messages/modes, cleanup notes,
+   no license in templates. The CLI entry point remains 9.8.
+8. **Kitten `purr` root and source-mode build/run** — next; `purr.ktn`,
+   compiler linkage, in-process build, C compiler subprocess, temp dirs, current
    diagnostics and statuses. Acceptance: legacy parity suite subset.
 9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.

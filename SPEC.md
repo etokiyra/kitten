@@ -256,6 +256,12 @@ An unterminated string, a newline inside a string, or an unsupported escape is
 reported as a lexical error at a specific `line:column`. A trailing backslash
 reaching end of input is reported as an unterminated string.
 
+> Tooling note: the separate `purr.toml` subset parser uses these escapes. In
+> its diagnostics, an invalid escape whose following byte is a control byte is
+> echoed as `\\xNN` after the literal escape backslash, producing two
+> backslashes. This is a parser-diagnostic convention, not a language rule;
+> the parser tests pin it.
+
 ### 6.4 Boolean literals
 
 `true` and `false` are the boolean literals.

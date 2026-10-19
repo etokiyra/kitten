@@ -424,23 +424,20 @@ fn parse_string(ManifestParser parser) -> StringResult {
     return StringResult.Failed;
 }
 
-fn validate_name(ManifestParser parser, string value, int line, int column) -> bool {
+// manifest_name_error_text returns the exact invalid-package-name message body
+// for a value, or the empty string when the value is valid. The purr new module
+// uses this helper so name rules and echoing are never duplicated.
+public fn manifest_name_error_text(string value) -> string {
     int size = length(value);
     if (size == 0) {
-        fail_at(parser, line, column,
-            "invalid package name " + echo_slot(value) + ": must not be empty");
-        return false;
+        return "invalid package name " + echo_slot(value) + ": must not be empty";
     }
     if (size > 64) {
-        fail_at(parser, line, column,
-            "invalid package name " + echo_slot(value) + ": must be at most 64 bytes");
-        return false;
+        return "invalid package name " + echo_slot(value) + ": must be at most 64 bytes";
     }
     int first = value[0];
     if (!is_lower(first)) {
-        fail_at(parser, line, column,
-            "invalid package name " + echo_slot(value) + ": must start with a lowercase letter");
-        return false;
+        return "invalid package name " + echo_slot(value) + ": must start with a lowercase letter";
     }
     int index = 1;
     while (index < size) {
@@ -448,17 +445,22 @@ fn validate_name(ManifestParser parser, string value, int line, int column) -> b
         bool allowed = is_lower(value_byte) || is_digit(value_byte) ||
             value_byte == 95 || value_byte == 45; // _ -
         if (!allowed) {
-            fail_at(parser, line, column,
-                "invalid package name " + echo_slot(value) +
-                ": may contain only lowercase letters, digits, _ and -");
-            return false;
+            return "invalid package name " + echo_slot(value) +
+                ": may contain only lowercase letters, digits, _ and -";
         }
         index++;
     }
     int last = value[size - 1];
     if (last == 45 || last == 95) {
-        fail_at(parser, line, column,
-            "invalid package name " + echo_slot(value) + ": must not end with - or _");
+        return "invalid package name " + echo_slot(value) + ": must not end with - or _";
+    }
+    return "";
+}
+
+fn validate_name(ManifestParser parser, string value, int line, int column) -> bool {
+    string message = manifest_name_error_text(value);
+    if (message != "") {
+        fail_at(parser, line, column, message);
         return false;
     }
     return true;

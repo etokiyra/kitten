@@ -1,0 +1,159 @@
+// purr/new.ktn - project creation logic for purr new.
+//
+// The module validates a package/directory name with the manifest rules, creates
+// one project directory, and writes the fixed template files. It never recursively
+// removes and never touches a path it did not create.
+//
+// Public API:
+//   new_project(name, library) -> NewResult
+
+import "manifest.ktn";
+
+public union NewResult {
+    Created { string message; }
+    Failed { string message; }
+}
+
+// created_paths is fixed at the five paths one invocation can create:
+// project, src, .gitignore, purr.toml, and one source file.
+fn cleanup_created(string[] created, int count) -> string {
+    string notes = "";
+    int index = count - 1;
+    while (index >= 0) {
+        match (try_remove(created[index])) {
+            Ok { }
+            Failed(message) {
+                notes = notes + "\n       note: could not remove " +
+                    created[index] + ": " + message;
+            }
+        }
+        index--;
+    }
+    return notes;
+}
+
+fn fail(string message, string[] created, int count) -> NewResult {
+    string notes = cleanup_created(created, count);
+    return NewResult.Failed { message = "error: " + message + notes };
+}
+
+// track_failed_write records a path whose write failed when the failed operation
+// nevertheless created it. The project directory was created by this invocation
+// and is otherwise empty, so an existing path here is ours to clean.
+fn track_failed_write(string path, string[] created, int count) -> int {
+    match (try_file_info(path)) {
+        Missing {
+            return count;
+        }
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            created[count] = path;
+            return count + 1;
+        }
+        Failed(message) {
+            return count;
+        }
+    }
+}
+
+fn project_text(string name) -> string {
+    return "[package]\nname = \"" + name + "\"\nversion = \"0.1.0\"\n";
+}
+
+fn binary_text() -> string {
+    return "fn main() {\n    print(\"Hello, world!\");\n}\n";
+}
+
+fn library_text() -> string {
+    return "public fn add(int left, int right) -> int {\n    return left + right;\n}\n";
+}
+
+public fn new_project(string name, bool library) -> NewResult {
+    string invalid = manifest_name_error_text(name);
+    if (invalid != "") {
+        return NewResult.Failed { message = "error: " + invalid };
+    }
+
+    match (try_file_info(name)) {
+        Missing { }
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            return NewResult.Failed {
+                message = "error: destination " + name + " already exists"
+            };
+        }
+        Failed(message) {
+            return NewResult.Failed { message = "error: " + message };
+        }
+    }
+
+    string[] created = new string[5];
+    int created_count = 0;
+
+    match (try_create_directory(name)) {
+        Failed(message) {
+            return NewResult.Failed { message = "error: " + message };
+        }
+        Ok {
+            created[created_count] = name;
+            created_count++;
+        }
+    }
+
+    string source_dir = name + "/src";
+    match (try_create_directory(source_dir)) {
+        Failed(message) {
+            return fail(message, created, created_count);
+        }
+        Ok {
+            created[created_count] = source_dir;
+            created_count++;
+        }
+    }
+
+    string ignore_path = name + "/.gitignore";
+    match (try_write_file(ignore_path, "/target\n")) {
+        Failed(message) {
+            created_count = track_failed_write(ignore_path, created, created_count);
+            return fail(message, created, created_count);
+        }
+        Ok {
+            created[created_count] = ignore_path;
+            created_count++;
+        }
+    }
+
+    string manifest_path = name + "/purr.toml";
+    match (try_write_file(manifest_path, project_text(name))) {
+        Failed(message) {
+            created_count = track_failed_write(manifest_path, created, created_count);
+            return fail(message, created, created_count);
+        }
+        Ok {
+            created[created_count] = manifest_path;
+            created_count++;
+        }
+    }
+
+    string source_path = name + "/src/main.ktn";
+    string source = binary_text();
+    if (library) {
+        source_path = name + "/src/lib.ktn";
+        source = library_text();
+    }
+    match (try_write_file(source_path, source)) {
+        Failed(message) {
+            created_count = track_failed_write(source_path, created, created_count);
+            return fail(message, created, created_count);
+        }
+        Ok {
+            created[created_count] = source_path;
+            created_count++;
+        }
+    }
+
+    if (library) {
+        return NewResult.Created { message = "     Created library " + name };
+    }
+    return NewResult.Created {
+        message = "     Created binary (application) " + name
+    };
+}

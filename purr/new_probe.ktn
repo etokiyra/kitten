@@ -1,0 +1,53 @@
+// purr/new_probe.ktn - test/CLI-shaped driver for purr new.
+//
+// Usage: new_probe [--lib] <name>
+// Success and failure messages go to stderr. Exit status is 0 for Created, 1
+// for a validation/filesystem failure, and 2 for a usage error.
+
+import "new.ktn";
+
+fn usage() {
+    eprint("usage: purr new [--lib] <name>");
+    exit(2);
+}
+
+fn main() {
+    bool library = false;
+    bool have_name = false;
+    bool bad = false;
+    string name = "";
+
+    int index = 1;
+    while (index < length(argv())) {
+        string argument = argv()[index];
+        if (argument == "--lib") {
+            if (library) {
+                bad = true;
+            } else {
+                library = true;
+            }
+        } else if (length(argument) > 0 && argument[0] == 45) { // '-'
+            bad = true;
+        } else if (have_name) {
+            bad = true;
+        } else {
+            name = argument;
+            have_name = true;
+        }
+        index++;
+    }
+
+    if (bad || !have_name) {
+        usage();
+    }
+
+    match (new_project(name, library)) {
+        Created(message) {
+            eprint(message);
+        }
+        Failed(message) {
+            eprint(message);
+            exit(1);
+        }
+    }
+}
