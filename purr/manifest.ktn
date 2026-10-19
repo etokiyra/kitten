@@ -1,0 +1,685 @@
+// purr/manifest.ktn - the strict purr.toml subset parser.
+//
+// The parser is deliberately byte-oriented and line-oriented. It accepts one
+// [package] table with exactly the name and version keys, rejects everything
+// else, and reports the first error with a one-based line and byte column.
+//
+// It has no imports and performs no file I/O. Public API:
+//   parse_manifest(text) -> ManifestResult
+
+public union ManifestResult {
+    Ok { string name; string version; }
+    Failed { string message; }
+}
+
+union StringResult {
+    Ok { string value; int line; int column; }
+    Failed
+}
+
+struct ManifestParser {
+    string text;
+    int size;
+    int index;
+    int line;
+    int column;
+    bool has_package;
+    bool has_name;
+    bool has_version;
+    string name;
+    string version;
+    bool failed;
+    string error;
+}
+
+fn at_end(ManifestParser parser) -> bool {
+    return parser.index >= parser.size;
+}
+
+fn peek(ManifestParser parser) -> int {
+    if (parser.index >= parser.size) {
+        return -1;
+    }
+    return parser.text[parser.index];
+}
+
+fn peek_next(ManifestParser parser) -> int {
+    if (parser.index + 1 >= parser.size) {
+        return -1;
+    }
+    return parser.text[parser.index + 1];
+}
+
+fn advance(ManifestParser parser) -> int {
+    int value = parser.text[parser.index];
+    parser.index = parser.index + 1;
+    if (value == 10) {
+        parser.line = parser.line + 1;
+        parser.column = 1;
+    } else {
+        parser.column = parser.column + 1;
+    }
+    return value;
+}
+
+fn is_space_or_tab(int value) -> bool {
+    return value == 32 || value == 9;
+}
+
+fn is_digit(int value) -> bool {
+    return value >= 48 && value <= 57;
+}
+
+fn is_lower(int value) -> bool {
+    return value >= 97 && value <= 122;
+}
+
+fn is_letter(int value) -> bool {
+    return (value >= 97 && value <= 122) || (value >= 65 && value <= 90);
+}
+
+fn is_key_byte(int value) -> bool {
+    return is_letter(value) || is_digit(value) ||
+        value == 95 || value == 45 || value == 46; // _ - .
+}
+
+fn hex_digit(int value) -> string {
+    return substring("0123456789abcdef", value, value + 1);
+}
+
+fn hex_byte(int value) -> string {
+    return "\\x" + hex_digit(value / 16) + hex_digit(value % 16);
+}
+
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+fn fail_at(ManifestParser parser, int line, int column, string message) {
+    if (!parser.failed) {
+        parser.failed = true;
+        parser.error = "purr.toml:" + decimal(line) + ":" + decimal(column) + ": " + message;
+    }
+}
+
+fn fail_here(ManifestParser parser, string message) {
+    fail_at(parser, parser.line, parser.column, message);
+}
+
+// join_pieces combines chunk strings with a balanced tree. Building a growing
+// prefix with += would copy it once per escape; pairing keeps the work
+// O(n log n) even for a pathological value full of escapes.
+fn join_pieces(string[] pieces, int count) -> string {
+    if (count == 0) {
+        return "";
+    }
+    while (count > 1) {
+        int next_count = (count + 1) / 2;
+        string[] next = new string[next_count];
+        int read_index = 0;
+        int write_index = 0;
+        while (read_index < count) {
+            if (read_index + 1 < count) {
+                next[write_index] = pieces[read_index] + pieces[read_index + 1];
+                read_index += 2;
+            } else {
+                next[write_index] = pieces[read_index];
+                read_index++;
+            }
+            write_index++;
+        }
+        pieces = next;
+        count = next_count;
+    }
+    return pieces[0];
+}
+
+// echo_slot renders a value for an error message. Printable ASCII is preserved;
+// control bytes and bytes at or above 0x7F become lowercase \xNN escapes.
+fn echo_slot(string value) -> string {
+    int size = length(value);
+    string[] pieces = new string[size + 1];
+    int count = 0;
+    int run_start = 0;
+    int index = 0;
+    while (index < size) {
+        int value_byte = value[index];
+        if (value_byte < 32 || value_byte >= 127) {
+            if (index > run_start) {
+                pieces[count] = substring(value, run_start, index);
+                count++;
+            }
+            pieces[count] = hex_byte(value_byte);
+            count++;
+            run_start = index + 1;
+        }
+        index++;
+    }
+    if (size > run_start) {
+        pieces[count] = substring(value, run_start, size);
+        count++;
+    }
+    return join_pieces(pieces, count);
+}
+
+// cr_string returns a one-byte carriage-return string. Kitten has no \r escape
+// in source literals, so the decode path builds it through a byte array.
+fn cr_string() -> string {
+    byte[] octets = new byte[1];
+    octets[0] = byte_from_int(13);
+    return bytes_to_string(octets);
+}
+
+fn skip_space(ManifestParser parser) {
+    while (!at_end(parser) && is_space_or_tab(peek(parser))) {
+        advance(parser);
+    }
+}
+
+fn consume_comment(ManifestParser parser) {
+    if (!at_end(parser) && peek(parser) == 35) { // '#'
+        advance(parser);
+    }
+    bool done = false;
+    while (!done && !at_end(parser)) {
+        int value = peek(parser);
+        if (value == 10) {
+            advance(parser);
+            done = true;
+        } else if (value == 13) {
+            if (peek_next(parser) == 10) {
+                advance(parser);
+                advance(parser);
+            } else {
+                fail_here(parser, "stray carriage return");
+            }
+            done = true;
+        } else {
+            advance(parser);
+        }
+    }
+}
+
+// consume_blank_or_comment consumes a blank or comment line. It leaves the
+// parser after leading spaces/tabs when the line has real content; callers use
+// the saved index to reject leading whitespace before a header or entry.
+fn consume_blank_or_comment(ManifestParser parser) -> bool {
+    skip_space(parser);
+    if (at_end(parser)) {
+        return true;
+    }
+    int value = peek(parser);
+    if (value == 10) {
+        advance(parser);
+        return true;
+    }
+    if (value == 13) {
+        if (peek_next(parser) == 10) {
+            advance(parser);
+            advance(parser);
+            return true;
+        }
+        fail_here(parser, "stray carriage return");
+        return true;
+    }
+    if (value == 35) {
+        consume_comment(parser);
+        return true;
+    }
+    return false;
+}
+
+// finish_line accepts optional spaces/tabs, an optional comment, and an eol.
+// Anything else after a header or value is an error.
+fn finish_line(ManifestParser parser) -> bool {
+    skip_space(parser);
+    if (at_end(parser)) {
+        return true;
+    }
+    int value = peek(parser);
+    if (value == 35) {
+        consume_comment(parser);
+        return !parser.failed;
+    }
+    if (value == 10) {
+        advance(parser);
+        return true;
+    }
+    if (value == 13) {
+        if (peek_next(parser) == 10) {
+            advance(parser);
+            advance(parser);
+            return true;
+        }
+        fail_here(parser, "stray carriage return");
+        return false;
+    }
+    fail_here(parser, "unexpected text after value");
+    return false;
+}
+
+fn starts_with(ManifestParser parser, string word) -> bool {
+    int word_size = length(word);
+    if (parser.index + word_size > parser.size) {
+        return false;
+    }
+    return substring(parser.text, parser.index, parser.index + word_size) == word;
+}
+
+fn has_key_continuation(ManifestParser parser, int word_size) -> bool {
+    int after = parser.index + word_size;
+    return after < parser.size && is_key_byte(parser.text[after]);
+}
+
+fn scan_key_token(ManifestParser parser) -> string {
+    int start = parser.index;
+    while (!at_end(parser) && is_key_byte(peek(parser))) {
+        advance(parser);
+    }
+    return substring(parser.text, start, parser.index);
+}
+
+// parse_header parses one bracketed table line. The raw table text is kept as
+// written for the unexpected-table message.
+fn parse_header(ManifestParser parser, bool package_seen) {
+    int start_line = parser.line;
+    int start_column = parser.column;
+    int start_index = parser.index;
+    advance(parser); // '['
+
+    int depth = 1;
+    bool scanning = true;
+    while (scanning && !at_end(parser)) {
+        int value = peek(parser);
+        if (value == 10 || value == 13) {
+            scanning = false;
+        } else if (value == 91) { // '['
+            depth++;
+            advance(parser);
+        } else if (value == 93) { // ']'
+            depth--;
+            advance(parser);
+            if (depth == 0) {
+                scanning = false;
+            }
+        } else {
+            advance(parser);
+        }
+    }
+
+    if (depth != 0) {
+        string raw = substring(parser.text, start_index, parser.index);
+        fail_at(parser, start_line, start_column, "unexpected table " + echo_slot(raw));
+        return;
+    }
+
+    string raw = substring(parser.text, start_index, parser.index);
+    if (raw != "[package]") {
+        fail_at(parser, start_line, start_column, "unexpected table " + echo_slot(raw));
+        return;
+    }
+    if (package_seen) {
+        fail_at(parser, start_line, start_column, "duplicate [package] table");
+        return;
+    }
+    parser.has_package = true;
+    finish_line(parser);
+}
+
+fn parse_string(ManifestParser parser) -> StringResult {
+    int open_line = parser.line;
+    int open_column = parser.column;
+    int capacity = parser.size - parser.index + 1;
+    if (capacity < 1) {
+        capacity = 1;
+    }
+    string[] pieces = new string[capacity];
+    int count = 0;
+
+    advance(parser); // opening '"'
+    int run_start = parser.index;
+    while (!at_end(parser)) {
+        int value = peek(parser);
+        if (value == 10) {
+            fail_at(parser, open_line, open_column, "unterminated string");
+            return StringResult.Failed;
+        }
+        if (value == 13) {
+            if (peek_next(parser) == 10) {
+                fail_at(parser, open_line, open_column, "unterminated string");
+            } else {
+                fail_here(parser, "stray carriage return");
+            }
+            return StringResult.Failed;
+        }
+        if (value == 34) { // closing '"'
+            if (parser.index > run_start) {
+                pieces[count] = substring(parser.text, run_start, parser.index);
+                count++;
+            }
+            advance(parser);
+            return StringResult.Ok {
+                value = join_pieces(pieces, count),
+                line = open_line,
+                column = open_column
+            };
+        }
+        if (value == 92) { // backslash
+            if (parser.index > run_start) {
+                pieces[count] = substring(parser.text, run_start, parser.index);
+                count++;
+            }
+            advance(parser); // backslash
+            if (at_end(parser)) {
+                fail_at(parser, open_line, open_column, "unterminated string");
+                return StringResult.Failed;
+            }
+            int escape_line = parser.line;
+            int escape_column = parser.column;
+            int escaped = peek(parser);
+            if (escaped == 92) {
+                pieces[count] = "\\";
+                count++;
+                advance(parser);
+                run_start = parser.index;
+            } else if (escaped == 34) {
+                pieces[count] = "\"";
+                count++;
+                advance(parser);
+                run_start = parser.index;
+            } else if (escaped == 110) { // n
+                pieces[count] = "\n";
+                count++;
+                advance(parser);
+                run_start = parser.index;
+            } else if (escaped == 116) { // t
+                pieces[count] = "\t";
+                count++;
+                advance(parser);
+                run_start = parser.index;
+            } else if (escaped == 114) { // r
+                pieces[count] = cr_string();
+                count++;
+                advance(parser);
+                run_start = parser.index;
+            } else {
+                string shown = echo_slot(substring(parser.text, parser.index, parser.index + 1));
+                fail_at(parser, escape_line, escape_column, "invalid escape \\" + shown);
+                return StringResult.Failed;
+            }
+        } else {
+            advance(parser);
+        }
+    }
+    fail_at(parser, open_line, open_column, "unterminated string");
+    return StringResult.Failed;
+}
+
+fn validate_name(ManifestParser parser, string value, int line, int column) -> bool {
+    int size = length(value);
+    if (size == 0) {
+        fail_at(parser, line, column,
+            "invalid package name " + echo_slot(value) + ": must not be empty");
+        return false;
+    }
+    if (size > 64) {
+        fail_at(parser, line, column,
+            "invalid package name " + echo_slot(value) + ": must be at most 64 bytes");
+        return false;
+    }
+    int first = value[0];
+    if (!is_lower(first)) {
+        fail_at(parser, line, column,
+            "invalid package name " + echo_slot(value) + ": must start with a lowercase letter");
+        return false;
+    }
+    int index = 1;
+    while (index < size) {
+        int value_byte = value[index];
+        bool allowed = is_lower(value_byte) || is_digit(value_byte) ||
+            value_byte == 95 || value_byte == 45; // _ -
+        if (!allowed) {
+            fail_at(parser, line, column,
+                "invalid package name " + echo_slot(value) +
+                ": may contain only lowercase letters, digits, _ and -");
+            return false;
+        }
+        index++;
+    }
+    int last = value[size - 1];
+    if (last == 45 || last == 95) {
+        fail_at(parser, line, column,
+            "invalid package name " + echo_slot(value) + ": must not end with - or _");
+        return false;
+    }
+    return true;
+}
+
+fn validate_version(ManifestParser parser, string value, int line, int column) -> bool {
+    int size = length(value);
+    int parts = 1;
+    int part_length = 0;
+    bool empty_part = false;
+    int index = 0;
+    while (index < size) {
+        int value_byte = value[index];
+        if (value_byte == 46) { // '.'
+            if (part_length == 0) {
+                empty_part = true;
+            }
+            parts++;
+            part_length = 0;
+        } else {
+            part_length++;
+        }
+        index++;
+    }
+    if (part_length == 0) {
+        empty_part = true;
+    }
+    if (parts != 3 || empty_part) {
+        fail_at(parser, line, column,
+            "invalid version " + echo_slot(value) + ": expected MAJOR.MINOR.PATCH");
+        return false;
+    }
+
+    int start = 0;
+    int part = 0;
+    while (part < 3) {
+        int end = start;
+        while (end < size && value[end] != 46) {
+            end++;
+        }
+        int length_part = end - start;
+        if (length_part < 1 || length_part > 9) {
+            fail_at(parser, line, column,
+                "invalid version " + echo_slot(value) +
+                ": a version part must have 1 to 9 digits");
+            return false;
+        }
+        int digit_index = start;
+        while (digit_index < end) {
+            if (!is_digit(value[digit_index])) {
+                fail_at(parser, line, column,
+                    "invalid version " + echo_slot(value) +
+                    ": a version part must have 1 to 9 digits");
+                return false;
+            }
+            digit_index++;
+        }
+        if (length_part > 1 && value[start] == 48) {
+            fail_at(parser, line, column,
+                "invalid version " + echo_slot(value) +
+                ": a version part must not have a leading zero");
+            return false;
+        }
+        start = end + 1;
+        part++;
+    }
+    return true;
+}
+
+fn parse_entry(ManifestParser parser) {
+    int start_line = parser.line;
+    int start_column = parser.column;
+
+    bool is_name = false;
+    bool is_version = false;
+    if (starts_with(parser, "name") && !has_key_continuation(parser, 4)) {
+        is_name = true;
+        int count = 4;
+        while (count > 0) {
+            advance(parser);
+            count--;
+        }
+    } else if (starts_with(parser, "version") && !has_key_continuation(parser, 7)) {
+        is_version = true;
+        int count = 7;
+        while (count > 0) {
+            advance(parser);
+            count--;
+        }
+    } else if (is_letter(peek(parser))) {
+        string token = scan_key_token(parser);
+        fail_at(parser, start_line, start_column, "unknown key " + echo_slot(token));
+        return;
+    } else {
+        fail_at(parser, start_line, start_column, "expected key name or version");
+        return;
+    }
+
+    string key = "name";
+    if (is_version) {
+        key = "version";
+    }
+    if (is_name && parser.has_name) {
+        fail_at(parser, start_line, start_column, "duplicate key name");
+        return;
+    }
+    if (is_version && parser.has_version) {
+        fail_at(parser, start_line, start_column, "duplicate key version");
+        return;
+    }
+
+    skip_space(parser);
+    if (peek(parser) != 61) { // '='
+        if (peek(parser) == 13 && peek_next(parser) != 10) {
+            fail_here(parser, "stray carriage return");
+        } else {
+            fail_here(parser, "expected = after key " + key);
+        }
+        return;
+    }
+    advance(parser); // '='
+    skip_space(parser);
+    if (peek(parser) != 34) { // '"'
+        if (peek(parser) == 13 && peek_next(parser) != 10) {
+            fail_here(parser, "stray carriage return");
+        } else {
+            fail_here(parser, "expected a string value for " + key);
+        }
+        return;
+    }
+
+    StringResult parsed = parse_string(parser);
+    match (parsed) {
+        Failed {
+            return;
+        }
+        Ok(value, value_line, value_column) {
+            if (!finish_line(parser)) {
+                return;
+            }
+            if (is_name) {
+                if (!validate_name(parser, value, value_line, value_column)) {
+                    return;
+                }
+                parser.name = value;
+                parser.has_name = true;
+            } else {
+                if (!validate_version(parser, value, value_line, value_column)) {
+                    return;
+                }
+                parser.version = value;
+                parser.has_version = true;
+            }
+        }
+    }
+}
+
+public fn parse_manifest(string text) -> ManifestResult {
+    ManifestParser parser = ManifestParser {
+        text = text,
+        size = length(text),
+        index = 0,
+        line = 1,
+        column = 1,
+        has_package = false,
+        has_name = false,
+        has_version = false,
+        name = "",
+        version = "",
+        failed = false,
+        error = ""
+    };
+
+    // Before the table: blanks and comments only, then exactly [package].
+    while (!parser.failed && !parser.has_package) {
+        if (at_end(parser)) {
+            fail_here(parser, "expected [package]");
+        } else {
+            int start_index = parser.index;
+            int start_line = parser.line;
+            int start_column = parser.column;
+            if (consume_blank_or_comment(parser)) {
+                // The blank/comment path already advanced or reported an error.
+            } else if (parser.index != start_index) {
+                fail_at(parser, start_line, start_column, "expected [package]");
+            } else if (peek(parser) == 91) { // '['
+                parse_header(parser, false);
+            } else {
+                fail_at(parser, start_line, start_column, "expected [package]");
+            }
+        }
+    }
+
+    // After the table: blank/comment/entry lines until end of file.
+    while (!parser.failed && !at_end(parser)) {
+        int start_index = parser.index;
+        int start_line = parser.line;
+        int start_column = parser.column;
+        if (consume_blank_or_comment(parser)) {
+            // The blank/comment path already advanced or reported an error.
+        } else if (parser.index != start_index) {
+            fail_at(parser, start_line, start_column, "expected key name or version");
+        } else if (peek(parser) == 91) { // '['
+            parse_header(parser, true);
+        } else {
+            parse_entry(parser);
+        }
+    }
+
+    if (!parser.failed) {
+        if (!parser.has_package) {
+            fail_here(parser, "expected [package]");
+        } else if (!parser.has_name) {
+            fail_here(parser, "missing key name");
+        } else if (!parser.has_version) {
+            fail_here(parser, "missing key version");
+        }
+    }
+
+    if (parser.failed) {
+        return ManifestResult.Failed { message = parser.error };
+    }
+    return ManifestResult.Ok { name = parser.name, version = parser.version };
+}

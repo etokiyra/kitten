@@ -884,7 +884,7 @@ package registry (rejected for the bootstrap).
 ## 9. Ordered implementation plan
 
 Each item is one small commit after approval. Each commit ends with
-`gofmt -l .`, `git diff --check`, `go vet ./...`, `go build ./cmd/purr`, and the
+`gofmt -l .`, `git diff --check`, `go vet ./...`, `go build -o /tmp/purr ./cmd/purr`, and the
 full suite under the default compiler, `CC=gcc`, and `CC=clang`; every change
 that affects selfhost reruns `TestKittenFixpoint` and compares generated C byte
 for byte.

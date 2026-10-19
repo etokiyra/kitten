@@ -247,10 +247,10 @@ implementation in progress**. Phase 9.1 implemented its first step, the `try_get
 built-in and predeclared `EnvResult` union, and Phase 9.2 implemented
 `try_run_capture` and `CapturedRunResult`, Phase 9.3 implemented
 `try_file_info` and `FileInfoResult`, Phase 9.4 implemented
-`try_create_temp_directory` and `TempDirectoryResult`, and Phase 9.5 embedded
-the C runtime sources in `purr/embedded.ktn`, in both pipelines and the MIT C
-runtime. The next implementation step is 9.6's `purr.toml` subset parser,
-followed by `purr new` and `purr` build/run parity. `try_find_program` is
+`try_create_temp_directory` and `TempDirectoryResult`, Phase 9.5 embedded the C
+runtime sources in `purr/embedded.ktn`, and Phase 9.6 implemented the
+`purr.toml` subset parser in `purr/manifest.ktn`, in both pipelines. The next
+implementation step is 9.7's `purr new`, followed by `purr` build/run parity. `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
 separate later change. File writing now unblocks `purr new` and process launch
@@ -279,6 +279,20 @@ toolchain license.
 Because `purr/` is now a source directory, `go build ./cmd/purr` cannot write a
 repository-root binary named `purr`; build it to an external path or install
 location, for example `go build -o /tmp/purr ./cmd/purr`.
+
+### Manifest parser
+
+`purr/manifest.ktn` is the plain-Kitten parser for the strict `[package]`
+manifest subset. It has no imports and performs no file I/O; its public API is
+`parse_manifest(text) -> ManifestResult`. `purr/manifest_probe.ktn` is the
+test/CLI-shaped probe; it lives under `purr/` because the loader only permits
+imports below the root source's directory, so `tools/manifest_probe.ktn` could
+not import `../purr/manifest.ktn`.
+
+The pinned, randomized, both-pipeline, performance, and sanitizer tests live in
+`cmd/purr/manifest_test.go`; the independent Go oracle is in
+`cmd/purr/manifest_oracle_test.go`. Additional keys, `[dependencies]`, and a
+manifest writer remain deferred and must grow additively.
 
 ### Adding a built-in
 

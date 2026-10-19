@@ -550,7 +550,7 @@ documented, not introduced by this design.
    - `go test -count=1 ./checker ./codegen ./runtime`
    - `go test -count=1 ./cmd/purr -run 'TestTryReadFile|TestReadFileResult'`
    - a Go-built program exercising Ok/Failed, checked against stdout/stderr/status;
-   - `gofmt -l .`, `git diff --check`, `go vet ./...`, `go build ./cmd/purr`.
+   - `gofmt -l .`, `git diff --check`, `go vet ./...`, `go build -o /tmp/purr ./cmd/purr`.
 
 ### 5.4c — Kitten pipeline and differential parity
 

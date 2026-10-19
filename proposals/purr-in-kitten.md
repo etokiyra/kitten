@@ -5,9 +5,10 @@
 > The human approved this plan on 2026-10-18. Implementation proceeds one commit
 > per step in the order below. The `try_getenv`/`EnvResult`,
 > `try_run_capture`/`CapturedRunResult`, `try_file_info`/`FileInfoResult`,
-> `try_create_temp_directory`/`TempDirectoryResult`, and embedded runtime
-> generation steps are implemented so far; no `purr` command described here is
-> implemented unless explicitly marked **already implemented**.
+> `try_create_temp_directory`/`TempDirectoryResult`, embedded runtime
+> generation, and the `purr.toml` subset parser steps are implemented so far;
+> no `purr` command described here is implemented unless explicitly marked
+> **already implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -79,8 +80,8 @@ Implementation status:
 | 3. `try_file_info` | **implemented in 9.3** |
 | 4. `try_create_temp_directory` | **implemented in 9.4** |
 | 5. Embedded runtime generation | **implemented in 9.5** |
-| 6. TOML subset parser | proposed, next |
-| 7. `purr new` | proposed |
+| 6. TOML subset parser | **implemented in 9.6** |
+| 7. `purr new` | proposed, next |
 | 8. Kitten `purr` source-mode build/run | proposed |
 | 9. Project mode | proposed |
 | 10. Library object mode | proposed, deferred |
@@ -595,90 +596,128 @@ Options:
   -h, --help
 ```
 
-## 7. `purr.toml`: the smallest useful TOML subset
+## 7. `purr.toml`: the smallest useful TOML subset (implemented in 9.6)
 
 The first manifest is deliberately smaller than TOML. A file outside the
-subset is rejected, never guessed at.
+subset is rejected, never guessed at. The parser is `purr/manifest.ktn`, plain
+Kitten with no imports and no file I/O.
 
 ### 7.1 Accepted grammar
 
 ```text
-manifest      = package
-package       = "[package]" newline { line }
-line          = blank | comment | field
-field         = key ws "=" ws string newline
-key           = "name" | "version"
-string        = '"' { string-char } '"'
-string-char   = printable ASCII except '"' and '\'
-                | escape
-escape        = "\\" | "\"" | "\n" | "\t" | "\r"
-ws            = { " " | "\t" }
-comment       = "#" { any byte except newline } newline
+file     := (blank | comment)* "[package]" ws* comment? eol (blank | comment | entry)*
+entry    := key ws* "=" ws* string ws* comment? eol
+key      := "name" | "version"
+string   := '"' (char | escape)* '"'
+blank    := ws* eol
+comment  := ws* "#" anything-to-eol
+ws       := space or tab
+eol      := LF | CRLF | end of file
 ```
 
-- `[package]` occurs exactly once.
-- `name` and `version` are required exactly once each.
-- Keys may appear in either order.
-- Empty strings are syntactically allowed but rejected by field validation.
-- Only LF newlines; a CR immediately before LF is accepted and ignored.
-- The file must end after a newline or at EOF.
-- No other table, key, number, boolean, array, inline table, dotted key,
-  single-quoted string, multiline string, or bare value is accepted.
+- Exactly one `[package]` header, before both keys. `name` and `version` are
+  each required exactly once, in either order.
+- A final line may lack a newline. `[package]` may be followed by spaces/tabs or
+  a comment. Leading whitespace before a header or key is rejected.
+- A bare CR not followed by LF is an error.
+- String values admit any byte except raw LF, raw CR, and NUL. The escapes are
+  `\\`, `\"`, `\n`, `\t`, and `\r`. Other escapes, literal strings,
+  multiline strings, arrays, inline tables, numbers, booleans, dates, dotted
+  keys, and quoted keys are rejected.
 
-### 7.2 Validation
+### 7.2 Value rules
 
-- `name`: 1–64 bytes, starts with a lowercase ASCII letter, then lowercase ASCII
-  letters, digits, `_`, or `-`; no `/`, `.`, whitespace, or path component.
-- `version`: exactly `MAJOR.MINOR.PATCH`, each one or more decimal digits with no
-  leading zero unless the value is exactly `0`.
-- `name` is also the project directory name and the default target name.
-- `src/main.ktn` means binary; `src/lib.ktn` means library. Both present or
-  neither present is a project error.
+- `name`: 1..64 bytes; first byte lowercase ASCII; the rest lowercase letters,
+  digits, `_`, or `-`; must not end with `-` or `_`.
+- `version`: exactly `MAJOR.MINOR.PATCH`; each part 1..9 ASCII digits, with no
+  leading zero unless the part is exactly `0`. No pre-release, build metadata,
+  `v` prefix, or numeric conversion.
+- A name/version error is reported at the opening quote of the value.
 
-### 7.3 Errors and positions
+### 7.3 API and errors
 
-`ManifestError` carries 1-based line and byte column and one stable message:
+```kitten
+public union ManifestResult {
+    Ok { string name; string version; }
+    Failed { string message; }
+}
+
+public fn parse_manifest(string text) -> ManifestResult
+```
+
+Errors are exactly:
 
 ```text
-expected "[package]" at line 1, column 1
-unknown table "[dependencies]" at line 4, column 1
-unknown key "edition" in [package] at line 3, column 1
-expected "=" after key at line 3, column 9
-expected a double-quoted string at line 3, column 11
-duplicate key "name" at line 4, column 1
-missing required key "name"
-invalid package name "Hello" at line 3, column 8: names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, "_", and "-"
-invalid package version "1.0" at line 4, column 11: expected MAJOR.MINOR.PATCH
-file contains a NUL byte at line 2, column 7
+purr.toml:<line>:<column>: <message>
 ```
 
-The parser returns `ManifestResult { Ok { Manifest }; Failed { ManifestError } }`;
-the CLI renders the error with the manifest path and exits 1.
+Line and column are one-based; columns count bytes. CRLF is one line break and
+its CR contributes no column. The first error stops the parser. At end of file,
+the position is just past the last byte. Bytes at or above 0x7F and control
+bytes in echoed slots render as lowercase `\xNN`.
 
-### 7.4 Growth without breaking files
+Messages:
+
+```text
+expected [package]
+unexpected table <bracketed text>
+expected key name or version
+unknown key <key>
+expected = after key <key>
+expected a string value for <key>
+unterminated string
+invalid escape \<c>
+stray carriage return
+unexpected text after value
+duplicate key <key>
+missing key name
+missing key version
+duplicate [package] table
+invalid package name <value>: <reason>
+invalid version <value>: <reason>
+```
+
+Name reasons: `must not be empty`, `must be at most 64 bytes`,
+`must start with a lowercase letter`,
+`may contain only lowercase letters, digits, _ and -`,
+`must not end with - or _`.
+
+Version reasons: `expected MAJOR.MINOR.PATCH`,
+`a version part must have 1 to 9 digits`,
+`a version part must not have a leading zero`.
+
+The `ManifestResult` union is an ordinary user declaration in
+`purr/manifest.ktn`; it does not use or collide with a predeclared prelude name.
+
+### 7.4 Parser design and tests
+
+The parser is one byte-index loop with a small state struct: no regex, no TOML
+dependency, no map iteration, no file access, and no recursion proportional to
+input. String decoding collects source runs and escape pieces and joins them
+with a balanced concatenation tree, so a 1 MiB value stays linear. Name/version
+validation is separate and stops at the first violated rule.
+
+`purr/manifest_probe.ktn` imports `manifest.ktn` (the loader's within-root rule
+prevents a `tools/` probe from importing `../purr/manifest.ktn`). It reads
+`argv()[1]`, prints `ok <name> <version>` on success, or the exact error line on
+stderr, with statuses 0, 1, and 2 for success, read/parse failure, and usage.
+
+The test suite pins 164 inputs with exact outputs, including every message at
+least twice, CRLF/no-final-newline cases, comments, all value boundaries,
+echoed controls and non-ASCII, bare CR, BOM, and duplicate/missing forms. It
+also runs 5,000 fixed-seed mutations through both pipelines and an independent
+Go oracle, compares the probe's generated C byte for byte between pipelines,
+checks embedded-runtime regression, and measures 256 KiB versus 1 MiB inputs
+for linear behavior.
+
+### 7.5 Growth without breaking files
 
 Adding a new optional key or table is backward compatible: every currently
 accepted file remains accepted with unchanged meaning. Unknown constructs
 continue to be rejected until the parser is deliberately extended. Adding a
 required key or changing a value's meaning requires a manifest version decision
-and is not done silently.
-
-### 7.5 Parser design
-
-- one line at a time, byte-oriented, using the existing string indexing and
-  `substring` operations;
-- a tiny parser state (current table, seen-name, seen-version);
-- no regex, no TOML dependency, no map iteration;
-- comments and whitespace stripped before a line is classified;
-- strings decoded into ordinary Kitten strings;
-- a fixed `Manifest` struct and a `ManifestError` union;
-- no writer is needed for 9.0; `purr new` writes the exact fixed template.
-
-Test strategy: independent Kitten test programs that import `purr/manifest.ktn`
-and print normalized parse results or exact errors; matching `.expected` files.
-No Go reference exists for this new parser, so expected text is reviewed and
-pinned directly. A table of valid manifests and every rejected construct is
-required before `purr new` is accepted.
+and is not done silently. Additional keys, `[dependencies]`, arrays, writers,
+and project discovery remain deferred.
 
 ## 8. `purr new`
 
@@ -956,9 +995,10 @@ design-only phase.
    mode/unique/cleanup. Acceptance: build/run temp trees and failure cleanup.
 5. **Embedded runtime generation** — implemented in 9.5; Kitten generator,
    generated `purr/embedded.ktn`, three-way drift test, MIT notice.
-6. **TOML subset parser** — next; `purr/manifest.ktn`, independent Kitten tests
-   and exact errors. Acceptance: valid/unsupported corpus.
-7. **`purr new`** — CLI, templates, modes, cleanup, name validation. Acceptance:
+6. **TOML subset parser** — implemented in 9.6; `purr/manifest.ktn`,
+   pinned and randomized tests, exact errors. Acceptance: valid/unsupported
+   corpus.
+7. **`purr new`** — next; CLI, templates, modes, cleanup, name validation. Acceptance:
    exact tree/bytes/messages/modes, no license in templates.
 8. **Kitten `purr` root and source-mode build/run** — `purr.ktn`, compiler
    linkage, in-process build, C compiler subprocess, temp dirs, current

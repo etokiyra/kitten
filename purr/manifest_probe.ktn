@@ -1,0 +1,32 @@
+// purr/manifest_probe.ktn - test probe for the purr.toml subset parser.
+//
+// Usage: manifest_probe <purr.toml>
+// Prints "ok <name> <version>" on success, or the parser's positioned error on
+// stderr. Exit status is 0 on success, 1 on a read/parse error, and 2 on usage.
+
+import "manifest.ktn";
+
+fn main() {
+    if (length(argv()) != 2) {
+        eprint("usage: manifest_probe <purr.toml>");
+        exit(2);
+    }
+
+    match (try_read_file(argv()[1])) {
+        Failed(message) {
+            eprint(message);
+            exit(1);
+        }
+        Ok(text) {
+            match (parse_manifest(text)) {
+                Ok(name, version) {
+                    print("ok", name, version);
+                }
+                Failed(message) {
+                    eprint(message);
+                    exit(1);
+                }
+            }
+        }
+    }
+}
