@@ -1,0 +1,1110 @@
+// GENERATED FILE - DO NOT EDIT.
+// Regenerate from the repository root:
+//   purr build tools/embed_runtime.ktn -o /tmp/embed_runtime
+//   /tmp/embed_runtime <repo-root>
+//
+// The embedded strings are the MIT-licensed runtime sources from
+// runtime/csrc/kitten_runtime.h and runtime/csrc/kitten_runtime.c.
+// Their MIT notice is preserved verbatim inside those strings. The rest
+// of this file is generator output covered by the project's
+// GPL-3.0-or-later toolchain license.
+
+fn embedded_runtime_header_chunk_0() -> string {
+    return "/*\n * Kitten runtime: declarations shared with generated code.\n *\n * This file is" +
+        " part of the Kitten language runtime. Generated Kitten programs\n * include it, and " +
+        "kitten_runtime.c implements it. It has no dependency on the\n * compiler's implement" +
+        "ation language, so a future self-hosted Kitten compiler\n * can use the same interfa" +
+        "ce.\n *\n * The Kitten runtime is licensed permissively, unlike the compiler itself," +
+        " so\n * that programs compiled with Kitten can be distributed under any terms the\n " +
+        "* author chooses. See LICENSE in this directory.\n *\n * SPDX-License-Identifier: MI" +
+        "T\n *\n * Copyright (c) 2026 etokiyra\n *\n * Permission is hereby granted, free of " +
+        "charge, to any person obtaining a copy\n * of this software and associated documenta" +
+        "tion files (the \"Software\"), to\n * deal in the Software without restriction, incl" +
+        "uding without limitation the\n * rights to use, copy, modify, merge, publish, distri" +
+        "bute, sublicense, and/or\n * sell copies of the Software, and to permit persons to w" +
+        "hom the Software is\n * furnished to do so, subject to the following conditions:\n *" +
+        "\n * The above copyright notice and this permission notice shall be included in\n * " +
+        "all copies or substantial portions of the Software.\n *\n * THE SOFTWARE IS PROVIDED" +
+        " \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n * IMPLIED, INCLUDING BUT NOT " +
+        "LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n * FITNESS FOR A PARTICULAR PURPOSE A" +
+        "ND NONINFRINGEMENT. IN NO EVENT SHALL THE\n * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE" +
+        " FOR ANY CLAIM, DAMAGES OR OTHER\n * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TO" +
+        "RT OR OTHERWISE, ARISING\n * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE " +
+        "USE OR OTHER DEALINGS\n * IN THE SOFTWARE.\n */\n#ifndef KITTEN_RUNTIME_H\n#define K" +
+        "ITTEN_RUNTIME_H\n\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n#" +
+        "include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n\n#if defined(__linux__" +
+        ")\nextern long syscall(long number, ...);\n#endif\n\n/*\n * Boehm-Demers-Weiser cons" +
+        "ervative garbage collector. Accept either the\n * <gc/gc.h> or <gc.h> layout dependi" +
+        "ng on how the library was installed.\n */\n#if defined(__has_include)\n#  if __has_i" +
+        "nclude(<gc/gc.h>)\n#    include <gc/gc.h>\n#  else\n#    include <gc.h>\n#  endif\n#" +
+        "else\n#  include <gc.h>\n#endif\n\n/*\n * Initializes the garbage collector. It must" +
+        " be called before any allocation.\n */\nvoid ktn_rt_init(void);\n\n/*\n * Allocates " +
+        "a zero-initialized, pointer-scanned, garbage-collected object of\n * size bytes. The" +
+        " collector reclaims the object automatically; Kitten programs\n * never free memory " +
+        "by hand.\n */\nvoid *ktn_rt_alloc(size_t size);\n\n/*\n * An immutable Kitten string" +
+        ": a byte length together with the bytes.\n *\n * length is the number of bytes, excl" +
+        "uding the NUL terminator that always\n * follows them. data points at those bytes, s" +
+        "o the representation keeps both a\n * stored length, which makes length and indexing" +
+        " constant-time, and\n * NUL-termination, which keeps the bytes usable with C library" +
+        " functions.\n *\n * A string value in generated code is a `const ktn_string *`. A nu" +
+        "ll pointer is\n * the empty string, so the zero value of a string behaves as \"\" an" +
+        "d an\n * unassigned string field or array element is safe to read.\n *\n * Strings a" +
+        "re immutable, so `data` is not written through once a string is\n * observable; cons" +
+        "truction sites write the freshly allocated bytes before the\n * value can be reached" +
+        ". A statically known literal is a static `const\n * ktn_string` whose bytes are a st" +
+        "atic string, and a constructed string is a\n * single GC-managed object holding its " +
+        "header and its bytes together, so the\n * bytes can never outlive or be separated fr" +
+        "om the length that describes them.\n *\n * Embedded NUL bytes are not supported: the" +
+        " representation is NUL-terminated,\n * Kitten provides no way to create one, and the" +
+        " language's string operations\n * are byte operations over NUL-free strings.\n */\nt" +
+        "ypedef struct ktn_string {\n    int64_t length;\n    const char *data;\n} ktn_string" +
+        ";\n\n/*\n * Value equality for Kitten strings. Comparison is by content, never by po" +
+        "inter\n * identity, and lengths are compared before any bytes are examined. A null\n" +
+        " * poin" +
+        "";
+}
+
+fn embedded_runtime_header_chunk_1() -> string {
+    return "ter is treated as the empty string.\n */\nbool ktn_rt_string_equal(const ktn_string " +
+        "*left, const ktn_string *right);\n\n/*\n * Returns a new string that is left followe" +
+        "d by right. The result is a fresh,\n * exactly-sized, GC-managed object, so it stays" +
+        " valid as long as Kitten code can\n * reach it and never needs a manual free. A null" +
+        " operand is treated as the\n * empty string, so concatenating empty strings yields a" +
+        "n empty string.\n */\nconst ktn_string *ktn_rt_string_concat(const ktn_string *left," +
+        " const ktn_string *right);\n\n/*\n * Appends value to the string stored in *slot, by" +
+        " assigning *slot the\n * concatenation of its current value and value. It takes the " +
+        "address of the\n * slot so that the target is evaluated exactly once at the call sit" +
+        "e.\n */\nvoid ktn_rt_string_append(const ktn_string **slot, const ktn_string *value)" +
+        ";\n\n/*\n * Returns the number of bytes in a string, not counting the terminator. Re" +
+        "ading\n * the stored length makes this constant-time. A null pointer is the empty\n " +
+        "* string, so its length is 0.\n */\nint64_t ktn_rt_string_length(const ktn_string *v" +
+        "alue);\n\n/*\n * Returns the byte at index as an integer in 0..255.\n *\n * Indexing" +
+        " is byte-oriented, not code-point-oriented: the byte at a given byte\n * offset is r" +
+        "eturned, so a multi-byte UTF-8 character occupies several indices.\n * The stored le" +
+        "ngth makes this constant-time. The index is bounds-checked; a\n * negative index, or" +
+        " an index at or beyond the byte length, is a fatal runtime\n * error rather than an " +
+        "out-of-bounds read.\n */\nint64_t ktn_rt_string_at(const ktn_string *value, int64_t " +
+        "index);\n\n/*\n * Returns a new string holding the bytes in [start, end).\n *\n * Th" +
+        "e range is bounds-checked and must satisfy\n * 0 <= start <= end <= byte length; any" +
+        " other range is a fatal runtime error.\n * The result is a fresh, exactly-sized, GC-" +
+        "managed object.\n */\nconst ktn_string *ktn_rt_substring(const ktn_string *value, in" +
+        "t64_t start, int64_t end);\n\n/*\n * A dynamically sized array.\n *\n * length is th" +
+        "e number of elements and element_size is the size in bytes of one\n * element. data " +
+        "points to a GC-managed, zero-initialized buffer of\n * length * element_size bytes. " +
+        "Arrays are references: assigning one array to\n * another copies the reference, and " +
+        "both names then share the same storage.\n */\ntypedef struct ktn_array {\n    int64_" +
+        "t length;\n    int64_t element_size;\n    void *data;\n} ktn_array;\n\n/*\n * Alloca" +
+        "tes an array of length elements, each element_size bytes. Every element\n * is zero-" +
+        "initialized by the collector. A negative length or an allocation that\n * would over" +
+        "flow is a fatal runtime error.\n */\nktn_array *ktn_rt_array_new(int64_t length, int" +
+        "64_t element_size);\n\n/*\n * Returns a pointer to the element at index. The index i" +
+        "s checked against the\n * array length; a negative or out-of-range index, or a null " +
+        "array reference, is\n * a fatal runtime error rather than undefined behavior.\n */\n" +
+        "void *ktn_rt_array_at(const ktn_array *array, int64_t index);\n\n/*\n * Returns the " +
+        "number of elements in the array.\n */\nint64_t ktn_rt_array_length(const ktn_array *" +
+        "array);\n\n/*\n * Returns a fresh byte array containing the bytes of value. The resu" +
+        "lt uses the\n * ordinary array representation with an element size of one; a null st" +
+        "ring is\n * the empty string. The string's terminator is not part of the result.\n *" +
+        "/\nktn_array *ktn_rt_string_to_bytes(const ktn_string *value);\n\n/*\n * Returns a f" +
+        "resh string containing the bytes of a byte array. A null array or\n * an array whose" +
+        " element size is not one is a fatal runtime error. A NUL byte\n * anywhere in the ar" +
+        "ray is a fatal runtime error naming its index, because\n * Kitten strings cannot con" +
+        "tain NUL.\n */\nconst ktn_string *ktn_rt_bytes_to_string(const ktn_array *bytes);\n" +
+        "\n/*\n * Stores the process argument vector for a later ktn_rt_argv call. The\n * ge" +
+        "nerated C entry point calls this once, before the Kitten main function\n * runs. The" +
+        " pointers remain valid for the lifetime of the process.\n */\nvoid ktn_rt_set_args(i" +
+        "nt argc, char **argv);\n\n/*\n * Returns a new ktn_array of const ktn_string * holdi" +
+        "ng the process argument\n * vector, including the program name at index 0. Every str" +
+        "";
+}
+
+fn embedded_runtime_header_chunk_2() -> string {
+    return "ing is a fresh\n * GC-managed copy. Each call returns a fresh array, so a program th" +
+        "at mutates\n * the array does not change the process arguments or a later call's res" +
+        "ult.\n * Before ktn_rt_set_args the argument count is zero.\n */\nktn_array *ktn_rt_" +
+        "argv(void);\n\n/*\n * A map from string keys to values of a fixed size.\n *\n * leng" +
+        "th is the number of entries; capacity is the number of slots in the hash\n * table, " +
+        "always a power of two or zero; value_size is the size in bytes of one\n * value. key" +
+        "s, hashes, and values are GC-managed arrays of capacity slots. keys\n * holds pointe" +
+        "rs to strings, so a null entry marks an empty slot and stored keys\n * are never nul" +
+        "l; because the array is pointer-scanned, a stored key stays alive\n * as long as the" +
+        " map does. Maps are references: assigning one map to another\n * copies the referenc" +
+        "e, and both names then share the same table.\n */\ntypedef struct ktn_map {\n    int" +
+        "64_t length;\n    int64_t capacity;\n    int64_t value_size;\n    const ktn_string *" +
+        "*keys;\n    uint64_t *hashes;\n    void *values;\n} ktn_map;\n\n/*\n * Allocates an " +
+        "empty map whose values are value_size bytes each. Keys are\n * compared by string co" +
+        "ntent, so two distinct strings with the same contents\n * address the same entry. Ma" +
+        "p allocation uses the garbage collector.\n */\nktn_map *ktn_rt_map_new(int64_t value" +
+        "_size);\n\n/*\n * Stores value under key, inserting the entry when the key is absent" +
+        " and\n * updating it when the key is present. value points to value_size bytes to co" +
+        "py\n * into the entry, so a map can hold any value type without type punning. The ma" +
+        "p\n * retains the key, not a copy of it, so the key stays alive through the map.\n *" +
+        "/\nvoid ktn_rt_map_set(ktn_map *map, const ktn_string *key, const void *value);\n\n/" +
+        "*\n * Returns a pointer to the value stored under key. Looking up a key that is\n * " +
+        "absent, or using a null map reference, is a fatal runtime error rather than\n * unde" +
+        "fined behavior or a fabricated value.\n */\nvoid *ktn_rt_map_at(const ktn_map *map, " +
+        "const ktn_string *key);\n\n/*\n * Reports whether key is present in the map.\n */\nb" +
+        "ool ktn_rt_map_has(const ktn_map *map, const ktn_string *key);\n\n/*\n * Returns the" +
+        " number of entries in the map.\n */\nint64_t ktn_rt_map_length(const ktn_map *map);" +
+        "\n\n/*\n * The largest file, in bytes, that ktn_rt_read_file will read. Larger files" +
+        " are\n * rejected instead of allocated, so a program cannot be made to allocate an\n" +
+        " * unbounded buffer from a file on disk.\n */\n#define KTN_RT_MAX_FILE_SIZE ((size_t" +
+        ")256 * 1024 * 1024)\n\n/*\n * Reports an unrecoverable runtime error to standard err" +
+        "or and terminates the\n * program with a nonzero exit status. It is used by the runt" +
+        "ime itself and by\n * generated code, for example when a match inspects an invalid v" +
+        "ariant tag or a\n * null union reference.\n *\n * It never returns, which is declare" +
+        "d so that generated switches with a\n * fail-fast default case do not warn about fal" +
+        "ling off the end of a function.\n */\n_Noreturn void ktn_rt_fail(const char *message" +
+        ");\n\n/*\n * Raw-memory and syscall intrinsics for the trusted <runtime> module. The" +
+        "se\n * helpers deliberately bypass Kitten's ordinary safety guarantees: addresses\n " +
+        "* are trusted and never validated. They are static inline so generated code\n * need" +
+        "s no extra object, and the explicit memcpy/memmove/memset operations avoid\n * align" +
+        "ment and strict-aliasing undefined behavior in the generated C.\n */\nstatic inline " +
+        "void ktn_rt_raw_check_size(int64_t size) {\n    if (size < 0) {\n        char messag" +
+        "e[64];\n        snprintf(message, sizeof(message), \"negative size %lld\", (long lon" +
+        "g)size);\n        ktn_rt_fail(message);\n    }\n}\n\nstatic inline uint8_t ktn_rt_ra" +
+        "w_load8(int64_t address) {\n    uint8_t value;\n    memcpy(&value, (const void *)(ui" +
+        "ntptr_t)address, sizeof(value));\n    return value;\n}\n\nstatic inline void ktn_rt_" +
+        "raw_store8(int64_t address, uint8_t value) {\n    memcpy((void *)(uintptr_t)address," +
+        " &value, sizeof(value));\n}\n\nstatic inline int64_t ktn_rt_raw_load64(int64_t addre" +
+        "ss) {\n    int64_t value;\n    memcpy(&value, (const void *)(uintptr_t)address, size" +
+        "of(value));\n    return value;\n}\n\nstatic inline void ktn_rt_raw_store64(int64_t a" +
+        "ddress," +
+        "";
+}
+
+fn embedded_runtime_header_chunk_3() -> string {
+    return " int64_t value) {\n    memcpy((void *)(uintptr_t)address, &value, sizeof(value));\n}" +
+        "\n\nstatic inline void ktn_rt_raw_copy(int64_t destination, int64_t source, int64_t " +
+        "size) {\n    ktn_rt_raw_check_size(size);\n    memmove((void *)(uintptr_t)destinatio" +
+        "n, (const void *)(uintptr_t)source, (size_t)size);\n}\n\nstatic inline void ktn_rt_r" +
+        "aw_zero(int64_t address, int64_t size) {\n    ktn_rt_raw_check_size(size);\n    mems" +
+        "et((void *)(uintptr_t)address, 0, (size_t)size);\n}\n\nstatic inline int64_t ktn_rt_" +
+        "syscall(int64_t number, int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64" +
+        "_t f) {\n#if defined(__linux__)\n    long result = syscall((long)number, (long)a, (l" +
+        "ong)b, (long)c, (long)d, (long)e, (long)f);\n    return (int64_t)result;\n#else\n   " +
+        " (void)number; (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;\n    ktn_rt_fai" +
+        "l(\"syscall is not supported on this platform\");\n#endif\n}\n\n/*\n * Defined 64-bi" +
+        "t integer arithmetic. Kitten's int is a signed 64-bit\n * two's-complement value, an" +
+        "d these helpers compute with unsigned bit patterns\n * so generated C never evaluate" +
+        "s signed overflow. Division by zero is a fatal\n * runtime error; INT64_MIN / -1 wra" +
+        "ps to INT64_MIN and INT64_MIN % -1 is zero.\n * The assignment helpers take the addr" +
+        "ess of the target so the target is\n * evaluated exactly once. These are static inli" +
+        "ne because every generated unit\n * that does integer arithmetic includes this heade" +
+        "r.\n */\nstatic inline int64_t ktn_rt_i64_from_bits(uint64_t bits) {\n    int64_t va" +
+        "lue;\n    memcpy(&value, &bits, sizeof value);\n    return value;\n}\n\nstatic inlin" +
+        "e uint64_t ktn_rt_i64_bits(int64_t value) {\n    uint64_t bits;\n    memcpy(&bits, &" +
+        "value, sizeof bits);\n    return bits;\n}\n\nstatic inline int64_t ktn_rt_i64_add(in" +
+        "t64_t left, int64_t right) {\n    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) " +
+        "+ ktn_rt_i64_bits(right));\n}\n\nstatic inline int64_t ktn_rt_i64_sub(int64_t left, " +
+        "int64_t right) {\n    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) - ktn_rt_i64" +
+        "_bits(right));\n}\n\nstatic inline int64_t ktn_rt_i64_mul(int64_t left, int64_t righ" +
+        "t) {\n    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) * ktn_rt_i64_bits(right)" +
+        ");\n}\n\nstatic inline int64_t ktn_rt_i64_neg(int64_t value) {\n    return ktn_rt_i6" +
+        "4_from_bits(UINT64_C(0) - ktn_rt_i64_bits(value));\n}\n\nstatic inline int64_t ktn_r" +
+        "t_i64_div(int64_t left, int64_t right) {\n    if (right == 0) {\n        ktn_rt_fail" +
+        "(\"integer division by zero\");\n    }\n    if (left == INT64_MIN && right == -1) {" +
+        "\n        return INT64_MIN;\n    }\n    return left / right;\n}\n\nstatic inline int" +
+        "64_t ktn_rt_i64_mod(int64_t left, int64_t right) {\n    if (right == 0) {\n        k" +
+        "tn_rt_fail(\"integer division by zero\");\n    }\n    if (left == INT64_MIN && right" +
+        " == -1) {\n        return 0;\n    }\n    return left % right;\n}\n\nstatic inline vo" +
+        "id ktn_rt_i64_check_shift(int64_t count) {\n    if (count < 0 || count > 63) {\n    " +
+        "    char message[128];\n        snprintf(message, sizeof message, \"shift count %lld" +
+        " is outside 0..63\", (long long)count);\n        ktn_rt_fail(message);\n    }\n}\n\n" +
+        "static inline int64_t ktn_rt_i64_shl(int64_t left, int64_t count) {\n    ktn_rt_i64_" +
+        "check_shift(count);\n    return ktn_rt_i64_from_bits(ktn_rt_i64_bits(left) << (unsig" +
+        "ned)count);\n}\n\nstatic inline int64_t ktn_rt_i64_shr(int64_t left, int64_t count) " +
+        "{\n    ktn_rt_i64_check_shift(count);\n    uint64_t bits = ktn_rt_i64_bits(left);\n " +
+        "   uint64_t shifted;\n    if ((bits & (UINT64_C(1) << 63)) == 0) {\n        shifted " +
+        "= bits >> (unsigned)count;\n    } else {\n        shifted = ~(~bits >> (unsigned)cou" +
+        "nt);\n    }\n    return ktn_rt_i64_from_bits(shifted);\n}\n\nstatic inline int64_t k" +
+        "tn_rt_i64_add_assign(int64_t *slot, int64_t value) {\n    *slot = ktn_rt_i64_add(*sl" +
+        "ot, value);\n    return *slot;\n}\n\nstatic inline int64_t ktn_rt_i64_sub_assign(int" +
+        "64_t *slot, int64_t value) {\n    *slot = ktn_rt_i64_sub(*slot, value);\n    return " +
+        "*slot;\n}\n\nstatic inline int64_t ktn_rt_i64_pre_inc(int64_t *slot) {\n    *slot = " +
+        "ktn_rt_i64_add(*slot, 1);\n    return *slot;\n}\n\nstatic inline int64_t ktn_rt_i64_" +
+        "post_inc(int64_t *slot) {\n    int64_t previous = *slot;\n    *slot = ktn_rt_i64_add" +
+        "(previous, 1);\n    return pr" +
+        "";
+}
+
+fn embedded_runtime_header_chunk_4() -> string {
+    return "evious;\n}\n\nstatic inline int64_t ktn_rt_i64_pre_dec(int64_t *slot) {\n    *slot =" +
+        " ktn_rt_i64_sub(*slot, 1);\n    return *slot;\n}\n\nstatic inline int64_t ktn_rt_i64" +
+        "_post_dec(int64_t *slot) {\n    int64_t previous = *slot;\n    *slot = ktn_rt_i64_su" +
+        "b(previous, 1);\n    return previous;\n}\n\n/*\n * Flushes standard output and then " +
+        "standard error and terminates the process\n * with status. It does not validate or c" +
+        "onvert the status: on POSIX systems only\n * the low eight bits are observable, so 2" +
+        "56 is observed as 0 and -1 as 255. The\n * failing runtime path uses the same flush " +
+        "sequence before exiting with status 1.\n */\n_Noreturn void ktn_rt_exit(int64_t stat" +
+        "us);\n\n/*\n * Reads the entire contents of the regular file at path into a new,\n *" +
+        " GC-managed string and returns it. An empty file yields the empty string.\n *\n * Th" +
+        "e path is a Kitten string. Failure is fatal: a missing or unreadable file,\n * a pat" +
+        "h that is not a seekable regular file, a file larger than\n * KTN_RT_MAX_FILE_SIZE, " +
+        "or a read error terminates the program with a message\n * on standard error and a no" +
+        "nzero exit status. The file is always closed.\n *\n * Because strings are NUL-termin" +
+        "ated, content after the first NUL byte in the\n * file is not represented. The retur" +
+        "ned string is a snapshot of the file at the\n * time of the read; if the file shrink" +
+        "s while it is being read, fewer bytes are\n * returned and the stored length is adju" +
+        "sted to match.\n */\nconst ktn_string *ktn_rt_read_file(const ktn_string *path);\n\n" +
+        "/*\n * Reads the entire contents of the regular file at path without terminating on" +
+        "\n * a file error. On success it returns true, stores a fresh GC-managed string in\n" +
+        " * *text, and stores NULL in *message. On failure it returns false, stores NULL\n * " +
+        "in *text, and stores a fresh GC-managed Go-compatible OS error message in\n * *messa" +
+        "ge (for example \"open /x: no such file or directory\"). The caller's\n * ReadFileRe" +
+        "sult helper adds no prefix; the loader may add\n * \"cannot read source file: \". Th" +
+        "e same KTN_RT_MAX_FILE_SIZE limit as\n * ktn_rt_read_file applies; an oversized file" +
+        " is a failure, not a crash.\n */\nbool ktn_rt_try_read_file(const ktn_string *path," +
+        "\n                          const ktn_string **text,\n                          cons" +
+        "t ktn_string **message);\n\n/*\n * Recoverable write and directory operations. Each " +
+        "returns true on success and\n * stores NULL in *message; on failure it returns false" +
+        " and stores a fresh\n * GC-managed Go-compatible error message. Every descriptor is " +
+        "closed on every\n * path. The write functions create or truncate with mode 0644, nev" +
+        "er append,\n * and never create parent directories.\n */\nbool ktn_rt_try_write_file" +
+        "(const ktn_string *path,\n                          const ktn_string *text,\n       " +
+        "                   const ktn_string **message);\nbool ktn_rt_try_write_bytes(const k" +
+        "tn_string *path,\n                           const ktn_array *data,\n               " +
+        "            const ktn_string **message);\nbool ktn_rt_try_create_directory(const ktn" +
+        "_string *path,\n                                 const ktn_string **message);\nbool " +
+        "ktn_rt_try_remove(const ktn_string *path,\n                       const ktn_string *" +
+        "*message);\n\n/*\n * Reads one directory into a fresh array of strings, sorted bytew" +
+        "ise ascending\n * and excluding \".\" and \"..\". On success *entries is the array a" +
+        "nd *message is\n * NULL; on failure *entries is NULL and *message holds the error.\n" +
+        " */\nbool ktn_rt_try_list_directory(const ktn_string *path,\n                       " +
+        "        ktn_array **entries,\n                               const ktn_string **mess" +
+        "age);\n\n/*\n * Executes program directly with execve semantics, using args as argv[" +
+        "1..]\n * and program as argv[0]. The child inherits the environment, working\n * dir" +
+        "ectory, and descriptors 0, 1, and 2. On success the child's exit status is\n * store" +
+        "d in *status (128 + signal for a signal termination) and *message is\n * NULL. A fai" +
+        "lure to start the program stores a Go-compatible\n * \"fork/exec <program>: <reason>" +
+        "\" message and returns false; a nonzero child\n * status is still success. Both outp" +
+        "ut streams are flushed before forking.\n */\nbool ktn_rt_try_run(const ktn_strin" +
+        "";
+}
+
+fn embedded_runtime_header_chunk_5() -> string {
+    return "g *program,\n                    const ktn_array *args,\n                    int64_t" +
+        " *status,\n                    const ktn_string **message);\n\n/*\n * Returns the pr" +
+        "ocess's absolute current working directory as a fresh\n * GC-managed string. It uses" +
+        " getcwd, ignores PWD, and grows the buffer on\n * ERANGE. On failure it stores a Go-" +
+        "compatible \"getwd: <reason>\" message and\n * returns false.\n */\nbool ktn_rt_try_" +
+        "current_directory(const ktn_string **path,\n                                  const " +
+        "ktn_string **message);\n\n/*\n * Reads one environment variable. Returns true and st" +
+        "ores a fresh GC-managed\n * copy of its value when the variable exists, including wh" +
+        "en the value is the\n * empty string. Returns false when the variable is unset, the " +
+        "name is empty, or\n * the name contains '='. PWD is an ordinary variable here; no li" +
+        "bc ordering or\n * shell expansion is involved.\n */\nbool ktn_rt_try_getenv(const k" +
+        "tn_string *name, const ktn_string **value);\n\n/*\n * Runs program with try_run's di" +
+        "rect-exec semantics while putting stdin on\n * /dev/null and capturing stdout and st" +
+        "derr separately. Each stream is capped\n * at 16777216 bytes; exceeding the cap kill" +
+        "s and reaps the child and fails with\n * \"run <program>: <stream> exceeds the 16777" +
+        "216 byte limit\". A NUL byte in a\n * captured stream fails after reaping with\n * " +
+        "\"run <program>: <stream> contains a NUL byte at offset <n>\".\n */\nbool ktn_rt_try" +
+        "_run_capture(const ktn_string *program,\n                            const ktn_array" +
+        " *args,\n                            int64_t *status,\n                            c" +
+        "onst ktn_string **out,\n                            const ktn_string **err,\n       " +
+        "                     const ktn_string **message);\n\n/* Result codes for ktn_rt_try_" +
+        "file_info. */\n#define KTN_RT_FILE_INFO_OK 0\n#define KTN_RT_FILE_INFO_MISSING 1\n#d" +
+        "efine KTN_RT_FILE_INFO_FAILED 2\n\n/*\n * Reports file metadata without opening a fi" +
+        "le descriptor. lstat classifies the\n * path itself; a symlink is followed by stat f" +
+        "or is_file/is_directory/size, and\n * access(X_OK) supplies executable. ENOENT/ENOTD" +
+        "IR from lstat is Missing; a\n * dangling link is Ok with only is_symlink set. Other " +
+        "failures use lstat/stat\n * path text. Sizes above INT64_MAX cannot occur.\n */\nint" +
+        " ktn_rt_try_file_info(const ktn_string *path,\n                         bool *is_fil" +
+        "e,\n                         bool *is_directory,\n                         bool *is_" +
+        "symlink,\n                         bool *executable,\n                         int64" +
+        "_t *size,\n                         const ktn_string **message);\n\n/*\n * Creates a" +
+        "n absolute, unique temporary directory. The base is a non-empty\n * $TMPDIR (made ab" +
+        "solute against getcwd when relative) or /tmp; an unusable\n * base fails instead of " +
+        "falling back. The prefix must be 1..64 ASCII bytes from\n * [A-Za-z0-9._-], and may " +
+        "not be \"..\", or the call fails with\n * \"invalid temporary directory prefix\" bef" +
+        "ore filesystem access. mkdtemp\n * supplies the atomic six-character suffix and mode" +
+        " 0700. Returns true and a\n * fresh GC-managed path, or false and a Go-compatible mk" +
+        "dir/stat message.\n * Opens no file descriptor and registers no cleanup hook.\n */\n" +
+        "bool ktn_rt_try_create_temp_directory(const ktn_string *prefix,\n                   " +
+        "                   const ktn_string **path,\n                                      c" +
+        "onst ktn_string **message);\n\n/*\n * Built-in print helpers. Each writes a single v" +
+        "alue. Callers separate\n * arguments with single spaces and terminate the line with" +
+        "\n * ktn_rt_print_newline.\n */\nvoid ktn_rt_print_int(int64_t value);\nvoid ktn_rt_" +
+        "print_float(double value);\nvoid ktn_rt_print_bool(bool value);\nvoid ktn_rt_print_s" +
+        "tring(const ktn_string *value);\nvoid ktn_rt_print_space(void);\nvoid ktn_rt_print_n" +
+        "ewline(void);\n\n/*\n * Built-in eprint helpers. Each writes a single value to stand" +
+        "ard error, using\n * the same formatting as the print helper for that type. Callers " +
+        "separate\n * arguments with ktn_rt_eprint_space and terminate the line with\n * ktn_" +
+        "rt_eprint_newline. The newline helper flushes standard output before\n * writing the" +
+        " newline, so earlier print output appears first on a shared\n * terminal, and then" +
+        "";
+}
+
+fn embedded_runtime_header_chunk_6() -> string {
+    return " flushes standard error.\n */\nvoid ktn_rt_eprint_int(int64_t value);\nvoid ktn_rt_e" +
+        "print_float(double value);\nvoid ktn_rt_eprint_bool(bool value);\nvoid ktn_rt_eprint" +
+        "_string(const ktn_string *value);\nvoid ktn_rt_eprint_space(void);\nvoid ktn_rt_epri" +
+        "nt_newline(void);\n\n#endif /* KITTEN_RUNTIME_H */\n" +
+        "";
+}
+
+public fn embedded_runtime_header() -> string {
+    string h0 = embedded_runtime_header_chunk_0() + embedded_runtime_header_chunk_1();
+    string h1 = embedded_runtime_header_chunk_2() + embedded_runtime_header_chunk_3();
+    string h2 = embedded_runtime_header_chunk_4() + embedded_runtime_header_chunk_5();
+    string h3 = h0 + h1;
+    string h4 = h2 + embedded_runtime_header_chunk_6();
+    string h5 = h3 + h4;
+    return h5;
+}
+
+fn embedded_runtime_source_chunk_0() -> string {
+    return "/*\n * Kitten runtime: implementation. See kitten_runtime.h for the interface.\n *\n" +
+        " * This file is part of the Kitten language runtime, which is compiled into\n * ever" +
+        "y generated Kitten program.\n *\n * The Kitten runtime is licensed permissively, unl" +
+        "ike the compiler itself, so\n * that programs compiled with Kitten can be distribute" +
+        "d under any terms the\n * author chooses. See LICENSE in this directory.\n *\n * SPD" +
+        "X-License-Identifier: MIT\n *\n * Copyright (c) 2026 etokiyra\n *\n * Permission is " +
+        "hereby granted, free of charge, to any person obtaining a copy\n * of this software " +
+        "and associated documentation files (the \"Software\"), to\n * deal in the Software w" +
+        "ithout restriction, including without limitation the\n * rights to use, copy, modify" +
+        ", merge, publish, distribute, sublicense, and/or\n * sell copies of the Software, an" +
+        "d to permit persons to whom the Software is\n * furnished to do so, subject to the f" +
+        "ollowing conditions:\n *\n * The above copyright notice and this permission notice s" +
+        "hall be included in\n * all copies or substantial portions of the Software.\n *\n * " +
+        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n * IMP" +
+        "LIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n * FITNESS FO" +
+        "R A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n * AUTHORS OR COP" +
+        "YRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n * LIABILITY, WHETHER IN A" +
+        "N ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\n * FROM, OUT OF OR IN CONNECTION W" +
+        "ITH THE SOFTWARE OR THE USE OR OTHER DEALINGS\n * IN THE SOFTWARE.\n */\n#define _PO" +
+        "SIX_C_SOURCE 200809L\n\n#include \"kitten_runtime.h\"\n\nextern char **environ;\n\n#" +
+        "include <dirent.h>\n#include <errno.h>\n#include <fcntl.h>\n#include <poll.h>\n#incl" +
+        "ude <signal.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#inclu" +
+        "de <sys/stat.h>\n#include <sys/wait.h>\n#include <unistd.h>\n\n/*\n * Flushes both o" +
+        "utput streams in the order a process exit must preserve: stdout\n * first, then stde" +
+        "rr. Every terminating path shares this sequence.\n */\nstatic void ktn_rt_flush_stre" +
+        "ams(void) {\n    fflush(stdout);\n    fflush(stderr);\n}\n\n/*\n * Reports an unreco" +
+        "verable runtime error to standard error and terminates the\n * program. Used for con" +
+        "ditions that cannot be recovered from, such as an\n * out-of-range array index, an a" +
+        "llocation that would overflow, or inspecting a\n * null union reference.\n */\nvoid " +
+        "ktn_rt_fail(const char *message) {\n    ktn_rt_flush_streams();\n    fputs(\"purr: " +
+        "\", stderr);\n    fputs(message, stderr);\n    fputc('\\n', stderr);\n    ktn_rt_exi" +
+        "t(1);\n}\n\nvoid ktn_rt_exit(int64_t status) {\n    ktn_rt_flush_streams();\n    exi" +
+        "t((int)status);\n}\n\n/*\n * Reports an unrecoverable error that concerns a path, in" +
+        "cluding the operating\n * system message for a saved errno value.\n */\nstatic void " +
+        "ktn_rt_fail_path(const char *action, const ktn_string *path, int error) {\n    char " +
+        "message[1024];\n    snprintf(message, sizeof(message), \"%s '%s': %s\", action, path" +
+        "->data, strerror(error));\n    ktn_rt_fail(message);\n}\n\nvoid ktn_rt_init(void) {" +
+        "\n    GC_INIT();\n}\n\nvoid *ktn_rt_alloc(size_t size) {\n    return GC_MALLOC(size)" +
+        ";\n}\n\n/*\n * The static empty string. The zero value of a string is a null pointer" +
+        ", so\n * normalization maps every null string to this object, whose data is the stat" +
+        "ic\n * empty C string. This makes unassigned string array elements and struct fields" +
+        "\n * safe to read.\n */\nstatic const ktn_string ktn_rt_empty_string = { 0, \"\" };" +
+        "\n\n/*\n * Returns value, or the static empty string when value is null.\n *\n * Eve" +
+        "ry runtime function that reads a string normalizes first, so no caller has\n * to ch" +
+        "eck for a null reference and no function has to read through a null\n * pointer.\n *" +
+        "/\nstatic const ktn_string *ktn_rt_string_value(const ktn_string *value) {\n    retu" +
+        "rn value == NULL ? &ktn_rt_empty_string : value;\n}\n\n/*\n * Allocates a new string" +
+        " of exactly length bytes and returns it.\n *\n * The header is fully initialized: le" +
+        "ngth is set, data points at the length\n * bytes that immediately follow it, and a N" +
+        "UL terminator is written one past\n * them, so the value is always a valid C string " +
+        "even while it is being filled.\n " +
+        "";
+}
+
+fn embedded_runtime_source_chunk_1() -> string {
+    return "* The collector zeroes the allocation, so the bytes are a defined all-zero\n * seque" +
+        "nce rather than indeterminate storage, and the bytes are written by the\n * caller t" +
+        "hrough ktn_rt_string_bytes before the string becomes observable.\n */\nstatic ktn_st" +
+        "ring *ktn_rt_string_allocate(int64_t length) {\n    if (length < 0) {\n        ktn_r" +
+        "t_fail(\"string length cannot be negative\");\n    }\n    if ((uint64_t)length > (ui" +
+        "nt64_t)SIZE_MAX - sizeof(ktn_string) - 1) {\n        ktn_rt_fail(\"string is too lar" +
+        "ge\");\n    }\n\n    ktn_string *result = (ktn_string *)ktn_rt_alloc(sizeof(ktn_stri" +
+        "ng) + (size_t)length + 1);\n    result->length = length;\n    char *bytes = (char *)" +
+        "(result + 1);\n    bytes[length] = '\\0';\n    result->data = bytes;\n    return res" +
+        "ult;\n}\n\n/*\n * Returns the bytes of a string that was just allocated, for filling" +
+        " in.\n *\n * A string's bytes are immutable once the string is observable, but the b" +
+        "ytes\n * of a freshly allocated object are written during construction. Only\n * con" +
+        "struction sites, which hold the object just returned by\n * ktn_rt_string_allocate, " +
+        "call this.\n */\nstatic char *ktn_rt_string_bytes(ktn_string *value) {\n    return (" +
+        "char *)value->data;\n}\n\nbool ktn_rt_string_equal(const ktn_string *left, const ktn" +
+        "_string *right) {\n    left = ktn_rt_string_value(left);\n    right = ktn_rt_string_" +
+        "value(right);\n\n    if (left->length != right->length) {\n        return false;\n  " +
+        "  }\n    if (left->length == 0) {\n        return true;\n    }\n    return memcmp(le" +
+        "ft->data, right->data, (size_t)left->length) == 0;\n}\n\nconst ktn_string *ktn_rt_st" +
+        "ring_concat(const ktn_string *left, const ktn_string *right) {\n    left = ktn_rt_st" +
+        "ring_value(left);\n    right = ktn_rt_string_value(right);\n\n    /*\n     * Guard t" +
+        "he combined length against overflow. Two strings this large cannot\n     * both exis" +
+        "t in memory, so this is defensive, but it keeps the size\n     * computation well de" +
+        "fined instead of allocating too little.\n     */\n    if (left->length > INT64_MAX -" +
+        " right->length) {\n        ktn_rt_fail(\"string concatenation result is too large\")" +
+        ";\n    }\n\n    int64_t length = left->length + right->length;\n    ktn_string *resu" +
+        "lt = ktn_rt_string_allocate(length);\n    char *bytes = ktn_rt_string_bytes(result);" +
+        "\n    memcpy(bytes, left->data, (size_t)left->length);\n    memcpy(bytes + left->len" +
+        "gth, right->data, (size_t)right->length);\n    return result;\n}\n\nvoid ktn_rt_stri" +
+        "ng_append(const ktn_string **slot, const ktn_string *value) {\n    *slot = ktn_rt_st" +
+        "ring_concat(*slot, value);\n}\n\nint64_t ktn_rt_string_length(const ktn_string *valu" +
+        "e) {\n    return ktn_rt_string_value(value)->length;\n}\n\nint64_t ktn_rt_string_at(" +
+        "const ktn_string *value, int64_t index) {\n    const ktn_string *checked = ktn_rt_st" +
+        "ring_value(value);\n    if (index < 0 || index >= checked->length) {\n        char m" +
+        "essage[128];\n        snprintf(message, sizeof(message), \"string index %lld is out " +
+        "of range for length %lld\", (long long)index, (long long)checked->length);\n        " +
+        "ktn_rt_fail(message);\n    }\n    return (int64_t)(unsigned char)checked->data[index" +
+        "];\n}\n\nconst ktn_string *ktn_rt_substring(const ktn_string *value, int64_t start, " +
+        "int64_t end) {\n    const ktn_string *checked = ktn_rt_string_value(value);\n    if " +
+        "(start < 0 || end < start || end > checked->length) {\n        char message[160];\n " +
+        "       snprintf(message, sizeof(message), \"substring range %lld..%lld is out of ran" +
+        "ge for length %lld\", (long long)start, (long long)end, (long long)checked->length);" +
+        "\n        ktn_rt_fail(message);\n    }\n\n    int64_t count = end - start;\n    ktn_" +
+        "string *result = ktn_rt_string_allocate(count);\n    memcpy(ktn_rt_string_bytes(resu" +
+        "lt), checked->data + start, (size_t)count);\n    return result;\n}\n\nktn_array *ktn" +
+        "_rt_array_new(int64_t length, int64_t element_size) {\n    if (length < 0) {\n      " +
+        "  ktn_rt_fail(\"array length cannot be negative\");\n    }\n    if (element_size <= " +
+        "0) {\n        ktn_rt_fail(\"array element size must be positive\");\n    }\n    if (" +
+        "(uint64_t)length > (uint64_t)SIZE_MAX / (uint64_t)element_size) {\n        ktn_rt_fa" +
+        "il(\"array allocation is too large\");\n    }\n\n    ktn_array *array = (ktn_array *" +
+        ")ktn_rt_alloc(sizeof(k" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_2() -> string {
+    return "tn_array));\n    array->length = length;\n    array->element_size = element_size;\n" +
+        "\n    size_t bytes = (size_t)length * (size_t)element_size;\n    if (bytes == 0) {\n" +
+        "        /* Never make a zero-size allocation; an empty array is still a valid\n     " +
+        "    * object with a non-null data pointer. */\n        bytes = 1;\n    }\n    array-" +
+        ">data = ktn_rt_alloc(bytes);\n    return array;\n}\n\nvoid *ktn_rt_array_at(const kt" +
+        "n_array *array, int64_t index) {\n    if (array == NULL) {\n        ktn_rt_fail(\"ar" +
+        "ray access on a null array reference\");\n    }\n    if (index < 0 || index >= array" +
+        "->length) {\n        char message[128];\n        snprintf(message, sizeof(message), " +
+        "\"array index %lld is out of range for length %lld\", (long long)index, (long long)a" +
+        "rray->length);\n        ktn_rt_fail(message);\n    }\n    return (char *)array->data" +
+        " + (size_t)index * (size_t)array->element_size;\n}\n\nint64_t ktn_rt_array_length(co" +
+        "nst ktn_array *array) {\n    if (array == NULL) {\n        ktn_rt_fail(\"length of a" +
+        " null array reference\");\n    }\n    return array->length;\n}\n\nktn_array *ktn_rt_" +
+        "string_to_bytes(const ktn_string *value) {\n    const ktn_string *checked = ktn_rt_s" +
+        "tring_value(value);\n    ktn_array *result = ktn_rt_array_new(checked->length, (int6" +
+        "4_t)sizeof(uint8_t));\n    memcpy(result->data, checked->data, (size_t)checked->leng" +
+        "th);\n    return result;\n}\n\nconst ktn_string *ktn_rt_bytes_to_string(const ktn_ar" +
+        "ray *bytes) {\n    if (bytes == NULL) {\n        ktn_rt_fail(\"byte array is null\")" +
+        ";\n    }\n    if (bytes->element_size != (int64_t)sizeof(uint8_t)) {\n        ktn_rt" +
+        "_fail(\"byte array element size is not 1\");\n    }\n\n    const uint8_t *data = (co" +
+        "nst uint8_t *)bytes->data;\n    for (int64_t index = 0; index < bytes->length; index" +
+        "++) {\n        if (data[index] == 0) {\n            char message[160];\n            " +
+        "snprintf(message, sizeof(message), \"byte array contains a NUL byte at index %lld\"," +
+        " (long long)index);\n            ktn_rt_fail(message);\n        }\n    }\n\n    ktn_" +
+        "string *result = ktn_rt_string_allocate(bytes->length);\n    memcpy(ktn_rt_string_by" +
+        "tes(result), data, (size_t)bytes->length);\n    return result;\n}\n\n/*\n * The proc" +
+        "ess argument vector saved by ktn_rt_set_args. It is initialized to an\n * empty vect" +
+        "or so that ktn_rt_argv is safe before the generated entry point has\n * run, althoug" +
+        "h generated programs always set it before user code.\n */\nstatic int ktn_rt_saved_a" +
+        "rgc = 0;\nstatic char **ktn_rt_saved_argv = NULL;\n\nvoid ktn_rt_set_args(int argc, " +
+        "char **argv) {\n    ktn_rt_saved_argc = argc < 0 ? 0 : argc;\n    ktn_rt_saved_argv " +
+        "= argv;\n}\n\nktn_array *ktn_rt_argv(void) {\n    int count = ktn_rt_saved_argc;\n  " +
+        "  ktn_array *result = ktn_rt_array_new((int64_t)count, sizeof(const ktn_string *));" +
+        "\n    const ktn_string **slots = (const ktn_string **)result->data;\n    int index =" +
+        " 0;\n    while (index < count) {\n        const char *text = \"\";\n        if (ktn_" +
+        "rt_saved_argv != NULL && ktn_rt_saved_argv[index] != NULL) {\n            text = ktn" +
+        "_rt_saved_argv[index];\n        }\n        size_t length = strlen(text);\n        kt" +
+        "n_string *value = ktn_rt_string_allocate((int64_t)length);\n        memcpy(ktn_rt_st" +
+        "ring_bytes(value), text, length);\n        slots[index] = value;\n        index++;\n" +
+        "    }\n    return result;\n}\n\n/*\n * FNV-1a hash of a string, computed over its by" +
+        "tes so that two distinct strings\n * with the same contents hash identically.\n */\n" +
+        "static uint64_t ktn_rt_string_hash(const ktn_string *value) {\n    uint64_t hash = 1" +
+        "4695981039346656037ULL; /* FNV-1a 64-bit offset basis */\n    const unsigned char *b" +
+        "ytes = (const unsigned char *)value->data;\n    for (int64_t index = 0; index < valu" +
+        "e->length; index++) {\n        hash ^= (uint64_t)bytes[index];\n        hash *= 1099" +
+        "511628211ULL; /* FNV-1a 64-bit prime */\n    }\n    return hash;\n}\n\n/*\n * Return" +
+        "s the index of the slot holding key, or -1 when the key is absent.\n *\n * The table" +
+        " uses open addressing with linear probing over a power-of-two\n * capacity. Entries " +
+        "are never removed, so the first empty slot proves the key\n * is absent. The probe i" +
+        "s bounded by the capacity so that a corrupted table\n * cannot loop forever.\n */\ns" +
+        "tatic int64_t ktn_rt_map_fin" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_3() -> string {
+    return "d(const ktn_map *map, const ktn_string *key, uint64_t hash) {\n    if (map->capacity" +
+        " == 0) {\n        return -1;\n    }\n    size_t mask = (size_t)map->capacity - 1;\n " +
+        "   size_t index = (size_t)hash & mask;\n    for (int64_t probes = 0; probes < map->c" +
+        "apacity; probes++) {\n        const ktn_string *existing = map->keys[index];\n      " +
+        "  if (existing == NULL) {\n            return -1;\n        }\n        if (map->hashe" +
+        "s[index] == hash && ktn_rt_string_equal(existing, key)) {\n            return (int64" +
+        "_t)index;\n        }\n        index = (index + 1) & mask;\n    }\n    return -1;\n}" +
+        "\n\n/* Stores key and a copy of the value's bytes into the first empty slot. */\nsta" +
+        "tic void ktn_rt_map_place(ktn_map *map, const ktn_string *key, uint64_t hash, const " +
+        "void *value) {\n    size_t mask = (size_t)map->capacity - 1;\n    size_t index = (si" +
+        "ze_t)hash & mask;\n    for (int64_t probes = 0; probes < map->capacity; probes++) {" +
+        "\n        if (map->keys[index] == NULL) {\n            map->keys[index] = key;\n    " +
+        "        map->hashes[index] = hash;\n            memcpy((char *)map->values + index *" +
+        " (size_t)map->value_size, value, (size_t)map->value_size);\n            map->length+" +
+        "+;\n            return;\n        }\n        index = (index + 1) & mask;\n    }\n    " +
+        "ktn_rt_fail(\"map is full\");\n}\n\n/*\n * Grows the table when inserting one more e" +
+        "ntry would exceed a 3/4 load factor.\n * All existing entries are rehashed into the " +
+        "new table, so no entry is lost.\n */\nstatic void ktn_rt_map_reserve(ktn_map *map) {" +
+        "\n    if (map->capacity != 0 && (map->length + 1) * 4 <= map->capacity * 3) {\n     " +
+        "   return;\n    }\n    if (map->capacity > INT64_MAX / 2) {\n        ktn_rt_fail(\"m" +
+        "ap is too large\");\n    }\n    int64_t capacity = map->capacity == 0 ? 8 : map->cap" +
+        "acity * 2;\n\n    if ((uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(const ktn_str" +
+        "ing *) ||\n        (uint64_t)capacity > (uint64_t)SIZE_MAX / sizeof(uint64_t) ||\n  " +
+        "      (uint64_t)capacity > (uint64_t)SIZE_MAX / (uint64_t)map->value_size) {\n      " +
+        "  ktn_rt_fail(\"map allocation is too large\");\n    }\n\n    /* Keep the old table " +
+        "reachable while the new one is built, so the collector\n     * does not reclaim keys" +
+        " or pointer values that are still being copied. */\n    const ktn_string **old_keys " +
+        "= map->keys;\n    uint64_t *old_hashes = map->hashes;\n    void *old_values = map->v" +
+        "alues;\n    int64_t old_capacity = map->capacity;\n\n    map->capacity = capacity;\n" +
+        "    map->length = 0;\n    map->keys = (const ktn_string **)ktn_rt_alloc((size_t)capa" +
+        "city * sizeof(const ktn_string *));\n    map->hashes = (uint64_t *)ktn_rt_alloc((siz" +
+        "e_t)capacity * sizeof(uint64_t));\n    map->values = ktn_rt_alloc((size_t)capacity *" +
+        " (size_t)map->value_size);\n\n    for (int64_t index = 0; index < old_capacity; inde" +
+        "x++) {\n        if (old_keys[index] != NULL) {\n            ktn_rt_map_place(map, ol" +
+        "d_keys[index], old_hashes[index],\n                             (const char *)old_va" +
+        "lues + (size_t)index * (size_t)map->value_size);\n        }\n    }\n}\n\nktn_map *kt" +
+        "n_rt_map_new(int64_t value_size) {\n    if (value_size <= 0) {\n        ktn_rt_fail(" +
+        "\"map value size must be positive\");\n    }\n    ktn_map *map = (ktn_map *)ktn_rt_a" +
+        "lloc(sizeof(ktn_map));\n    map->length = 0;\n    map->capacity = 0;\n    map->value" +
+        "_size = value_size;\n    map->keys = NULL;\n    map->hashes = NULL;\n    map->values" +
+        " = NULL;\n    return map;\n}\n\nvoid ktn_rt_map_set(ktn_map *map, const ktn_string *" +
+        "key, const void *value) {\n    if (map == NULL) {\n        ktn_rt_fail(\"map assignm" +
+        "ent on a null map reference\");\n    }\n    if (value == NULL) {\n        ktn_rt_fai" +
+        "l(\"map value is missing\");\n    }\n\n    /* Normalize a null key to the static emp" +
+        "ty string so that stored keys are\n     * never null and an empty key can be disting" +
+        "uished from an empty slot. */\n    const ktn_string *checked = ktn_rt_string_value(k" +
+        "ey);\n    uint64_t hash = ktn_rt_string_hash(checked);\n\n    int64_t index = ktn_rt" +
+        "_map_find(map, checked, hash);\n    if (index >= 0) {\n        memcpy((char *)map->v" +
+        "alues + (size_t)index * (size_t)map->value_size, value, (size_t)map->value_size);\n " +
+        "       return;\n    }\n\n    ktn_rt_map_reserve(map);\n    ktn_rt_map_place(map, che" +
+        "cked, hash, value);\n" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_4() -> string {
+    return "}\n\nvoid *ktn_rt_map_at(const ktn_map *map, const ktn_string *key) {\n    if (map =" +
+        "= NULL) {\n        ktn_rt_fail(\"map lookup on a null map reference\");\n    }\n    " +
+        "const ktn_string *checked = ktn_rt_string_value(key);\n    int64_t index = ktn_rt_ma" +
+        "p_find(map, checked, ktn_rt_string_hash(checked));\n    if (index < 0) {\n        ch" +
+        "ar message[256];\n        snprintf(message, sizeof(message), \"map has no entry for " +
+        "key \\\"%.*s\\\"\", 160, checked->data);\n        ktn_rt_fail(message);\n    }\n    " +
+        "return (char *)map->values + (size_t)index * (size_t)map->value_size;\n}\n\nbool ktn" +
+        "_rt_map_has(const ktn_map *map, const ktn_string *key) {\n    if (map == NULL) {\n  " +
+        "      ktn_rt_fail(\"has on a null map reference\");\n    }\n    const ktn_string *ch" +
+        "ecked = ktn_rt_string_value(key);\n    return ktn_rt_map_find(map, checked, ktn_rt_s" +
+        "tring_hash(checked)) >= 0;\n}\n\nint64_t ktn_rt_map_length(const ktn_map *map) {\n  " +
+        "  if (map == NULL) {\n        ktn_rt_fail(\"length of a null map reference\");\n    " +
+        "}\n    return map->length;\n}\n\n/*\n * Returns the Go-style text for a saved errno." +
+        " The common cases are explicit\n * because Go uses lower-case operation/error text r" +
+        "ather than strerror's\n * capitalized, locale-dependent text.\n */\nstatic const cha" +
+        "r *ktn_rt_go_error_reason(int error, char *fallback, size_t capacity) {\n    switch " +
+        "(error) {\n        case ENOENT:\n            return \"no such file or directory\";\n" +
+        "        case EACCES:\n            return \"permission denied\";\n        case EISDIR" +
+        ":\n            return \"is a directory\";\n        case ENOTDIR:\n            return" +
+        " \"not a directory\";\n        case ENAMETOOLONG:\n            return \"file name to" +
+        "o long\";\n        case EMFILE:\n            return \"too many open files\";\n      " +
+        "  case ENFILE:\n            return \"too many open files in system\";\n        case " +
+        "ELOOP:\n            return \"too many levels of symbolic links\";\n        case EEXI" +
+        "ST:\n            return \"file exists\";\n        case ENOTEMPTY:\n            retur" +
+        "n \"directory not empty\";\n        default:\n            break;\n    }\n    snprint" +
+        "f(fallback, capacity, \"%s\", strerror(error));\n    if (fallback[0] >= 'A' && fallb" +
+        "ack[0] <= 'Z') {\n        fallback[0] = (char)(fallback[0] + ('a' - 'A'));\n    }\n " +
+        "   return fallback;\n}\n\n/*\n * Builds \"<operation> <path>: <reason>\" as a GC-man" +
+        "aged string. The path is the\n * exact Kitten path bytes; no quotes are added, match" +
+        "ing Go's os.ReadFile text.\n */\nstatic const ktn_string *ktn_rt_path_error_with_rea" +
+        "son(const char *operation, const ktn_string *path, const char *reason) {\n    size_t" +
+        " operation_length = strlen(operation);\n    size_t reason_length = strlen(reason);\n" +
+        "    size_t length = operation_length + 1 + (size_t)path->length + 2 + reason_length;" +
+        "\n    ktn_string *result = ktn_rt_string_allocate((int64_t)length);\n    char *bytes" +
+        " = ktn_rt_string_bytes(result);\n    snprintf(bytes, length + 1, \"%s %s: %s\", oper" +
+        "ation, path->data, reason);\n    return result;\n}\n\nstatic const ktn_string *ktn_r" +
+        "t_path_error(const char *operation, const ktn_string *path, int error) {\n    char f" +
+        "allback[256];\n    const char *reason = ktn_rt_go_error_reason(error, fallback, size" +
+        "of(fallback));\n    return ktn_rt_path_error_with_reason(operation, path, reason);\n" +
+        "}\n\n/* Builds \"<operation>: <reason>\" for an operation with no path operand. */\n" +
+        "static const ktn_string *ktn_rt_operation_error(const char *operation, int error) {" +
+        "\n    char fallback[256];\n    const char *reason = ktn_rt_go_error_reason(error, fa" +
+        "llback, sizeof(fallback));\n    size_t operation_length = strlen(operation);\n    si" +
+        "ze_t reason_length = strlen(reason);\n    size_t length = operation_length + 2 + rea" +
+        "son_length;\n    ktn_string *result = ktn_rt_string_allocate((int64_t)length);\n    " +
+        "char *bytes = ktn_rt_string_bytes(result);\n    snprintf(bytes, length + 1, \"%s: %s" +
+        "\", operation, reason);\n    return result;\n}\n\n/* Returns a plain failure message" +
+        " string for a non-path condition. */\nstatic const ktn_string *ktn_rt_plain_error(co" +
+        "nst char *message) {\n    size_t length = strlen(message);\n    ktn_string *result =" +
+        " ktn_rt_string_allocate((int64_t)length);\n    memcpy(ktn_rt_string_bytes(result), m" +
+        "essage, length);\n    return result;\n}\n\nbool " +
+        "";
+}
+
+fn embedded_runtime_source_chunk_5() -> string {
+    return "ktn_rt_try_read_file(const ktn_string *path, const ktn_string **text, const ktn_stri" +
+        "ng **message) {\n    if (text == NULL || message == NULL) {\n        ktn_rt_fail(\"t" +
+        "ry_read_file received a null result slot\");\n    }\n    *text = NULL;\n    *message" +
+        " = NULL;\n\n    const ktn_string *checked = ktn_rt_string_value(path);\n    int desc" +
+        "riptor = open(checked->data, O_RDONLY);\n    if (descriptor < 0) {\n        *message" +
+        " = ktn_rt_path_error(\"open\", checked, errno);\n        return false;\n    }\n\n   " +
+        " struct stat information;\n    if (fstat(descriptor, &information) != 0) {\n        " +
+        "int error = errno;\n        close(descriptor);\n        *message = ktn_rt_path_error" +
+        "(\"stat\", checked, error);\n        return false;\n    }\n\n    int64_t size = info" +
+        "rmation.st_size < 0 ? 0 : (int64_t)information.st_size;\n    if ((uint64_t)size > KT" +
+        "N_RT_MAX_FILE_SIZE) {\n        close(descriptor);\n        *message = ktn_rt_plain_e" +
+        "rror(\"file is larger than the maximum supported size\");\n        return false;\n  " +
+        "  }\n\n    ktn_string *result = ktn_rt_string_allocate(size);\n    char *bytes = ktn" +
+        "_rt_string_bytes(result);\n    int64_t total = 0;\n    while (total < size) {\n     " +
+        "   ssize_t count = read(descriptor, bytes + total, (size_t)(size - total));\n       " +
+        " if (count < 0) {\n            int error = errno;\n            close(descriptor);\n " +
+        "           *message = ktn_rt_path_error(\"read\", checked, error);\n            retu" +
+        "rn false;\n        }\n        if (count == 0) {\n            break;\n        }\n    " +
+        "    total += (int64_t)count;\n    }\n    close(descriptor);\n    result->length = to" +
+        "tal;\n    bytes[total] = '\\0';\n    *text = result;\n    return true;\n}\n\n/* Buil" +
+        "ds the C argv vector in the parent. */\nstatic bool ktn_rt_build_argv(const ktn_stri" +
+        "ng *program, const ktn_array *args, char ***argv_out, const ktn_string **message) {" +
+        "\n    if (args == NULL) {\n        ktn_rt_fail(\"try_run received a null argument ar" +
+        "ray\");\n    }\n    if (args->element_size != (int64_t)sizeof(const ktn_string *)) {" +
+        "\n        ktn_rt_fail(\"try_run received a non-string argument array\");\n    }\n   " +
+        " int64_t count = args->length;\n    if ((uint64_t)count > SIZE_MAX / sizeof(char *) " +
+        "- 2) {\n        *message = ktn_rt_path_error_with_reason(\"fork/exec\", program, \"a" +
+        "rgument list too long\");\n        return false;\n    }\n\n    char **argv = (char *" +
+        "*)malloc(((size_t)count + 2) * sizeof(char *));\n    if (argv == NULL) {\n        *m" +
+        "essage = ktn_rt_path_error_with_reason(\"fork/exec\", program, \"cannot allocate arg" +
+        "ument vector\");\n        return false;\n    }\n    argv[0] = (char *)program->data;" +
+        "\n    const ktn_string **items = (const ktn_string **)args->data;\n    for (int64_t " +
+        "index = 0; index < count; index++) {\n        const ktn_string *item = items[index];" +
+        "\n        argv[index + 1] = item == NULL ? (char *)\"\" : (char *)item->data;\n    }" +
+        "\n    argv[count + 1] = NULL;\n    *argv_out = argv;\n    return true;\n}\n\nbool kt" +
+        "n_rt_try_run(const ktn_string *program, const ktn_array *args, int64_t *status, cons" +
+        "t ktn_string **message) {\n    if (status == NULL || message == NULL) {\n        ktn" +
+        "_rt_fail(\"try_run received a null result slot\");\n    }\n    *status = 0;\n    *me" +
+        "ssage = NULL;\n\n    const ktn_string *checked = ktn_rt_string_value(program);\n    " +
+        "char **argv = NULL;\n    if (!ktn_rt_build_argv(checked, args, &argv, message)) {\n " +
+        "       return false;\n    }\n\n    int error_pipe[2];\n    if (pipe(error_pipe) != 0" +
+        ") {\n        int error = errno;\n        free(argv);\n        *message = ktn_rt_path" +
+        "_error(\"fork/exec\", checked, error);\n        return false;\n    }\n    if (fcntl(" +
+        "error_pipe[1], F_SETFD, FD_CLOEXEC) != 0) {\n        int error = errno;\n        clo" +
+        "se(error_pipe[0]);\n        close(error_pipe[1]);\n        free(argv);\n        *mes" +
+        "sage = ktn_rt_path_error(\"fork/exec\", checked, error);\n        return false;\n   " +
+        " }\n\n    ktn_rt_flush_streams();\n    pid_t child = fork();\n    if (child < 0) {\n" +
+        "        int error = errno;\n        close(error_pipe[0]);\n        close(error_pipe[" +
+        "1]);\n        free(argv);\n        *message = ktn_rt_path_error(\"fork/exec\", check" +
+        "ed, error);\n        return false;\n    }\n    if (child == 0) {\n        close(erro" +
+        "r_pipe[0]);\n        execve(checked->data, argv, envi" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_6() -> string {
+    return "ron);\n        int child_error = errno;\n        ssize_t ignored = write(error_pipe[" +
+        "1], &child_error, sizeof(child_error));\n        (void)ignored;\n        _exit(127);" +
+        "\n    }\n\n    close(error_pipe[1]);\n    int child_error = 0;\n    ssize_t received" +
+        ";\n    int read_error = 0;\n    do {\n        received = read(error_pipe[0], &child_" +
+        "error, sizeof(child_error));\n    } while (received < 0 && errno == EINTR);\n    if " +
+        "(received < 0) {\n        read_error = errno;\n    }\n    close(error_pipe[0]);\n\n " +
+        "   int wait_status = 0;\n    pid_t waited;\n    do {\n        waited = waitpid(child" +
+        ", &wait_status, 0);\n    } while (waited < 0 && errno == EINTR);\n    int wait_error" +
+        " = waited < 0 ? errno : 0;\n    free(argv);\n\n    if (waited < 0) {\n        *messa" +
+        "ge = ktn_rt_path_error(\"wait\", checked, wait_error);\n        return false;\n    }" +
+        "\n    if (received < 0) {\n        *message = ktn_rt_path_error(\"fork/exec\", check" +
+        "ed, read_error);\n        return false;\n    }\n    if (received > 0) {\n        *me" +
+        "ssage = ktn_rt_path_error(\"fork/exec\", checked, child_error);\n        return fals" +
+        "e;\n    }\n    if (WIFEXITED(wait_status)) {\n        *status = (int64_t)WEXITSTATUS" +
+        "(wait_status);\n        return true;\n    }\n    if (WIFSIGNALED(wait_status)) {\n  " +
+        "      *status = (int64_t)(128 + WTERMSIG(wait_status));\n        return true;\n    }" +
+        "\n    *message = ktn_rt_plain_error(\"wait returned an unexpected status\");\n    re" +
+        "turn false;\n}\n\n#define KTN_RT_CAPTURE_LIMIT ((int64_t)16777216)\n\nstruct ktn_rt_" +
+        "capture_buffer {\n    char *data;\n    size_t length;\n    size_t capacity;\n};\n\ns" +
+        "tatic void ktn_rt_capture_free(struct ktn_rt_capture_buffer *buffer) {\n    free(buf" +
+        "fer->data);\n    buffer->data = NULL;\n    buffer->length = 0;\n    buffer->capacity" +
+        " = 0;\n}\n\n/* Returns 1 on success, 0 when the capture limit would be exceeded, -1 " +
+        "on OOM. */\nstatic int ktn_rt_capture_append(struct ktn_rt_capture_buffer *buffer, c" +
+        "onst char *bytes, size_t count) {\n    if ((int64_t)count > KTN_RT_CAPTURE_LIMIT - (" +
+        "int64_t)buffer->length) {\n        return 0;\n    }\n    size_t needed = buffer->len" +
+        "gth + count;\n    if (needed > buffer->capacity) {\n        size_t capacity = buffer" +
+        "->capacity == 0 ? 4096 : buffer->capacity;\n        while (capacity < needed) {\n   " +
+        "         if (capacity > SIZE_MAX / 2) {\n                return -1;\n            }\n" +
+        "            capacity *= 2;\n        }\n        char *grown = (char *)realloc(buffer-" +
+        ">data, capacity);\n        if (grown == NULL) {\n            return -1;\n        }\n" +
+        "        buffer->data = grown;\n        buffer->capacity = capacity;\n    }\n    if (" +
+        "count > 0) {\n        memcpy(buffer->data + buffer->length, bytes, count);\n        " +
+        "buffer->length = needed;\n    }\n    return 1;\n}\n\nstatic const ktn_string *ktn_rt" +
+        "_capture_string(struct ktn_rt_capture_buffer *buffer) {\n    ktn_string *result = kt" +
+        "n_rt_string_allocate((int64_t)buffer->length);\n    if (buffer->length > 0) {\n     " +
+        "   memcpy(ktn_rt_string_bytes(result), buffer->data, buffer->length);\n    }\n    re" +
+        "turn result;\n}\n\nstatic const ktn_string *ktn_rt_capture_message(const ktn_string " +
+        "*program, const char *stream, const char *suffix) {\n    char reason[160];\n    snpr" +
+        "intf(reason, sizeof(reason), \"%s %s\", stream, suffix);\n    return ktn_rt_path_err" +
+        "or_with_reason(\"run\", program, reason);\n}\n\nstatic const ktn_string *ktn_rt_capt" +
+        "ure_nul_message(const ktn_string *program, const char *stream, int64_t offset) {\n  " +
+        "  char reason[160];\n    snprintf(reason, sizeof(reason), \"%s contains a NUL byte a" +
+        "t offset %lld\", stream, (long long)offset);\n    return ktn_rt_path_error_with_reas" +
+        "on(\"run\", program, reason);\n}\n\nstatic bool ktn_rt_make_capture_pipe(int descrip" +
+        "tors[2]) {\n    if (pipe(descriptors) != 0) {\n        return false;\n    }\n    if " +
+        "(fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) != 0 ||\n        fcntl(descriptors[1], F" +
+        "_SETFD, FD_CLOEXEC) != 0) {\n        int error = errno;\n        close(descriptors[0" +
+        "]);\n        close(descriptors[1]);\n        errno = error;\n        return false;\n" +
+        "    }\n    return true;\n}\n\nstatic pid_t ktn_rt_wait_capture(pid_t child, int *wai" +
+        "t_status, int *wait_error) {\n    pid_t waited;\n    do {\n        waited = waitpid(" +
+        "child, wait_status, 0);\n    } while (waited " +
+        "";
+}
+
+fn embedded_runtime_source_chunk_7() -> string {
+    return "< 0 && errno == EINTR);\n    if (waited < 0) {\n        *wait_error = errno;\n    }" +
+        "\n    return waited;\n}\n\nbool ktn_rt_try_run_capture(const ktn_string *program, co" +
+        "nst ktn_array *args,\n                            int64_t *status, const ktn_string " +
+        "**out,\n                            const ktn_string **err, const ktn_string **messa" +
+        "ge) {\n    if (status == NULL || out == NULL || err == NULL || message == NULL) {\n " +
+        "       ktn_rt_fail(\"try_run_capture received a null result slot\");\n    }\n    *st" +
+        "atus = 0;\n    *out = NULL;\n    *err = NULL;\n    *message = NULL;\n\n    const ktn" +
+        "_string *checked = ktn_rt_string_value(program);\n    char **argv = NULL;\n    if (!" +
+        "ktn_rt_build_argv(checked, args, &argv, message)) {\n        return false;\n    }\n" +
+        "\n    int null_descriptor = open(\"/dev/null\", O_RDONLY | O_CLOEXEC);\n    if (null" +
+        "_descriptor < 0) {\n        int error = errno;\n        free(argv);\n        *messag" +
+        "e = ktn_rt_path_error(\"run\", checked, error);\n        return false;\n    }\n\n   " +
+        " int out_pipe[2];\n    int err_pipe[2];\n    int error_pipe[2];\n    if (!ktn_rt_mak" +
+        "e_capture_pipe(out_pipe)) {\n        int error = errno;\n        close(null_descript" +
+        "or);\n        free(argv);\n        *message = ktn_rt_path_error(\"run\", checked, er" +
+        "ror);\n        return false;\n    }\n    if (!ktn_rt_make_capture_pipe(err_pipe)) {" +
+        "\n        int error = errno;\n        close(null_descriptor);\n        close(out_pip" +
+        "e[0]);\n        close(out_pipe[1]);\n        free(argv);\n        *message = ktn_rt_" +
+        "path_error(\"run\", checked, error);\n        return false;\n    }\n    if (!ktn_rt_" +
+        "make_capture_pipe(error_pipe)) {\n        int error = errno;\n        close(null_des" +
+        "criptor);\n        close(out_pipe[0]);\n        close(out_pipe[1]);\n        close(e" +
+        "rr_pipe[0]);\n        close(err_pipe[1]);\n        free(argv);\n        *message = k" +
+        "tn_rt_path_error(\"run\", checked, error);\n        return false;\n    }\n\n    ktn_" +
+        "rt_flush_streams();\n    pid_t child = fork();\n    if (child < 0) {\n        int er" +
+        "ror = errno;\n        close(null_descriptor);\n        close(out_pipe[0]);\n        " +
+        "close(out_pipe[1]);\n        close(err_pipe[0]);\n        close(err_pipe[1]);\n     " +
+        "   close(error_pipe[0]);\n        close(error_pipe[1]);\n        free(argv);\n      " +
+        "  *message = ktn_rt_path_error(\"fork/exec\", checked, error);\n        return false" +
+        ";\n    }\n    if (child == 0) {\n        close(out_pipe[0]);\n        close(err_pipe" +
+        "[0]);\n        close(error_pipe[0]);\n        if (dup2(null_descriptor, STDIN_FILENO" +
+        ") < 0 ||\n            dup2(out_pipe[1], STDOUT_FILENO) < 0 ||\n            dup2(err_" +
+        "pipe[1], STDERR_FILENO) < 0) {\n            int child_error = errno;\n            ss" +
+        "ize_t ignored = write(error_pipe[1], &child_error, sizeof(child_error));\n          " +
+        "  (void)ignored;\n            _exit(127);\n        }\n        close(null_descriptor)" +
+        ";\n        close(out_pipe[1]);\n        close(err_pipe[1]);\n        execve(checked-" +
+        ">data, argv, environ);\n        int child_error = errno;\n        ssize_t ignored = " +
+        "write(error_pipe[1], &child_error, sizeof(child_error));\n        (void)ignored;\n  " +
+        "      _exit(127);\n    }\n\n    close(null_descriptor);\n    close(out_pipe[1]);\n  " +
+        "  close(err_pipe[1]);\n    close(error_pipe[1]);\n\n    struct ktn_rt_capture_buffer" +
+        " captured_out = { NULL, 0, 0 };\n    struct ktn_rt_capture_buffer captured_err = { N" +
+        "ULL, 0, 0 };\n    int child_error = 0;\n    bool child_error_received = false;\n    " +
+        "bool out_open = true;\n    bool err_open = true;\n    bool error_open = true;\n    b" +
+        "ool failed = false;\n    const ktn_string *failure_message = NULL;\n\n    while (out" +
+        "_open || err_open || error_open) {\n        struct pollfd poll_descriptors[3];\n    " +
+        "    int indexes[3];\n        int count = 0;\n        if (out_open) {\n            po" +
+        "ll_descriptors[count].fd = out_pipe[0];\n            poll_descriptors[count].events " +
+        "= POLLIN;\n            poll_descriptors[count].revents = 0;\n            indexes[cou" +
+        "nt] = 0;\n            count++;\n        }\n        if (err_open) {\n            poll" +
+        "_descriptors[count].fd = err_pipe[0];\n            poll_descriptors[count].events = " +
+        "POLLIN;\n            poll_descriptors[count].revents = 0;\n            indexes[count" +
+        "] = 1;\n            count++;\n        }\n     " +
+        "";
+}
+
+fn embedded_runtime_source_chunk_8() -> string {
+    return "   if (error_open) {\n            poll_descriptors[count].fd = error_pipe[0];\n     " +
+        "       poll_descriptors[count].events = POLLIN;\n            poll_descriptors[count]" +
+        ".revents = 0;\n            indexes[count] = 2;\n            count++;\n        }\n   " +
+        "     int ready;\n        do {\n            ready = poll(poll_descriptors, (nfds_t)co" +
+        "unt, -1);\n        } while (ready < 0 && errno == EINTR);\n        if (ready < 0) {" +
+        "\n            failure_message = ktn_rt_path_error(\"run\", checked, errno);\n       " +
+        "     failed = true;\n            break;\n        }\n        for (int index = 0; inde" +
+        "x < count; index++) {\n            if (poll_descriptors[index].revents == 0) {\n    " +
+        "            continue;\n            }\n            int stream = indexes[index];\n    " +
+        "        int descriptor = poll_descriptors[index].fd;\n            if (stream == 2) {" +
+        "\n                ssize_t received;\n                do {\n                    recei" +
+        "ved = read(descriptor, &child_error, sizeof(child_error));\n                } while " +
+        "(received < 0 && errno == EINTR);\n                if (received > 0) {\n            " +
+        "        child_error_received = true;\n                }\n                if (receive" +
+        "d <= 0) {\n                    close(descriptor);\n                    error_open = " +
+        "false;\n                }\n                continue;\n            }\n            cha" +
+        "r bytes[8192];\n            ssize_t received;\n            do {\n                rec" +
+        "eived = read(descriptor, bytes, sizeof(bytes));\n            } while (received < 0 &" +
+        "& errno == EINTR);\n            if (received > 0) {\n                int appended = " +
+        "ktn_rt_capture_append(stream == 0 ? &captured_out : &captured_err,\n                " +
+        "                                     bytes, (size_t)received);\n                if (" +
+        "appended == 0) {\n                    failure_message = ktn_rt_capture_message(check" +
+        "ed, stream == 0 ? \"stdout\" : \"stderr\",\n                                        " +
+        "                      \"exceeds the 16777216 byte limit\");\n                    fai" +
+        "led = true;\n                    break;\n                }\n                if (appe" +
+        "nded < 0) {\n                    failure_message = ktn_rt_plain_error(\"capture allo" +
+        "cation failed\");\n                    failed = true;\n                    break;\n " +
+        "               }\n            } else if (received == 0) {\n                close(des" +
+        "criptor);\n                if (stream == 0) {\n                    out_open = false;" +
+        "\n                } else {\n                    err_open = false;\n                }" +
+        "\n            } else {\n                failure_message = ktn_rt_path_error(\"run\"," +
+        " checked, errno);\n                failed = true;\n                break;\n         " +
+        "   }\n        }\n        if (failed) {\n            break;\n        }\n    }\n\n    " +
+        "if (failed) {\n        kill(child, SIGKILL);\n    }\n    if (out_open) {\n        cl" +
+        "ose(out_pipe[0]);\n    }\n    if (err_open) {\n        close(err_pipe[0]);\n    }\n " +
+        "   if (error_open) {\n        close(error_pipe[0]);\n    }\n\n    int wait_status = " +
+        "0;\n    int wait_error = 0;\n    pid_t waited = ktn_rt_wait_capture(child, &wait_sta" +
+        "tus, &wait_error);\n    free(argv);\n\n    if (failed) {\n        ktn_rt_capture_fre" +
+        "e(&captured_out);\n        ktn_rt_capture_free(&captured_err);\n        *message = f" +
+        "ailure_message;\n        return false;\n    }\n    if (waited < 0) {\n        ktn_rt" +
+        "_capture_free(&captured_out);\n        ktn_rt_capture_free(&captured_err);\n        " +
+        "*message = ktn_rt_path_error(\"wait\", checked, wait_error);\n        return false;" +
+        "\n    }\n    if (child_error_received) {\n        ktn_rt_capture_free(&captured_out)" +
+        ";\n        ktn_rt_capture_free(&captured_err);\n        *message = ktn_rt_path_error" +
+        "(\"fork/exec\", checked, child_error);\n        return false;\n    }\n\n    if (!WIF" +
+        "EXITED(wait_status) && !WIFSIGNALED(wait_status)) {\n        ktn_rt_capture_free(&ca" +
+        "ptured_out);\n        ktn_rt_capture_free(&captured_err);\n        *message = ktn_rt" +
+        "_plain_error(\"wait returned an unexpected status\");\n        return false;\n    }" +
+        "\n    if (WIFEXITED(wait_status)) {\n        *status = (int64_t)WEXITSTATUS(wait_sta" +
+        "tus);\n    } else {\n        *status = (int64_t)(128 + WTERMSIG(wait_status));\n    " +
+        "}\n\n    for (size_t index = 0; index <" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_9() -> string {
+    return " captured_out.length; index++) {\n        if (captured_out.data[index] == '\\0') {\n" +
+        "            ktn_rt_capture_free(&captured_out);\n            ktn_rt_capture_free(&ca" +
+        "ptured_err);\n            *message = ktn_rt_capture_nul_message(checked, \"stdout\"," +
+        " (int64_t)index);\n            return false;\n        }\n    }\n    for (size_t inde" +
+        "x = 0; index < captured_err.length; index++) {\n        if (captured_err.data[index]" +
+        " == '\\0') {\n            ktn_rt_capture_free(&captured_out);\n            ktn_rt_ca" +
+        "pture_free(&captured_err);\n            *message = ktn_rt_capture_nul_message(checke" +
+        "d, \"stderr\", (int64_t)index);\n            return false;\n        }\n    }\n\n    " +
+        "*out = ktn_rt_capture_string(&captured_out);\n    *err = ktn_rt_capture_string(&capt" +
+        "ured_err);\n    ktn_rt_capture_free(&captured_out);\n    ktn_rt_capture_free(&captur" +
+        "ed_err);\n    return true;\n}\n\nint ktn_rt_try_file_info(const ktn_string *path, bo" +
+        "ol *is_file, bool *is_directory,\n                         bool *is_symlink, bool *e" +
+        "xecutable, int64_t *size,\n                         const ktn_string **message) {\n " +
+        "   if (is_file == NULL || is_directory == NULL || is_symlink == NULL ||\n        exe" +
+        "cutable == NULL || size == NULL || message == NULL) {\n        ktn_rt_fail(\"try_fil" +
+        "e_info received a null result slot\");\n    }\n    *is_file = false;\n    *is_direct" +
+        "ory = false;\n    *is_symlink = false;\n    *executable = false;\n    *size = 0;\n  " +
+        "  *message = NULL;\n\n    const ktn_string *checked = ktn_rt_string_value(path);\n  " +
+        "  struct stat link_info;\n    if (lstat(checked->data, &link_info) != 0) {\n        " +
+        "int error = errno;\n        if (error == ENOENT || error == ENOTDIR) {\n            " +
+        "return KTN_RT_FILE_INFO_MISSING;\n        }\n        *message = ktn_rt_path_error(\"" +
+        "lstat\", checked, error);\n        return KTN_RT_FILE_INFO_FAILED;\n    }\n\n    boo" +
+        "l link = S_ISLNK(link_info.st_mode);\n    *is_symlink = link;\n    struct stat follo" +
+        "wed = link_info;\n    if (link) {\n        if (stat(checked->data, &followed) != 0) " +
+        "{\n            int error = errno;\n            if (error == ENOENT || error == ENOTD" +
+        "IR) {\n                return KTN_RT_FILE_INFO_OK;\n            }\n            *mess" +
+        "age = ktn_rt_path_error(\"stat\", checked, error);\n            return KTN_RT_FILE_I" +
+        "NFO_FAILED;\n        }\n    }\n\n    *is_file = S_ISREG(followed.st_mode);\n    *is_" +
+        "directory = S_ISDIR(followed.st_mode);\n    if (*is_file) {\n        *size = (int64_" +
+        "t)followed.st_size;\n    }\n    *executable = access(checked->data, X_OK) == 0;\n   " +
+        " return KTN_RT_FILE_INFO_OK;\n}\n\nbool ktn_rt_try_getenv(const ktn_string *name, co" +
+        "nst ktn_string **value) {\n    if (value == NULL) {\n        ktn_rt_fail(\"try_geten" +
+        "v received a null result slot\");\n    }\n    *value = NULL;\n\n    const ktn_string" +
+        " *checked = ktn_rt_string_value(name);\n    if (checked->length == 0 || strchr(check" +
+        "ed->data, '=') != NULL) {\n        return false;\n    }\n    const char *found = get" +
+        "env(checked->data);\n    if (found == NULL) {\n        return false;\n    }\n    siz" +
+        "e_t length = strlen(found);\n    ktn_string *result = ktn_rt_string_allocate((int64_" +
+        "t)length);\n    memcpy(ktn_rt_string_bytes(result), found, length);\n    *value = re" +
+        "sult;\n    return true;\n}\n\n/* Returns getcwd's absolute path as a fresh GC-manage" +
+        "d string. */\nstatic ktn_string *ktn_rt_getcwd_string(const ktn_string **message) {" +
+        "\n    size_t capacity = 256;\n    char *buffer = (char *)malloc(capacity);\n    if (" +
+        "buffer == NULL) {\n        *message = ktn_rt_operation_error(\"getwd\", ENOMEM);\n  " +
+        "      return NULL;\n    }\n    for (;;) {\n        if (getcwd(buffer, capacity) != N" +
+        "ULL) {\n            size_t length = strlen(buffer);\n            ktn_string *result " +
+        "= ktn_rt_string_allocate((int64_t)length);\n            memcpy(ktn_rt_string_bytes(r" +
+        "esult), buffer, length);\n            free(buffer);\n            return result;\n   " +
+        "     }\n        int error = errno;\n        if (error != ERANGE) {\n            free" +
+        "(buffer);\n            *message = ktn_rt_operation_error(\"getwd\", error);\n       " +
+        "     return NULL;\n        }\n        if (capacity > SIZE_MAX / 2) {\n            fr" +
+        "ee(buffer);\n            *message = ktn_rt_operation_error(\"getwd\", ENAMETOOLONG);" +
+        "\n            return NULL;\n        " +
+        "";
+}
+
+fn embedded_runtime_source_chunk_10() -> string {
+    return "}\n        size_t next = capacity * 2;\n        char *grown = (char *)realloc(buffer" +
+        ", next);\n        if (grown == NULL) {\n            free(buffer);\n            *mess" +
+        "age = ktn_rt_operation_error(\"getwd\", ENOMEM);\n            return NULL;\n        " +
+        "}\n        buffer = grown;\n        capacity = next;\n    }\n}\n\nbool ktn_rt_try_cu" +
+        "rrent_directory(const ktn_string **path, const ktn_string **message) {\n    if (path" +
+        " == NULL || message == NULL) {\n        ktn_rt_fail(\"try_current_directory received" +
+        " a null result slot\");\n    }\n    *path = NULL;\n    *message = NULL;\n    *path =" +
+        " ktn_rt_getcwd_string(message);\n    return *path != NULL;\n}\n\n/* Reports whether " +
+        "a temporary-directory prefix is a safe literal component. */\nstatic bool ktn_rt_val" +
+        "id_temp_prefix(const ktn_string *prefix) {\n    if (prefix->length <= 0 || prefix->l" +
+        "ength > 64) {\n        return false;\n    }\n    if (prefix->length == 2 && prefix->" +
+        "data[0] == '.' && prefix->data[1] == '.') {\n        return false;\n    }\n    for (" +
+        "int64_t index = 0; index < prefix->length; index++) {\n        unsigned char value =" +
+        " (unsigned char)prefix->data[index];\n        bool allowed = (value >= 'A' && value " +
+        "<= 'Z') ||\n                       (value >= 'a' && value <= 'z') ||\n              " +
+        "         (value >= '0' && value <= '9') ||\n                       value == '.' || v" +
+        "alue == '_' || value == '-';\n        if (!allowed) {\n            return false;\n  " +
+        "      }\n    }\n    return true;\n}\n\n/* Copies a byte range into a fresh GC-manage" +
+        "d string. */\nstatic ktn_string *ktn_rt_string_copy_bytes(const char *bytes, size_t " +
+        "length) {\n    ktn_string *result = ktn_rt_string_allocate((int64_t)length);\n    me" +
+        "mcpy(ktn_rt_string_bytes(result), bytes, length);\n    return result;\n}\n\n/* Joins" +
+        " two path pieces with exactly one separator between them. */\nstatic ktn_string *ktn" +
+        "_rt_string_join_path(const ktn_string *left, const ktn_string *right) {\n    bool le" +
+        "ft_has_separator = left->length > 0 && left->data[left->length - 1] == '/';\n    siz" +
+        "e_t length = (size_t)left->length + (left_has_separator ? 0 : 1) + (size_t)right->le" +
+        "ngth;\n    ktn_string *result = ktn_rt_string_allocate((int64_t)length);\n    char *" +
+        "bytes = ktn_rt_string_bytes(result);\n    memcpy(bytes, left->data, (size_t)left->le" +
+        "ngth);\n    size_t offset = (size_t)left->length;\n    if (!left_has_separator) {\n " +
+        "       bytes[offset] = '/';\n        offset++;\n    }\n    memcpy(bytes + offset, ri" +
+        "ght->data, (size_t)right->length);\n    return result;\n}\n\nbool ktn_rt_try_create_" +
+        "temp_directory(const ktn_string *prefix,\n                                      cons" +
+        "t ktn_string **path,\n                                      const ktn_string **messa" +
+        "ge) {\n    if (path == NULL || message == NULL) {\n        ktn_rt_fail(\"try_create_" +
+        "temp_directory received a null result slot\");\n    }\n    *path = NULL;\n    *messa" +
+        "ge = NULL;\n\n    const ktn_string *checked = ktn_rt_string_value(prefix);\n    if (" +
+        "!ktn_rt_valid_temp_prefix(checked)) {\n        *message = ktn_rt_plain_error(\"inval" +
+        "id temporary directory prefix\");\n        return false;\n    }\n\n    const char *t" +
+        "emporary = getenv(\"TMPDIR\");\n    ktn_string *base = NULL;\n    if (temporary == N" +
+        "ULL || temporary[0] == '\\0') {\n        base = ktn_rt_string_copy_bytes(\"/tmp\", 4" +
+        ");\n    } else {\n        size_t temporary_length = strlen(temporary);\n        ktn_" +
+        "string *configured = ktn_rt_string_copy_bytes(temporary, temporary_length);\n       " +
+        " if (configured->data[0] == '/') {\n            base = configured;\n        } else {" +
+        "\n            ktn_string *current = ktn_rt_getcwd_string(message);\n            if (" +
+        "current == NULL) {\n                return false;\n            }\n            base =" +
+        " ktn_rt_string_join_path(current, configured);\n        }\n    }\n\n    ktn_string *" +
+        "suffix = ktn_rt_string_copy_bytes(\".XXXXXX\", 7);\n    const ktn_string *template_t" +
+        "ext = ktn_rt_string_join_path(base, checked);\n    template_text = ktn_rt_string_con" +
+        "cat(template_text, suffix);\n\n    size_t template_length = (size_t)template_text->l" +
+        "ength;\n    char *template = (char *)malloc(template_length + 1);\n    if (template " +
+        "== NULL) {\n        ktn_rt_fail(\"try_create_temp_directory could not allocate a pat" +
+        "h template\");\n    }" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_11() -> string {
+    return "\n    memcpy(template, template_text->data, template_length + 1);\n\n    /*\n     * " +
+        "mkdtemp requests mode 0700, but the process umask still applies. This\n     * runtim" +
+        "e is not required to be thread-safe, so clear the umask only around\n     * the atom" +
+        "ic creation instead of racing a later chmod with another process\n     * that can re" +
+        "name or replace the new directory.\n     */\n    mode_t previous_umask = umask(0);\n" +
+        "    char *created = mkdtemp(template);\n    int creation_error = errno;\n    umask(p" +
+        "revious_umask);\n    errno = creation_error;\n    if (created == NULL) {\n        in" +
+        "t error = creation_error;\n        if (error == ENOENT || error == ENOTDIR) {\n     " +
+        "       struct stat base_info;\n            if (stat(base->data, &base_info) != 0) {" +
+        "\n                int check = errno;\n                if (check == ENOENT || check =" +
+        "= ENOTDIR) {\n                    free(template);\n                    *message = kt" +
+        "n_rt_path_error(\"stat\", base, check);\n                    return false;\n        " +
+        "        }\n            }\n        }\n        free(template);\n        *message = ktn" +
+        "_rt_path_error(\"mkdir\", template_text, error);\n        return false;\n    }\n\n  " +
+        "  size_t created_length = strlen(created);\n    *path = ktn_rt_string_copy_bytes(cre" +
+        "ated, created_length);\n    free(template);\n    return true;\n}\n\n/* Writes every " +
+        "byte or reports the first write failure. */\nstatic bool ktn_rt_write_all(int descri" +
+        "ptor, const char *bytes, int64_t length, const ktn_string *path, const ktn_string **" +
+        "message) {\n    int64_t total = 0;\n    while (total < length) {\n        ssize_t co" +
+        "unt = write(descriptor, bytes + total, (size_t)(length - total));\n        if (count" +
+        " < 0) {\n            if (errno == EINTR) {\n                continue;\n            }" +
+        "\n            *message = ktn_rt_path_error(\"write\", path, errno);\n            ret" +
+        "urn false;\n        }\n        if (count == 0) {\n            *message = ktn_rt_path" +
+        "_error_with_reason(\"write\", path, \"short write\");\n            return false;\n  " +
+        "      }\n        total += (int64_t)count;\n    }\n    return true;\n}\n\n/* Creates " +
+        "or truncates path and writes length bytes with mode 0644. */\nstatic bool ktn_rt_try" +
+        "_write_common(const ktn_string *path, const char *bytes, int64_t length, const ktn_s" +
+        "tring **message) {\n    if (message == NULL) {\n        ktn_rt_fail(\"try_write rece" +
+        "ived a null result slot\");\n    }\n    *message = NULL;\n\n    const ktn_string *ch" +
+        "ecked = ktn_rt_string_value(path);\n    int descriptor = open(checked->data, O_WRONL" +
+        "Y | O_CREAT | O_TRUNC, 0644);\n    if (descriptor < 0) {\n        *message = ktn_rt_" +
+        "path_error(\"open\", checked, errno);\n        return false;\n    }\n\n    if (!ktn_" +
+        "rt_write_all(descriptor, bytes, length, checked, message)) {\n        close(descript" +
+        "or);\n        return false;\n    }\n    if (close(descriptor) != 0) {\n        *mess" +
+        "age = ktn_rt_path_error(\"close\", checked, errno);\n        return false;\n    }\n " +
+        "   return true;\n}\n\nbool ktn_rt_try_write_file(const ktn_string *path, const ktn_s" +
+        "tring *text, const ktn_string **message) {\n    const ktn_string *checked = ktn_rt_s" +
+        "tring_value(text);\n    return ktn_rt_try_write_common(path, checked->data, checked-" +
+        ">length, message);\n}\n\nbool ktn_rt_try_write_bytes(const ktn_string *path, const k" +
+        "tn_array *data, const ktn_string **message) {\n    if (data == NULL) {\n        ktn_" +
+        "rt_fail(\"try_write_bytes received a null byte array\");\n    }\n    if (data->eleme" +
+        "nt_size != (int64_t)sizeof(uint8_t)) {\n        ktn_rt_fail(\"try_write_bytes receiv" +
+        "ed a non-byte array\");\n    }\n    return ktn_rt_try_write_common(path, (const char" +
+        " *)data->data, data->length, message);\n}\n\nbool ktn_rt_try_create_directory(const " +
+        "ktn_string *path, const ktn_string **message) {\n    if (message == NULL) {\n       " +
+        " ktn_rt_fail(\"try_create_directory received a null result slot\");\n    }\n    *mes" +
+        "sage = NULL;\n    const ktn_string *checked = ktn_rt_string_value(path);\n    if (mk" +
+        "dir(checked->data, 0755) != 0) {\n        *message = ktn_rt_path_error(\"mkdir\", ch" +
+        "ecked, errno);\n        return false;\n    }\n    return true;\n}\n\nbool ktn_rt_try" +
+        "_remove(const ktn_string *path, const ktn_string **message) {\n    if (message == NU" +
+        "LL) {\n        ktn_rt_fail(\"try_rem" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_12() -> string {
+    return "ove received a null result slot\");\n    }\n    *message = NULL;\n    const ktn_stri" +
+        "ng *checked = ktn_rt_string_value(path);\n\n    struct stat information;\n    if (ls" +
+        "tat(checked->data, &information) != 0) {\n        *message = ktn_rt_path_error(\"rem" +
+        "ove\", checked, errno);\n        return false;\n    }\n    int result = S_ISDIR(info" +
+        "rmation.st_mode) ? rmdir(checked->data) : unlink(checked->data);\n    if (result != " +
+        "0) {\n        *message = ktn_rt_path_error(\"remove\", checked, errno);\n        ret" +
+        "urn false;\n    }\n    return true;\n}\n\n/* Orders two ktn_string pointers by their" +
+        " NUL-terminated name bytes. */\nstatic int ktn_rt_name_compare(const void *left, con" +
+        "st void *right) {\n    const ktn_string *a = *(const ktn_string *const *)left;\n    " +
+        "const ktn_string *b = *(const ktn_string *const *)right;\n    return strcmp(a->data," +
+        " b->data);\n}\n\nbool ktn_rt_try_list_directory(const ktn_string *path, ktn_array **" +
+        "entries, const ktn_string **message) {\n    if (entries == NULL || message == NULL) " +
+        "{\n        ktn_rt_fail(\"try_list_directory received a null result slot\");\n    }\n" +
+        "    *entries = NULL;\n    *message = NULL;\n\n    const ktn_string *checked = ktn_rt" +
+        "_string_value(path);\n    DIR *directory = opendir(checked->data);\n    if (director" +
+        "y == NULL) {\n        *message = ktn_rt_path_error(\"open\", checked, errno);\n     " +
+        "   return false;\n    }\n\n    int64_t count = 0;\n    errno = 0;\n    struct dirent" +
+        " *entry;\n    while ((entry = readdir(directory)) != NULL) {\n        if (strcmp(ent" +
+        "ry->d_name, \".\") == 0 || strcmp(entry->d_name, \"..\") == 0) {\n            contin" +
+        "ue;\n        }\n        count++;\n    }\n    if (errno != 0) {\n        int error = " +
+        "errno;\n        closedir(directory);\n        *message = ktn_rt_path_error(\"readdir" +
+        "ent\", checked, error);\n        return false;\n    }\n\n    ktn_array *result = ktn" +
+        "_rt_array_new(count, (int64_t)sizeof(const ktn_string *));\n    rewinddir(directory)" +
+        ";\n    int64_t index = 0;\n    errno = 0;\n    while ((entry = readdir(directory)) !" +
+        "= NULL) {\n        if (strcmp(entry->d_name, \".\") == 0 || strcmp(entry->d_name, \"" +
+        "..\") == 0) {\n            continue;\n        }\n        size_t name_length = strlen" +
+        "(entry->d_name);\n        ktn_string *name = ktn_rt_string_allocate((int64_t)name_le" +
+        "ngth);\n        memcpy(ktn_rt_string_bytes(name), entry->d_name, name_length);\n    " +
+        "    ((const ktn_string **)result->data)[index] = name;\n        index++;\n    }\n   " +
+        " if (errno != 0) {\n        int error = errno;\n        closedir(directory);\n      " +
+        "  *message = ktn_rt_path_error(\"readdirent\", checked, error);\n        return fals" +
+        "e;\n    }\n    closedir(directory);\n\n    qsort(result->data, (size_t)index, sizeof" +
+        "(const ktn_string *), ktn_rt_name_compare);\n    result->length = index;\n    *entri" +
+        "es = result;\n    return true;\n}\n\nconst ktn_string *ktn_rt_read_file(const ktn_st" +
+        "ring *path) {\n    const ktn_string *checked = ktn_rt_string_value(path);\n\n    FIL" +
+        "E *file = fopen(checked->data, \"rb\");\n    if (file == NULL) {\n        int error " +
+        "= errno;\n        ktn_rt_fail_path(\"read_file: cannot open\", checked, error);\n   " +
+        " }\n\n    if (fseek(file, 0, SEEK_END) != 0) {\n        int error = errno;\n        " +
+        "fclose(file);\n        ktn_rt_fail_path(\"read_file: cannot determine the size of\"," +
+        " checked, error);\n    }\n\n    long length = ftell(file);\n    if (length < 0) {\n " +
+        "       int error = errno;\n        fclose(file);\n        ktn_rt_fail_path(\"read_fi" +
+        "le: cannot determine the size of\", checked, error);\n    }\n    if ((unsigned long)" +
+        "length > KTN_RT_MAX_FILE_SIZE) {\n        fclose(file);\n        ktn_rt_fail(\"read_" +
+        "file: file is larger than the maximum supported size\");\n    }\n\n    if (fseek(fil" +
+        "e, 0, SEEK_SET) != 0) {\n        int error = errno;\n        fclose(file);\n        " +
+        "ktn_rt_fail_path(\"read_file: cannot rewind\", checked, error);\n    }\n\n    ktn_st" +
+        "ring *result = ktn_rt_string_allocate((int64_t)length);\n    size_t read = fread(ktn" +
+        "_rt_string_bytes(result), 1, (size_t)length, file);\n    if (ferror(file)) {\n      " +
+        "  int error = errno;\n        fclose(file);\n        ktn_rt_fail_path(\"read_file: c" +
+        "annot read\", checked, error);\n    }\n\n    /* A file that shrank while it was bein" +
+        "g read yields the bytes actually read,\n     * so the s" +
+        "";
+}
+
+fn embedded_runtime_source_chunk_13() -> string {
+    return "tored length is adjusted to match the bytes present. */\n    result->length = (int64" +
+        "_t)read;\n    ktn_rt_string_bytes(result)[read] = '\\0';\n    fclose(file);\n    ret" +
+        "urn result;\n}\n\nvoid ktn_rt_print_int(int64_t value) {\n    printf(\"%lld\", (long" +
+        " long)value);\n}\n\nvoid ktn_rt_print_float(double value) {\n    printf(\"%g\", valu" +
+        "e);\n}\n\nvoid ktn_rt_print_bool(bool value) {\n    fputs(value ? \"true\" : \"false" +
+        "\", stdout);\n}\n\nvoid ktn_rt_print_string(const ktn_string *value) {\n    const kt" +
+        "n_string *checked = ktn_rt_string_value(value);\n    if (checked->length > 0) {\n   " +
+        "     fwrite(checked->data, 1, (size_t)checked->length, stdout);\n    }\n}\n\nvoid kt" +
+        "n_rt_print_space(void) {\n    fputc(' ', stdout);\n}\n\nvoid ktn_rt_print_newline(vo" +
+        "id) {\n    fputc('\\n', stdout);\n}\n\nvoid ktn_rt_eprint_int(int64_t value) {\n    " +
+        "fprintf(stderr, \"%lld\", (long long)value);\n}\n\nvoid ktn_rt_eprint_float(double v" +
+        "alue) {\n    fprintf(stderr, \"%g\", value);\n}\n\nvoid ktn_rt_eprint_bool(bool valu" +
+        "e) {\n    fputs(value ? \"true\" : \"false\", stderr);\n}\n\nvoid ktn_rt_eprint_stri" +
+        "ng(const ktn_string *value) {\n    const ktn_string *checked = ktn_rt_string_value(v" +
+        "alue);\n    if (checked->length > 0) {\n        fwrite(checked->data, 1, (size_t)che" +
+        "cked->length, stderr);\n    }\n}\n\nvoid ktn_rt_eprint_space(void) {\n    fputc(' '," +
+        " stderr);\n}\n\nvoid ktn_rt_eprint_newline(void) {\n    /* Keep output written by ea" +
+        "rlier print calls ahead of this diagnostic. */\n    fflush(stdout);\n    fputc('\\n'" +
+        ", stderr);\n    ktn_rt_flush_streams();\n}\n" +
+        "";
+}
+
+public fn embedded_runtime_source() -> string {
+    string s0 = embedded_runtime_source_chunk_0() + embedded_runtime_source_chunk_1();
+    string s1 = embedded_runtime_source_chunk_2() + embedded_runtime_source_chunk_3();
+    string s2 = embedded_runtime_source_chunk_4() + embedded_runtime_source_chunk_5();
+    string s3 = embedded_runtime_source_chunk_6() + embedded_runtime_source_chunk_7();
+    string s4 = embedded_runtime_source_chunk_8() + embedded_runtime_source_chunk_9();
+    string s5 = embedded_runtime_source_chunk_10() + embedded_runtime_source_chunk_11();
+    string s6 = embedded_runtime_source_chunk_12() + embedded_runtime_source_chunk_13();
+    string s7 = s0 + s1;
+    string s8 = s2 + s3;
+    string s9 = s4 + s5;
+    string s10 = s7 + s8;
+    string s11 = s9 + s6;
+    string s12 = s10 + s11;
+    return s12;
+}

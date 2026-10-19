@@ -1,0 +1,432 @@
+// tools/embed_runtime.ktn - generate purr/embedded.ktn from the C runtime.
+//
+// This program has no imports. It uses only the language built-ins so that both
+// the Go bootstrap compiler and the Kitten-written compiler can build it. The
+// output is deterministic: it contains no timestamps, paths, or host data.
+//
+// Usage: embed_runtime <repo-root>
+
+union TextResult {
+    Ok { string text; }
+    Failed { string message; }
+}
+
+union CheckResult {
+    Ok
+    Failed { string message; }
+}
+
+union EmbedResult {
+    Ok { string text; int chunks; }
+    Failed { string message; }
+}
+
+// usage reports the command line and exits with the usage status.
+fn usage() {
+    eprint("usage: embed_runtime <repo-root>");
+    exit(2);
+}
+
+// fail reports a generation failure and exits with status 1.
+fn fail(string message) {
+    eprint(message);
+    exit(1);
+}
+
+// join_path joins a root and a relative path with one separator.
+fn join_path(string root, string relative) -> string {
+    if (length(root) == 0) {
+        return relative;
+    }
+    if (root[length(root) - 1] == 47) { // '/'
+        return root + relative;
+    }
+    return root + "/" + relative;
+}
+
+// decimal renders a non-negative integer without a conversion built-in.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+fn is_continuation(int value) -> bool {
+    return value >= 0x80 && value <= 0xBF;
+}
+
+// utf8_width returns the byte width of the valid UTF-8 sequence at index, or 0.
+fn utf8_width(string text, int index) -> int {
+    int size = length(text);
+    int first = text[index];
+
+    if (first < 0x80) {
+        return 1;
+    }
+    if (first >= 0xC2 && first <= 0xDF) {
+        if (index + 1 < size && is_continuation(text[index + 1])) {
+            return 2;
+        }
+        return 0;
+    }
+    if (first == 0xE0) {
+        if (index + 2 < size &&
+            text[index + 1] >= 0xA0 && text[index + 1] <= 0xBF &&
+            is_continuation(text[index + 2])) {
+            return 3;
+        }
+        return 0;
+    }
+    if ((first >= 0xE1 && first <= 0xEC) ||
+        first == 0xEE || first == 0xEF) {
+        if (index + 2 < size &&
+            is_continuation(text[index + 1]) &&
+            is_continuation(text[index + 2])) {
+            return 3;
+        }
+        return 0;
+    }
+    if (first == 0xED) {
+        if (index + 2 < size &&
+            text[index + 1] >= 0x80 && text[index + 1] <= 0x9F &&
+            is_continuation(text[index + 2])) {
+            return 3;
+        }
+        return 0;
+    }
+    if (first == 0xF0) {
+        if (index + 3 < size &&
+            text[index + 1] >= 0x90 && text[index + 1] <= 0xBF &&
+            is_continuation(text[index + 2]) &&
+            is_continuation(text[index + 3])) {
+            return 4;
+        }
+        return 0;
+    }
+    if (first >= 0xF1 && first <= 0xF3) {
+        if (index + 3 < size &&
+            is_continuation(text[index + 1]) &&
+            is_continuation(text[index + 2]) &&
+            is_continuation(text[index + 3])) {
+            return 4;
+        }
+        return 0;
+    }
+    if (first == 0xF4) {
+        if (index + 3 < size &&
+            text[index + 1] >= 0x80 && text[index + 1] <= 0x8F &&
+            is_continuation(text[index + 2]) &&
+            is_continuation(text[index + 3])) {
+            return 4;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+// validate_text rejects NUL and invalid UTF-8, naming the file and offset.
+fn validate_text(string text, string path) -> CheckResult {
+    int index = 0;
+    int size = length(text);
+    while (index < size) {
+        int value = text[index];
+        if (value == 0) {
+            return CheckResult.Failed {
+                message = path + ": contains a NUL byte at offset " + decimal(index)
+            };
+        }
+        int width = utf8_width(text, index);
+        if (width == 0) {
+            return CheckResult.Failed {
+                message = path + ": is not valid UTF-8 at offset " + decimal(index)
+            };
+        }
+        index += width;
+    }
+    return CheckResult.Ok;
+}
+
+// escape_unit renders one byte or one complete UTF-8 sequence as Kitten source.
+// Only '\n', '\t', '"', and '\' need an escape. CR, other controls, DEL, and
+// valid non-ASCII sequences are inserted raw, which the language accepts inside
+// a one-line string literal and both lexers preserve byte for byte.
+fn escape_unit(string text, int index, int width) -> string {
+    int value = text[index];
+    if (value == 10) {
+        return "\\n";
+    }
+    if (value == 9) {
+        return "\\t";
+    }
+    if (value == 34) {
+        return "\\\"";
+    }
+    if (value == 92) {
+        return "\\\\";
+    }
+    return substring(text, index, index + width);
+}
+
+// chunk_function finishes one private helper. A chunk has at least one piece;
+// the empty file gets one helper that returns the empty string.
+fn chunk_function(string prefix, int index, string body, int pieces) -> string {
+    string result = "fn " + prefix + "_chunk_" + decimal(index) + "() -> string {\n";
+    if (pieces == 0) {
+        return result + "    return \"\";\n}\n\n";
+    }
+    return result + body + "        \"\";\n}\n\n";
+}
+
+// build_chunks renders every private chunk helper for one input file. Each
+// source literal is at most 84 escaped bytes, so its generated line stays under
+// 100 columns, and each helper returns at most 4096 decoded bytes.
+fn build_chunks(string text, string path, string prefix) -> EmbedResult {
+    match (validate_text(text, path)) {
+        Failed(message) {
+            return EmbedResult.Failed { message = message };
+        }
+        Ok { }
+    }
+
+    string declarations = "";
+    string piece = "";
+    string chunk_body = "";
+    int chunk_decoded = 0;
+    int chunk_pieces = 0;
+    int chunk_index = 0;
+    int index = 0;
+    int size = length(text);
+
+    while (index < size) {
+        int width = utf8_width(text, index);
+        string unit = escape_unit(text, index, width);
+
+        // A chunk never exceeds 4096 decoded bytes. Flush the current piece and
+        // chunk before adding the unit that would cross the boundary.
+        if (chunk_decoded > 0 && chunk_decoded + width > 4096) {
+            if (length(piece) > 0) {
+                if (chunk_pieces == 0) {
+                    chunk_body = chunk_body + "    return \"" + piece + "\" +\n";
+                } else {
+                    chunk_body = chunk_body + "        \"" + piece + "\" +\n";
+                }
+                chunk_pieces++;
+                piece = "";
+            }
+            declarations = declarations + chunk_function(
+                prefix, chunk_index, chunk_body, chunk_pieces);
+            chunk_index++;
+            chunk_body = "";
+            chunk_decoded = 0;
+            chunk_pieces = 0;
+        }
+
+        // A literal never exceeds 84 escaped bytes, and an escape sequence is
+        // appended as one unit, so a split can never land inside one.
+        if (length(piece) > 0 && length(piece) + length(unit) > 84) {
+            if (chunk_pieces == 0) {
+                chunk_body = chunk_body + "    return \"" + piece + "\" +\n";
+            } else {
+                chunk_body = chunk_body + "        \"" + piece + "\" +\n";
+            }
+            chunk_pieces++;
+            piece = "";
+        }
+
+        piece = piece + unit;
+        chunk_decoded += width;
+        index += width;
+    }
+
+    if (length(piece) > 0) {
+        if (chunk_pieces == 0) {
+            chunk_body = chunk_body + "    return \"" + piece + "\" +\n";
+        } else {
+            chunk_body = chunk_body + "        \"" + piece + "\" +\n";
+        }
+        chunk_pieces++;
+    }
+
+    if (chunk_pieces > 0 || chunk_decoded == 0) {
+        declarations = declarations + chunk_function(prefix, chunk_index, chunk_body, chunk_pieces);
+        chunk_index++;
+    }
+
+    return EmbedResult.Ok { text = declarations, chunks = chunk_index };
+}
+
+// public_function emits a balanced concatenation tree. A left-to-right chain
+// would copy every growing prefix and make materialization quadratic; pairing
+// adjacent chunks makes it O(n log n) with a small constant.
+fn public_function(string prefix, string short, int chunks) -> string {
+    string result = "public fn " + prefix + "() -> string {\n";
+    string[] current = new string[chunks];
+    int index = 0;
+    while (index < chunks) {
+        current[index] = prefix + "_chunk_" + decimal(index) + "()";
+        index++;
+    }
+
+    int count = chunks;
+    int counter = 0;
+    while (count > 1) {
+        int next_count = (count + 1) / 2;
+        string[] next = new string[next_count];
+        int read_index = 0;
+        int write_index = 0;
+        while (read_index < count) {
+            if (read_index + 1 < count) {
+                string name = short + decimal(counter);
+                result = result + "    string " + name + " = " +
+                    current[read_index] + " + " + current[read_index + 1] + ";\n";
+                next[write_index] = name;
+                read_index += 2;
+                counter++;
+            } else {
+                next[write_index] = current[read_index];
+                read_index++;
+            }
+            write_index++;
+        }
+        current = next;
+        count = next_count;
+    }
+
+    result = result + "    return " + current[0] + ";\n}\n";
+    return result;
+}
+
+// header_comment is the fixed generated-file notice.
+fn header_comment() -> string {
+    return "// GENERATED FILE - DO NOT EDIT.\n" +
+        "// Regenerate from the repository root:\n" +
+        "//   purr build tools/embed_runtime.ktn -o /tmp/embed_runtime\n" +
+        "//   /tmp/embed_runtime <repo-root>\n" +
+        "//\n" +
+        "// The embedded strings are the MIT-licensed runtime sources from\n" +
+        "// runtime/csrc/kitten_runtime.h and runtime/csrc/kitten_runtime.c.\n" +
+        "// Their MIT notice is preserved verbatim inside those strings. The rest\n" +
+        "// of this file is generator output covered by the project's\n" +
+        "// GPL-3.0-or-later toolchain license.\n\n";
+}
+
+// read_checked reads one regular file and verifies that its Kitten string has
+// the size the filesystem reported. A NUL byte would either truncate the read
+// or survive with a matching length; validate_text rejects the latter and this
+// check rejects the former.
+fn read_checked(string path) -> TextResult {
+    match (try_file_info(path)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            if (!is_file) {
+                return TextResult.Failed { message = path + ": not a regular file" };
+            }
+            match (try_read_file(path)) {
+                Ok(text) {
+                    if (length(text) != size) {
+                        return TextResult.Failed {
+                            message = path + ": read byte length does not match file size"
+                        };
+                    }
+                    return TextResult.Ok { text = text };
+                }
+                Failed(message) {
+                    return TextResult.Failed { message = message };
+                }
+            }
+        }
+        Missing {
+            return TextResult.Failed { message = path + ": no such file" };
+        }
+        Failed(message) {
+            return TextResult.Failed { message = message };
+        }
+    }
+}
+
+fn main() {
+    if (length(argv()) != 2) {
+        usage();
+    }
+
+    string root = argv()[1];
+    string header_path = join_path(root, "runtime/csrc/kitten_runtime.h");
+    string source_path = join_path(root, "runtime/csrc/kitten_runtime.c");
+
+    TextResult header_read = read_checked(header_path);
+    match (header_read) {
+        Failed(message) {
+            fail(message);
+        }
+        Ok(header_text) {
+            TextResult source_read = read_checked(source_path);
+            match (source_read) {
+                Failed(message) {
+                    fail(message);
+                }
+                Ok(source_text) {
+                    EmbedResult header_build = build_chunks(
+                        header_text, header_path, "embedded_runtime_header");
+                    match (header_build) {
+                        Failed(message) {
+                            fail(message);
+                        }
+                        Ok(header_declarations, header_chunks) {
+                            EmbedResult source_build = build_chunks(
+                                source_text, source_path, "embedded_runtime_source");
+                            match (source_build) {
+                                Failed(message) {
+                                    fail(message);
+                                }
+                                Ok(source_declarations, source_chunks) {
+                                    string output = header_comment();
+                                    output += header_declarations;
+                                    output += public_function(
+                                        "embedded_runtime_header", "h", header_chunks);
+                                    output += "\n";
+                                    output += source_declarations;
+                                    output += public_function(
+                                        "embedded_runtime_source", "s", source_chunks);
+
+                                    string purr_path = join_path(root, "purr");
+                                    match (try_file_info(purr_path)) {
+                                        Missing {
+                                            match (try_create_directory(purr_path)) {
+                                                Failed(message) {
+                                                    fail(message);
+                                                }
+                                                Ok { }
+                                            }
+                                        }
+                                        Ok(is_file, is_directory, is_symlink, executable, size) {
+                                            if (!is_directory) {
+                                                fail(purr_path + ": not a directory");
+                                            }
+                                        }
+                                        Failed(message) {
+                                            fail(message);
+                                        }
+                                    }
+
+                                    string output_path = join_path(purr_path, "embedded.ktn");
+                                    match (try_write_file(output_path, output)) {
+                                        Failed(message) {
+                                            fail(message);
+                                        }
+                                        Ok { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

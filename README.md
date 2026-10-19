@@ -358,7 +358,7 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 326 program runs under GCC and Clang, outputs compared |
+| Generated programs executed | 378 program runs under GCC and Clang, outputs compared |
 | Defined arithmetic/bitwise/byte runtime | wrapping, shifts, byte arrays, conversions, and failures through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 | File/directory runtime | writes, bytes, truncation, mkdir, remove, sorted listing, Go-identical errors, and permission paths through both pipelines |
@@ -370,6 +370,7 @@ It is also the only way a self-hosting claim means anything.
 | `try_run_capture` runtime | streams, statuses, signal, stdin, arguments, environment/cwd, start failures, NUL/limits, deadlock, and leak/zombie checks through both pipelines |
 | `try_file_info` runtime | files, directories, modes, sizes, symlinks, dangling links, loops, missing, long/empty paths, FIFOs, permissions, and 10,000 calls through both pipelines |
 | `try_create_temp_directory` runtime | `TMPDIR` selection, relative/symlinked bases, invalid prefixes, mode under four umasks, uniqueness, 1,000 creations, Go-compatible failures, and a descriptor-limited loop through both pipelines |
+| Embedded runtime module | 98,173-byte generated `purr/embedded.ktn`; three-way byte identity, generated-file round trip, embedded-runtime fixture, NUL/invalid-UTF-8 failures, and Clang UBSan |
 
 </details>
 

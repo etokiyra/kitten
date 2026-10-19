@@ -1,5 +1,8 @@
 # Compiled Go binaries (including the compiler entry point built from cmd/purr).
+# The root binary and the purr/ source directory share a name, so the directory
+# and its contents are re-included explicitly.
 /purr
+!/purr/
 /purr.exe
 
 # Go build, test, and coverage output.

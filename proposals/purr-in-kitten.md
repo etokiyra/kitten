@@ -4,10 +4,10 @@
 >
 > The human approved this plan on 2026-10-18. Implementation proceeds one commit
 > per step in the order below. The `try_getenv`/`EnvResult`,
-> `try_run_capture`/`CapturedRunResult`, `try_file_info`/`FileInfoResult`, and
-> `try_create_temp_directory`/`TempDirectoryResult` steps are implemented so
-> far; no `purr` command described here is implemented unless explicitly marked
-> **already implemented**.
+> `try_run_capture`/`CapturedRunResult`, `try_file_info`/`FileInfoResult`,
+> `try_create_temp_directory`/`TempDirectoryResult`, and embedded runtime
+> generation steps are implemented so far; no `purr` command described here is
+> implemented unless explicitly marked **already implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -78,8 +78,8 @@ Implementation status:
 | 2. `try_run_capture` | **implemented in 9.2** |
 | 3. `try_file_info` | **implemented in 9.3** |
 | 4. `try_create_temp_directory` | **implemented in 9.4** |
-| 5. Embedded runtime generation | proposed, next |
-| 6. TOML subset parser | proposed |
+| 5. Embedded runtime generation | **implemented in 9.5** |
+| 6. TOML subset parser | proposed, next |
 | 7. `purr new` | proposed |
 | 8. Kitten `purr` source-mode build/run | proposed |
 | 9. Project mode | proposed |
@@ -500,13 +500,15 @@ The cost is one new top-level file; there is no path migration.
 Build it, while Go is authoritative, with:
 
 ```sh
-go build -o purr ./cmd/purr
-./purr build purr.ktn -o purr
+go build -o /tmp/purr-bootstrap ./cmd/purr
+/tmp/purr-bootstrap build purr.ktn -o /tmp/purr-kitten
 ```
 
 The second command is a normal Go-pipeline build of the Kitten source. After
 the Kitten `purr` exists, it can build `purr.ktn` itself and the result can be
-compared with the Go-built binary's generated C for the fixpoint.
+compared with the Go-built binary's generated C for the fixpoint. The
+repository-root `purr/` source directory means a binary cannot also be written
+as repository-root `purr`; this command uses external paths.
 
 ### Rejected alternatives
 
@@ -788,18 +790,48 @@ and a `purr.toml` in the **current directory**.
 `target/` is the only generated project directory; `.gitignore` contains
 `/target`.
 
-## 10. Runtime source embedding and installed layout
+## 10. Runtime source embedding and installed layout (implemented in 9.5)
 
-The Go CLI embeds `runtime/csrc` with `//go:embed`. Kitten needs an equivalent:
+The Go CLI embeds `runtime/csrc` with `//go:embed`. The Kitten toolchain now has
+the equivalent in `tools/embed_runtime.ktn`, a Kitten program with no imports:
 
-1. a GPL build-time generator (initially a small Go command, later a Kitten
-   generator in the bootstrap) reads `runtime/csrc/kitten_runtime.c` and `.h`;
-2. it writes `purr/embedded.ktn`, a generated module of string constants with
-   C-safe escaping and the MIT notice preserved in the embedded text;
-3. a test regenerates and byte-compares the module, so the checked-in generated
-   file cannot silently drift;
-4. `purr build` writes those strings to its temporary build directory with
-   `try_write_file` (0644).
+1. `embed_runtime <repo-root>` reads
+   `<repo-root>/runtime/csrc/kitten_runtime.h` and `kitten_runtime.c` with
+   `try_read_file`;
+2. it verifies each Kitten string length against the `try_file_info` file size,
+   rejects NUL and invalid UTF-8 with the file named, and rejects any byte class
+   it cannot reproduce;
+3. it writes `<repo-root>/purr/embedded.ktn`, creating `purr/` only when
+   `try_file_info` says it is missing;
+4. the generated module exposes exactly
+   `embedded_runtime_header()` and `embedded_runtime_source()`, with private
+   chunk helpers, bounded literal lines, and a balanced concatenation tree;
+5. a drift test regenerates the module through the Go pipeline, the Kitten
+   pipeline, and an independent Go reference, and byte-compares all three with
+   the committed file.
+
+Regeneration from the repository root:
+
+```sh
+purr build tools/embed_runtime.ktn -o /tmp/embed_runtime
+/tmp/embed_runtime .
+```
+
+**Escaping and shape.** The supported Kitten escapes are `\n`, `\t`, `\"`, and
+`\\`. Valid UTF-8 and raw CR/control bytes are copied literally; NUL and invalid
+UTF-8 fail loudly. Each source literal is at most 84 escaped bytes, so every
+generated line is under 100 columns, and each chunk returns at most 4096 decoded
+bytes. The public functions combine chunks in a balanced tree, so materializing
+a string copies O(n log n) bytes rather than the quadratic cost of a growing
+left-to-right chain. The generated file is 98,173 bytes and 1,110 lines, with a
+maximum line length of 99.
+
+**Repository finding.** `.gitignore` already anchored the root binary as
+`/purr`, but Git still treats that pattern as matching a directory named
+`purr/`, which silently ignored the generated module. 9.5 adds
+`!/purr/` so only the root binary remains ignored. The hygiene test runs
+`git check-ignore -q` and `git check-ignore -v` and requires no match for
+`purr/embedded.ktn`; the file is tracked after the commit.
 
 Installed layout is then one binary and no runtime directory. This is required
 for a later one-line installer: the installer only places `purr` and any
@@ -922,11 +954,10 @@ design-only phase.
    then written in Kitten, with no `try_find_program` built-in.
 4. **Temp directory** (`try_create_temp_directory`) — implemented in 9.4;
    mode/unique/cleanup. Acceptance: build/run temp trees and failure cleanup.
-5. **Embedded runtime generation** — next; generator, generated
-   `purr/embedded.ktn`, drift test, MIT notice. Acceptance: regenerate
-   byte-identical.
-6. **TOML subset parser** — `purr/manifest.ktn`, independent Kitten tests and
-   exact errors. Acceptance: valid/unsupported corpus.
+5. **Embedded runtime generation** — implemented in 9.5; Kitten generator,
+   generated `purr/embedded.ktn`, three-way drift test, MIT notice.
+6. **TOML subset parser** — next; `purr/manifest.ktn`, independent Kitten tests
+   and exact errors. Acceptance: valid/unsupported corpus.
 7. **`purr new`** — CLI, templates, modes, cleanup, name validation. Acceptance:
    exact tree/bytes/messages/modes, no license in templates.
 8. **Kitten `purr` root and source-mode build/run** — `purr.ktn`, compiler

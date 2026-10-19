@@ -19,7 +19,9 @@ Project instructions for everyone (human or AI) working on Kitten.
    `tests/`, and compare the program's actual output against the expected output.
 5. Run `go test ./...` before completing a task. Also run `go vet ./...` and
    `gofmt` (or `gofmt -l .`) when Go code changed. Build the CLI with
-   `go build ./cmd/purr` when the command or its packaged code changed.
+   `go build -o /tmp/purr ./cmd/purr` when the command or its packaged code
+   changed. The repository-root `purr/` source directory prevents the default
+   output name `purr`.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
@@ -244,16 +246,39 @@ rewriting `purr`, `purr new`, and `purr.toml`; it is **ADOPTED as the plan;
 implementation in progress**. Phase 9.1 implemented its first step, the `try_getenv`
 built-in and predeclared `EnvResult` union, and Phase 9.2 implemented
 `try_run_capture` and `CapturedRunResult`, Phase 9.3 implemented
-`try_file_info` and `FileInfoResult`, and Phase 9.4 implemented
-`try_create_temp_directory` and `TempDirectoryResult`, in both pipelines and the
-MIT C runtime. The next implementation step is 9.5's embedded runtime
-generation, followed by TOML, `purr new`, and `purr` build/run parity.
-`try_find_program` is intentionally dropped: PATH search will be Kitten code
-over `try_getenv` and `try_file_info`. The Kitten loader/driver can now accept
-relative roots in a separate later change. File writing now unblocks `purr new`
-and process launch makes `purr run`-style tooling writable in Kitten, both as
-separate later phases. A SPEC cleanup of Go/C-flavored wording remains a later
-candidate. The native backend and a standard library remain unauthorized.
+`try_file_info` and `FileInfoResult`, Phase 9.4 implemented
+`try_create_temp_directory` and `TempDirectoryResult`, and Phase 9.5 embedded
+the C runtime sources in `purr/embedded.ktn`, in both pipelines and the MIT C
+runtime. The next implementation step is 9.6's `purr.toml` subset parser,
+followed by `purr new` and `purr` build/run parity. `try_find_program` is
+intentionally dropped: PATH search will be Kitten code over `try_getenv` and
+`try_file_info`. The Kitten loader/driver can now accept relative roots in a
+separate later change. File writing now unblocks `purr new` and process launch
+makes `purr run`-style tooling writable in Kitten, both as separate later
+phases. A SPEC cleanup of Go/C-flavored wording remains a later candidate. The
+native backend and a standard library remain unauthorized.
+
+### Generated runtime embedding
+
+`purr/embedded.ktn` is generated from `runtime/csrc/kitten_runtime.h` and
+`runtime/csrc/kitten_runtime.c` by `tools/embed_runtime.ktn`. Regenerate it from
+the repository root with:
+
+```sh
+purr build tools/embed_runtime.ktn -o /tmp/embed_runtime
+/tmp/embed_runtime .
+```
+
+Any change under `runtime/csrc/` requires regenerating and committing
+`purr/embedded.ktn`; the three-way drift test regenerates it through the Go
+pipeline, the Kitten pipeline, and an independent Go reference and fails if the
+committed file differs. The embedded strings are MIT-licensed runtime sources
+with their notices preserved; the generated file's own header records the
+toolchain license.
+
+Because `purr/` is now a source directory, `go build ./cmd/purr` cannot write a
+repository-root binary named `purr`; build it to an external path or install
+location, for example `go build -o /tmp/purr ./cmd/purr`.
 
 ### Adding a built-in
 
