@@ -1,0 +1,745 @@
+// purr/build.ktn - the in-process build command for the Kitten-written purr.
+//
+// It reproduces the Go CLI's build pipeline: load, check, and generate with the
+// Kitten compiler modules, discover the C compiler and GC flags, write a private
+// temp tree with the embedded runtime, invoke the compiler, validate the output,
+// and clean up without recursion.
+
+import "embedded.ktn";
+import "../selfhost/loader/loader.ktn";
+import "../selfhost/loader/paths.ktn";
+import "../selfhost/lexer/lexer.ktn";
+import "../selfhost/parser/parser.ktn";
+import "../selfhost/checker/checker.ktn";
+import "../selfhost/codegen/errors.ktn";
+import "../selfhost/codegen/unit.ktn";
+
+public union BuildResult {
+    Ok { string warnings; string notes; }
+    Failed { string message; string output; string notes; }
+}
+
+union PathResult {
+    Ok { string path; }
+    Failed { string message; }
+}
+
+union LookPathResult {
+    Ok { string path; }
+    Relative
+    Missing
+}
+
+struct Compiler {
+    string program;
+    string[] arguments;
+    int argument_count;
+}
+
+struct StringList {
+    string[] values;
+    int count;
+    int capacity;
+}
+
+struct BuildTree {
+    string directory;
+    string program;
+    string runtime_c;
+    string runtime_h;
+    bool program_written;
+    bool runtime_c_written;
+    bool runtime_h_written;
+}
+
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+fn quote_argument(string value) -> string {
+    string result = "\"";
+    int index = 0;
+    while (index < length(value)) {
+        int octet = value[index];
+        if (octet == 34) {
+            result = result + "\\\"";
+        } else if (octet == 92) {
+            result = result + "\\\\";
+        } else if (octet == 10) {
+            result = result + "\\n";
+        } else if (octet == 9) {
+            result = result + "\\t";
+        } else if (octet == 13) {
+            result = result + "\\r";
+        } else if (octet < 32 || octet >= 127) {
+            result = result + "\\x" +
+                substring("0123456789abcdef", octet / 16, octet / 16 + 1) +
+                substring("0123456789abcdef", octet % 16, octet % 16 + 1);
+        } else {
+            result = result + substring(value, index, index + 1);
+        }
+        index++;
+    }
+    return result + "\"";
+}
+
+fn is_space(int value) -> bool {
+    return value == 32 || value == 9 || value == 10 || value == 13 ||
+        value == 11 || value == 12;
+}
+
+fn trim_space(string value) -> string {
+    int start = 0;
+    int end = length(value);
+    while (start < end && is_space(value[start])) {
+        start++;
+    }
+    while (end > start && is_space(value[end - 1])) {
+        end--;
+    }
+    return substring(value, start, end);
+}
+
+fn split_fields(string value) -> StringList {
+    StringList fields = new_string_list();
+    int index = 0;
+    int size = length(value);
+    while (index < size) {
+        while (index < size && is_space(value[index])) {
+            index++;
+        }
+        int start = index;
+        while (index < size && !is_space(value[index])) {
+            index++;
+        }
+        if (index > start) {
+            list_append(fields, substring(value, start, index));
+        }
+    }
+    return fields;
+}
+
+fn new_string_list() -> StringList {
+    return StringList {
+        values = new string[8],
+        count = 0,
+        capacity = 8
+    };
+}
+
+fn list_append(StringList list, string value) {
+    if (list.count == list.capacity) {
+        int capacity = list.capacity * 2;
+        string[] grown = new string[capacity];
+        int index = 0;
+        while (index < list.count) {
+            grown[index] = list.values[index];
+            index++;
+        }
+        list.values = grown;
+        list.capacity = capacity;
+    }
+    list.values[list.count] = value;
+    list.count++;
+}
+
+fn list_array(StringList list) -> string[] {
+    string[] result = new string[list.count];
+    int index = 0;
+    while (index < list.count) {
+        result[index] = list.values[index];
+        index++;
+    }
+    return result;
+}
+
+fn ends_with(string value, string suffix) -> bool {
+    int size = length(value);
+    int suffix_size = length(suffix);
+    if (suffix_size > size) {
+        return false;
+    }
+    return substring(value, size - suffix_size, size) == suffix;
+}
+
+fn base_name(string path) -> string {
+    int size = length(path);
+    if (size == 0) {
+        return ".";
+    }
+    int end = size;
+    while (end > 1 && path[end - 1] == 47) {
+        end--;
+    }
+    int start = end;
+    while (start > 0 && path[start - 1] != 47) {
+        start--;
+    }
+    string result = substring(path, start, end);
+    if (result == "") {
+        return "/";
+    }
+    return result;
+}
+
+fn default_output_path(string source) -> string {
+    string base = base_name(source);
+    if (ends_with(base, ".ktn")) {
+        base = substring(base, 0, length(base) - 4);
+    }
+    if (base == "" || base == ".") {
+        return "a.out";
+    }
+    return base;
+}
+
+public fn build_default_output(string source) -> string {
+    return default_output_path(source);
+}
+
+fn absolute_path(string path) -> PathResult {
+    if (path == "") {
+        match (try_current_directory()) {
+            Ok(current) {
+                return PathResult.Ok { path = clean_path(current) };
+            }
+            Failed(message) {
+                return PathResult.Failed { message = message };
+            }
+        }
+    }
+    if (path[0] == 47) {
+        return PathResult.Ok { path = clean_path(path) };
+    }
+    match (try_current_directory()) {
+        Ok(current) {
+            return PathResult.Ok { path = clean_path(current + "/" + path) };
+        }
+        Failed(message) {
+            return PathResult.Failed { message = message };
+        }
+    }
+}
+
+fn contains_slash(string value) -> bool {
+    int index = 0;
+    while (index < length(value)) {
+        if (value[index] == 47) {
+            return true;
+        }
+        index++;
+    }
+    return false;
+}
+
+fn is_absolute(string path) -> bool {
+    return length(path) > 0 && path[0] == 47;
+}
+
+fn executable_file(string path) -> bool {
+    match (try_file_info(path)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            return is_file && executable;
+        }
+        Missing {
+            return false;
+        }
+        Failed(message) {
+            return false;
+        }
+    }
+}
+
+fn look_path(string file) -> LookPathResult {
+    if (file == "" || file == "." || file == "..") {
+        return LookPathResult.Missing;
+    }
+    if (contains_slash(file)) {
+        if (executable_file(file)) {
+            return LookPathResult.Ok { path = file };
+        }
+        return LookPathResult.Missing;
+    }
+    match (try_getenv("PATH")) {
+        Unset {
+            return LookPathResult.Missing;
+        }
+        Set(path) {
+            if (length(path) == 0) {
+                return LookPathResult.Missing;
+            }
+            int start = 0;
+            int index = 0;
+            while (index <= length(path)) {
+                bool at_end = index == length(path);
+                if (at_end || path[index] == 58) { // ':'
+                    string component = substring(path, start, index);
+                    string directory = component;
+                    if (directory == "") {
+                        directory = ".";
+                    }
+                    string candidate = clean_path(directory + "/" + file);
+                    if (executable_file(candidate)) {
+                        if (!is_absolute(candidate)) {
+                            return LookPathResult.Relative;
+                        }
+                        return LookPathResult.Ok { path = candidate };
+                    }
+                    start = index + 1;
+                }
+                index++;
+            }
+        }
+    }
+    return LookPathResult.Missing;
+}
+
+fn discover_compiler() -> PathResult {
+    match (try_getenv("CC")) {
+        Set(raw) {
+            string configured = trim_space(raw);
+            if (length(configured) > 0) {
+                StringList fields = split_fields(configured);
+                if (fields.count == 0) {
+                    return PathResult.Failed { message = "CC is set but empty" };
+                }
+                string program = fields.values[0];
+                string[] leading = new string[fields.count - 1];
+                int index = 1;
+                while (index < fields.count) {
+                    leading[index - 1] = fields.values[index];
+                    index++;
+                }
+                match (look_path(program)) {
+                    Ok(resolved) {
+                        return PathResult.Ok { path = resolved };
+                    }
+                    Relative {
+                        return PathResult.Failed {
+                            message = "CC=" + quote_argument(configured) + ": " +
+                                quote_argument(program) + " not found"
+                        };
+                    }
+                    Missing {
+                        return PathResult.Failed {
+                            message = "CC=" + quote_argument(configured) + ": " +
+                                quote_argument(program) + " not found"
+                        };
+                    }
+                }
+            }
+        }
+        Unset {}
+    }
+
+    string[] candidates = new string[3];
+    candidates[0] = "cc";
+    candidates[1] = "gcc";
+    candidates[2] = "clang";
+    int index = 0;
+    while (index < 3) {
+        match (look_path(candidates[index])) {
+            Ok(resolved) {
+                return PathResult.Ok { path = resolved };
+            }
+            Relative {}
+            Missing {}
+        }
+        index++;
+    }
+    return PathResult.Failed {
+        message = "no C compiler found; set CC or install cc, gcc, or clang"
+    };
+}
+
+fn compiler_with_leading(string program, string[] leading) -> Compiler {
+    return Compiler {
+        program = program,
+        arguments = leading,
+        argument_count = length(leading)
+    };
+}
+
+fn capture_ok(CapturedRunResult result) -> bool {
+    match (result) {
+        Ok(status, out, err) { return status == 0; }
+        Failed(message) { return false; }
+    }
+}
+
+fn capture_status(CapturedRunResult result) -> int {
+    match (result) {
+        Ok(status, out, err) { return status; }
+        Failed(message) { return 1; }
+    }
+}
+
+fn capture_out(CapturedRunResult result) -> string {
+    match (result) {
+        Ok(status, out, err) { return out; }
+        Failed(message) { return ""; }
+    }
+}
+
+fn pkg_config_args(string first, string second) -> string[] {
+    string[] arguments = new string[2];
+    arguments[0] = first;
+    arguments[1] = second;
+    return arguments;
+}
+
+fn gc_build_flags(StringList compile_flags, StringList link_flags) {
+    match (look_path("pkg-config")) {
+        Ok(pkg_config) {
+            string[] exists_arguments = pkg_config_args("--exists", "bdw-gc");
+            if (capture_ok(try_run_capture(pkg_config, exists_arguments))) {
+                string[] cflags_arguments = pkg_config_args("--cflags", "bdw-gc");
+                CapturedRunResult cflags_result = try_run_capture(pkg_config, cflags_arguments);
+                if (capture_ok(cflags_result)) {
+                    StringList cflags = split_fields(capture_out(cflags_result));
+                    int index = 0;
+                    while (index < cflags.count) {
+                        list_append(compile_flags, cflags.values[index]);
+                        index++;
+                    }
+                }
+                string[] libs_arguments = pkg_config_args("--libs", "bdw-gc");
+                CapturedRunResult libs_result = try_run_capture(pkg_config, libs_arguments);
+                if (capture_ok(libs_result)) {
+                    StringList libs = split_fields(capture_out(libs_result));
+                    int index = 0;
+                    while (index < libs.count) {
+                        list_append(link_flags, libs.values[index]);
+                        index++;
+                    }
+                }
+            }
+        }
+        Relative {}
+        Missing {}
+    }
+    if (link_flags.count == 0) {
+        list_append(link_flags, "-lgc");
+    }
+}
+
+fn load_error_text(LoadError error) -> string {
+    if (error.path != "" && error.line > 0) {
+        return error.path + ":" + decimal(error.line) + ":" +
+            decimal(error.column) + ": " + error.message;
+    }
+    if (error.path != "") {
+        return error.path + ": " + error.message;
+    }
+    return error.message;
+}
+
+fn check_error_text(string source, CheckError error) -> string {
+    string file = error.file;
+    if (file == "") {
+        file = source;
+    }
+    return file + ":" + decimal(error.line) + ":" + decimal(error.column) +
+        ": " + error.message;
+}
+
+fn generate_error_text(string source, GenerateError error) -> string {
+    string file = error.file;
+    if (file == "") {
+        file = source;
+    }
+    return file + ":" + decimal(error.line) + ":" + decimal(error.column) +
+        ": " + error.message;
+}
+
+fn write_failed(string path) -> bool {
+    match (try_file_info(path)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            return true;
+        }
+        Missing { return false; }
+        Failed(message) { return false; }
+    }
+}
+
+fn cleanup_notes(BuildTree tree) -> string {
+    string notes = "";
+    if (tree.runtime_h_written) {
+        match (try_remove(tree.runtime_h)) {
+            Ok {}
+            Failed(message) {
+                notes = notes + "       note: could not remove " +
+                    tree.runtime_h + ": " + message;
+            }
+        }
+    }
+    if (tree.runtime_c_written) {
+        if (notes != "") {
+            notes = notes + "\n";
+        }
+        match (try_remove(tree.runtime_c)) {
+            Ok {}
+            Failed(message) {
+                notes = notes + "       note: could not remove " +
+                    tree.runtime_c + ": " + message;
+            }
+        }
+    }
+    if (tree.program_written) {
+        if (notes != "") {
+            notes = notes + "\n";
+        }
+        match (try_remove(tree.program)) {
+            Ok {}
+            Failed(message) {
+                notes = notes + "       note: could not remove " +
+                    tree.program + ": " + message;
+            }
+        }
+    }
+    if (notes != "") {
+        notes = notes + "\n";
+    }
+    match (try_remove(tree.directory)) {
+        Ok {}
+        Failed(message) {
+            notes = notes + "       note: could not remove " +
+                tree.directory + ": " + message;
+        }
+    }
+    return notes;
+}
+
+fn failed_before_tree(string source, string message) -> BuildResult {
+    return BuildResult.Failed {
+        message = source + ": " + message,
+        output = "",
+        notes = ""
+    };
+}
+
+fn failed_tree(string source, string message, string output, BuildTree tree) -> BuildResult {
+    return BuildResult.Failed {
+        message = source + ": " + message,
+        output = output,
+        notes = cleanup_notes(tree)
+    };
+}
+
+fn combined_output(string out, string err) -> string {
+    return trim_space(out + err);
+}
+
+public fn build_project(string source_path, string output_path) -> BuildResult {
+    match (absolute_path(source_path)) {
+        Failed(message) {
+            return failed_before_tree(source_path, message);
+        }
+        Ok(absolute_source) {
+            match (load_program(absolute_source)) {
+                Failure(error) {
+                    return BuildResult.Failed {
+                        message = load_error_text(error),
+                        output = "",
+                        notes = ""
+                    };
+                }
+                Success(modules, module_count) {
+                    match (check_modules(modules, module_count)) {
+                        Failure(error) {
+                            return BuildResult.Failed {
+                                message = check_error_text(source_path, error),
+                                output = "",
+                                notes = ""
+                            };
+                        }
+                        Success(summary, model) {
+                            match (emit_translation_unit(model)) {
+                                Failure(error) {
+                                    return BuildResult.Failed {
+                                        message = generate_error_text(source_path, error),
+                                        output = "",
+                                        notes = ""
+                                    };
+                                }
+                                Success(generated, lines) {
+                                    match (discover_compiler()) {
+                                        Failed(message) {
+                                            return failed_before_tree(source_path, message);
+                                        }
+                                        Ok(compiler_program) {
+                                            match (try_create_temp_directory("purr-build")) {
+                                                Failed(message) {
+                                                    return failed_before_tree(source_path, message);
+                                                }
+                                                Ok(directory) {
+                                                    BuildTree tree = BuildTree {
+                                                        directory = directory,
+                                                        program = directory + "/program.c",
+                                                        runtime_c = directory + "/kitten_runtime.c",
+                                                        runtime_h = directory + "/kitten_runtime.h",
+                                                        program_written = false,
+                                                        runtime_c_written = false,
+                                                        runtime_h_written = false
+                                                    };
+
+                                                    match (try_write_file(tree.program, generated)) {
+                                                        Failed(message) {
+                                                            tree.program_written = write_failed(tree.program);
+                                                            return failed_tree(source_path, message, "", tree);
+                                                        }
+                                                        Ok { tree.program_written = true; }
+                                                    }
+                                                    match (try_write_file(tree.runtime_c, embedded_runtime_source())) {
+                                                        Failed(message) {
+                                                            tree.runtime_c_written = write_failed(tree.runtime_c);
+                                                            return failed_tree(source_path, message, "", tree);
+                                                        }
+                                                        Ok { tree.runtime_c_written = true; }
+                                                    }
+                                                    match (try_write_file(tree.runtime_h, embedded_runtime_header())) {
+                                                        Failed(message) {
+                                                            tree.runtime_h_written = write_failed(tree.runtime_h);
+                                                            return failed_tree(source_path, message, "", tree);
+                                                        }
+                                                        Ok { tree.runtime_h_written = true; }
+                                                    }
+
+                                                    match (absolute_path(output_path)) {
+                                                        Failed(message) {
+                                                            return failed_tree(source_path, message, "", tree);
+                                                        }
+                                                        Ok(absolute_output) {
+                                                            StringList compile_flags = new_string_list();
+                                                            StringList link_flags = new_string_list();
+                                                            gc_build_flags(compile_flags, link_flags);
+
+                                                            Compiler compiler = compiler_with_leading(
+                                                                compiler_program, new string[0]);
+                                                            // Re-discover leading CC arguments.
+                                                            match (try_getenv("CC")) {
+                                                                Set(raw) {
+                                                                    string configured = trim_space(raw);
+                                                                    if (length(configured) > 0) {
+                                                                        StringList fields = split_fields(configured);
+                                                                        int field_index = 1;
+                                                                        string[] leading = new string[fields.count - 1];
+                                                                        while (field_index < fields.count) {
+                                                                            leading[field_index - 1] = fields.values[field_index];
+                                                                            field_index++;
+                                                                        }
+                                                                        compiler = compiler_with_leading(compiler_program, leading);
+                                                                    }
+                                                                }
+                                                                Unset {}
+                                                            }
+
+                                                            StringList arguments = new_string_list();
+                                                            int compiler_index = 0;
+                                                            while (compiler_index < compiler.argument_count) {
+                                                                list_append(arguments, compiler.arguments[compiler_index]);
+                                                                compiler_index++;
+                                                            }
+                                                            list_append(arguments, "-std=c11");
+                                                            list_append(arguments, "-Wall");
+                                                            list_append(arguments, "-Wextra");
+                                                            int flag_index = 0;
+                                                            while (flag_index < compile_flags.count) {
+                                                                list_append(arguments, compile_flags.values[flag_index]);
+                                                                flag_index++;
+                                                            }
+                                                            list_append(arguments, "-o");
+                                                            list_append(arguments, absolute_output);
+                                                            list_append(arguments, tree.program);
+                                                            list_append(arguments, tree.runtime_c);
+                                                            flag_index = 0;
+                                                            while (flag_index < link_flags.count) {
+                                                                list_append(arguments, link_flags.values[flag_index]);
+                                                                flag_index++;
+                                                            }
+
+                                                            // Go sets command.Dir to the build tree. try_run_capture
+                                                            // inherits its cwd, so run a fixed shell that changes to
+                                                            // the tree and execs the compiler with the same argv.
+                                                            StringList command_arguments = new_string_list();
+                                                            list_append(command_arguments, "-c");
+                                                            list_append(command_arguments,
+                                                                "cd \"$1\" || exit 125; shift; exec \"$@\"");
+                                                            list_append(command_arguments, "purr-build");
+                                                            list_append(command_arguments, tree.directory);
+                                                            list_append(command_arguments, compiler.program);
+                                                            int command_index = 0;
+                                                            while (command_index < arguments.count) {
+                                                                list_append(command_arguments,
+                                                                    arguments.values[command_index]);
+                                                                command_index++;
+                                                            }
+                                                            CapturedRunResult capture = try_run_capture(
+                                                                "/bin/sh", list_array(command_arguments));
+                                                            match (capture) {
+                                                                Failed(message) {
+                                                                    return failed_tree(source_path,
+                                                                        "C compilation failed: " + message,
+                                                                        "", tree);
+                                                                }
+                                                                Ok(status, out, err) {
+                                                                    string output = combined_output(out, err);
+                                                                    if (status != 0) {
+                                                                        return failed_tree(source_path,
+                                                                            "C compilation failed: exit status " +
+                                                                            decimal(status),
+                                                                            output, tree);
+                                                                    }
+                                                                    match (try_file_info(absolute_output)) {
+                                                                        Missing {
+                                                                            return failed_tree(source_path,
+                                                                                "C compiler reported success but " +
+                                                                                absolute_output + " was not produced",
+                                                                                output, tree);
+                                                                        }
+                                                                        Failed(message) {
+                                                                            return failed_tree(source_path,
+                                                                                "C compiler reported success but " +
+                                                                                absolute_output + " was not produced",
+                                                                                output, tree);
+                                                                        }
+                                                                        Ok(is_file, is_directory, is_symlink, executable, size) {
+                                                                            if (is_directory) {
+                                                                                return failed_tree(source_path,
+                                                                                    "output path " +
+                                                                                    absolute_output + " is a directory",
+                                                                                    output, tree);
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    string notes = cleanup_notes(tree);
+                                                                    return BuildResult.Ok {
+                                                                        warnings = output,
+                                                                        notes = notes
+                                                                    };
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

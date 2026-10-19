@@ -3431,3 +3431,34 @@ integration, the pipeline that writes and compiles the output, and the productio
 compiler are Go. The Go compiler must therefore remain
 the bootstrap reference until the Kitten-written compiler can compile its own source
 through a Kitten-written pipeline and reproduce the same behavior.
+
+
+---
+
+## 29. Kitten-written `purr` sidecar (experimental)
+
+`purr.ktn`, `purr/cli.ktn`, and `purr/build.ktn` are a Kitten-written sidecar
+command, built and tested as `purr-kt`. The Go CLI remains the authoritative
+`purr`. The sidecar currently supports `help`, `new`, and `build`; `run` is a
+recognized stub. It does not implement project discovery or library builds.
+
+`build` links the Kitten-written loader, lexer, parser, checker, and generator
+in process, discovers `CC` or `cc`/`gcc`/`clang` with PATH rules matching Go's
+`exec.LookPath` (relative PATH results are rejected as Go's `ErrDot`), reads
+`pkg-config bdw-gc` flags, writes the generated C and embedded runtime to a
+private temp tree, invokes the C compiler, and validates the output.
+
+The sidecar intentionally differs from the Go CLI in four tool-behavior details:
+
+- combined compiler output is captured stdout followed by captured stderr,
+  without a separator; real GCC and Clang put diagnostics on stderr only;
+- a compiler killed by a signal reports `exit status <128+n>` rather than Go's
+  `signal: <name>`;
+- the private temp directory is named `purr-build.<suffix>` rather than
+  `purr-build-<digits>`;
+- cleanup is non-recursive and reports leftovers as
+  `note: could not remove ...` lines instead of Go's silent `RemoveAll`.
+
+The compiler is executed through a fixed `/bin/sh` `cd` plus `exec` wrapper so
+its working directory matches Go's build-tree `command.Dir`; the compiler
+argument vector is unchanged. These differences do not change the language.

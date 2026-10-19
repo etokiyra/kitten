@@ -82,9 +82,9 @@ Implementation status:
 | 5. Embedded runtime generation | **implemented in 9.5** |
 | 6. TOML subset parser | **implemented in 9.6** |
 | 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
-| 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build/run stubs** |
-| 8b. Kitten `purr` build | proposed, next |
-| 8c. Kitten `purr` run + full parity | proposed |
+| 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build added in 9.8b** |
+| 8b. Kitten `purr` build | **implemented in 9.8b** |
+| 8c. Kitten `purr` run + full parity | proposed, next |
 | 9. Project mode | proposed |
 | 10. Library object mode | proposed, deferred |
 | 11. Freeze / name swap | proposed (9.9 milestone) |
@@ -862,8 +862,9 @@ command.
 
 `purr.ktn` is the repository-root entry point and `purr/cli.ktn` parses argv.
 The sidecar binary is always named `purr-kt`; the Go CLI remains the
-authoritative `purr`. The CLI module imports only `new.ktn` (and what that
-imports), so no compiler module is linked and the binary stays small.
+authoritative `purr`. In 9.8a the sidecar imported only `new.ktn` and stayed
+small. 9.8b adds `build.ktn` and links the in-process compiler modules, so the
+current sidecar is substantially larger; `run` is still a stub.
 
 Implemented in 9.8a:
 
@@ -872,8 +873,10 @@ Implemented in 9.8a:
 - unknown command: `purr: unknown command "<name>"`, blank line, usage, stderr,
   exit 2;
 - `new`: the 9.7 module and probe behavior, with output and statuses unchanged;
-- `build` and `run`: recognized stubs printing
-  `purr: command "<name>" is not implemented in this build yet`, then usage on
+- `build`: the in-process 9.8b implementation, with Go-compatible argument
+  parsing, diagnostics, streams, and statuses; and
+- `run`: a recognized stub printing
+  `purr: command "run" is not implemented in this build yet`, then usage on
   stderr, exit 2.
 
 The usage text is the Go text plus two lines, in this order:
@@ -981,6 +984,21 @@ argv parse
 `purr run` is the same build followed by `try_run(executable, [])`, inheriting
 stdin/stdout/stderr and returning the child status.
 
+**9.8b intentional deviations.** The Kitten `build` implementation uses
+`try_run_capture`, whose streams are separate. Its combined compiler text is
+captured stdout followed by captured stderr, with no separator. Go's
+`CombinedOutput` interleaves the streams; real GCC and Clang write diagnostics
+to stderr only, so their output agrees. A compiler killed by a signal appears as
+`exit status <128+n>` in the Kitten CLI; Go prints `signal: <name>`.
+`try_run_capture` also cannot distinguish that synthesized status from a real
+exit of the same value. The private build directory uses the prefix
+`purr-build.` rather than Go's `purr-build-`. The compiler is invoked through a
+fixed `/bin/sh` `cd` plus `exec` so its working directory matches Go's
+`command.Dir`; the compiler argument vector is unchanged. Cleanup is
+non-recursive and reports leftover paths as `note: could not remove ...` lines
+instead of silently removing the tree. These are tool-behavior differences, not
+language changes.
+
 Bootstrap sequence:
 
 1. Go builds the current `purr` (authoritative).
@@ -1085,10 +1103,11 @@ design-only phase.
    no license in templates. The CLI entry point remains 9.8.
 8. **Kitten `purr`**
    8a. **Entry point, help, and `new`** — implemented in 9.8a as
-   `purr.ktn` + `purr/cli.ktn`; `build`/`run` are stubs.
-   8b. **In-process `build`** — next; compiler linkage, C compiler subprocess,
-   temp dirs, current diagnostics and statuses.
-   8c. **`run` and full parity suite** — compile to a temporary executable,
+   `purr.ktn` + `purr/cli.ktn`; `build` was added in 9.8b, `run` remains a
+   stub.
+   8b. **In-process `build`** — implemented in 9.8b; compiler linkage, C
+   compiler subprocess, temp dirs, current diagnostics and statuses.
+   8c. **`run` and full parity suite** — next; compile to a temporary executable,
    run it, preserve statuses, and pass the complete Go/Kitten parity suite.
 9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.

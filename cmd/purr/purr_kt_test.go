@@ -121,8 +121,8 @@ func TestKittenPurrHelpAndDispatch(t *testing.T) {
 		{"unknown", []string{"wat"}, 2, "", "purr: unknown command \"wat\"\n\n" + purrUsageText() + "\n"},
 		{"empty command", []string{""}, 2, "", "purr: unknown command \"\"\n\n" + purrUsageText() + "\n"},
 		{"flag command", []string{"--version"}, 2, "", "purr: unknown command \"--version\"\n\n" + purrUsageText() + "\n"},
-		{"build stub", []string{"build"}, 2, "", "purr: command \"build\" is not implemented in this build yet\n" + purrUsageText() + "\n"},
-		{"build stub args", []string{"build", "x.ktn"}, 2, "", "purr: command \"build\" is not implemented in this build yet\n" + purrUsageText() + "\n"},
+		{"build usage", []string{"build"}, 2, "", "purr build: missing source file\n\n" + purrUsageText() + "\n"},
+		{"build extension", []string{"build", "x"}, 2, "", "purr build: \"x\" is not a Kitten source file (expected a .ktn file)\n"},
 		{"run stub", []string{"run", "x.ktn"}, 2, "", "purr: command \"run\" is not implemented in this build yet\n" + purrUsageText() + "\n"},
 	}
 	for _, testCase := range cases {
@@ -471,6 +471,16 @@ func TestKittenPurrGeneratedProject(t *testing.T) {
 	run = runExternal(t, goPurr, []string{"run", filepath.Join(project, "src", "main.ktn")}, project, nil)
 	if run.status != 0 || run.stdout != "Hello, world!\n" || run.stderr != "" {
 		t.Fatalf("Go purr run of generated project: status %d, stdout %q, stderr %q", run.status, run.stdout, run.stderr)
+	}
+
+	ktExecutable := filepath.Join(directory, "fromkitten-bin-kt")
+	ktBuild := runPurrKT(t, purr, project, []string{"build", filepath.Join(project, "src", "main.ktn"), "-o", ktExecutable})
+	if ktBuild.status != 0 || ktBuild.stderr != "" {
+		t.Fatalf("purr-kt build of generated project: status %d, stderr %q", ktBuild.status, ktBuild.stderr)
+	}
+	ktRun := runExternal(t, ktExecutable, nil, project, nil)
+	if ktRun.status != 0 || ktRun.stdout != "Hello, world!\n" || ktRun.stderr != "" {
+		t.Fatalf("purr-kt built project: status %d, stdout %q, stderr %q", ktRun.status, ktRun.stdout, ktRun.stderr)
 	}
 }
 

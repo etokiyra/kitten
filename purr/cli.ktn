@@ -3,6 +3,7 @@
 // This build intentionally links only the new-project module, not the compiler.
 // build and run are recognized stubs until 9.8b/9.8c.
 
+import "build.ktn";
 import "new.ktn";
 
 fn usage_text() -> string {
@@ -51,6 +52,123 @@ fn quote_argument(string value) -> string {
 
 fn print_usage_to_stderr() {
     eprint(usage_text());
+}
+
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+fn starts_with(string value, string prefix) -> bool {
+    if (length(prefix) > length(value)) {
+        return false;
+    }
+    return substring(value, 0, length(prefix)) == prefix;
+}
+
+fn ends_with(string value, string suffix) -> bool {
+    if (length(suffix) > length(value)) {
+        return false;
+    }
+    return substring(value, length(value) - length(suffix), length(value)) == suffix;
+}
+
+fn run_build(string[] arguments, int count) {
+    string source = "";
+    string output = "";
+    int positional_count = 0;
+    bool bad = false;
+    string error = "";
+    int index = 2;
+    while (index < count && !bad) {
+        string argument = arguments[index];
+        if (argument == "-o" || argument == "--output") {
+            if (index + 1 >= count) {
+                bad = true;
+                error = argument + " requires a path";
+            } else {
+                output = arguments[index + 1];
+                index++;
+            }
+        } else if (starts_with(argument, "-o=")) {
+            output = substring(argument, 3, length(argument));
+        } else if (starts_with(argument, "--output=")) {
+            output = substring(argument, 9, length(argument));
+        } else if (argument == "--") {
+            index++;
+            while (index < count) {
+                positional_count++;
+                if (positional_count == 1) {
+                    source = arguments[index];
+                }
+                index++;
+            }
+        } else if (length(argument) > 1 && argument[0] == 45) { // '-'
+            bad = true;
+            error = "unknown option " + quote_argument(argument);
+        } else {
+            positional_count++;
+            if (positional_count == 1) {
+                source = arguments[index];
+            }
+        }
+        index++;
+    }
+
+    if (!bad) {
+        if (positional_count == 0) {
+            bad = true;
+            error = "missing source file";
+        } else if (positional_count > 1) {
+            bad = true;
+            error = "expected one source file, got " + decimal(positional_count);
+        }
+    }
+    if (bad) {
+        eprint("purr build: " + error);
+        eprint("");
+        print_usage_to_stderr();
+        exit(2);
+    }
+    if (!ends_with(source, ".ktn")) {
+        eprint("purr build: " + quote_argument(source) +
+            " is not a Kitten source file (expected a .ktn file)");
+        exit(2);
+    }
+    if (output == "") {
+        output = build_default_output(source);
+    }
+
+    match (build_project(source, output)) {
+        Ok(warnings, notes) {
+            if (warnings != "") {
+                eprint(warnings);
+            }
+            if (notes != "") {
+                eprint(notes);
+            }
+            print("built", output);
+            exit(0);
+        }
+        Failed(message, output_text, notes) {
+            eprint(message);
+            if (output_text != "") {
+                eprint(output_text);
+            }
+            if (notes != "") {
+                eprint(notes);
+            }
+            exit(1);
+        }
+    }
 }
 
 fn run_new(string[] arguments, int count) {
@@ -109,11 +227,15 @@ public fn run_cli() {
         print(usage_text());
         exit(0);
     }
+    if (command == "build") {
+        run_build(arguments, count);
+        return;
+    }
     if (command == "new") {
         run_new(arguments, count);
         return;
     }
-    if (command == "build" || command == "run") {
+    if (command == "run") {
         eprint("purr: command " + quote_argument(command) +
             " is not implemented in this build yet");
         print_usage_to_stderr();

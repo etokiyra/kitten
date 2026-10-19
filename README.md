@@ -258,7 +258,7 @@ go build -o /tmp/purr ./cmd/purr
 | Type checker | complete for the specified language, with diagnostics and positions |
 | C code generator | complete for the specified language; emits C, compiled by the host C compiler |
 | C runtime | strings, arrays, maps, file reading, printing, and the garbage collector |
-| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new sidecar are implemented; `build`/`run` are stubs and the Go CLI remains authoritative |
+| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build sidecar are implemented; `run` is a stub and the Go CLI remains authoritative |
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
@@ -273,9 +273,10 @@ deferred decision; nothing is silently invented.
 ### Kitten-written `purr` (in progress)
 
 `purr-kt` is the Kitten-written sidecar entry point. It currently supports
-`help` and `new`; `build` and `run` are recognized stubs that report they are
-not implemented yet. It does not link the compiler. The Go CLI remains the
-authoritative `purr`; `purr-kt` is not installed under the `purr` name.
+`help`, `new`, and `build`; `run` remains a recognized stub. `build` links the
+Kitten-written compiler frontend and invokes the C compiler in process. The Go
+CLI remains the authoritative `purr`; `purr-kt` is not installed under the
+`purr` name.
 
 ---
 
@@ -365,7 +366,7 @@ It is also the only way a self-hosting claim means anything.
 | `exit()` runtime | 6 scenarios, checking stdout, stderr, and status through both pipelines |
 | Kitten driver + wrapper | 10 fixture roots, byte-identical C, native builds under GCC and Clang |
 | Two-stage fixpoint | Go, stage 1, stage 2, and stage 3 C for `driver.ktn` byte-identical; stage 2 matches all 10 roots |
-| Generated programs executed | 10,945 program runs under GCC and Clang, outputs compared, plus 168 Clang UBSan runs |
+| Generated programs executed | 11,158 program runs under GCC and Clang, outputs compared, plus 170 Clang UBSan runs |
 | Defined arithmetic/bitwise/byte runtime | wrapping, shifts, byte arrays, conversions, and failures through both pipelines |
 | `try_read_file` runtime | existing, empty, missing, directory, and unreadable paths through both pipelines |
 | File/directory runtime | writes, bytes, truncation, mkdir, remove, sorted listing, Go-identical errors, and permission paths through both pipelines |
@@ -380,7 +381,7 @@ It is also the only way a self-hosting claim means anything.
 | Embedded runtime module | 98,173-byte generated `purr/embedded.ktn`; three-way byte identity, generated-file round trip, embedded-runtime fixture, NUL/invalid-UTF-8 failures, and Clang UBSan |
 | `purr.toml` parser | 164 pinned inputs, 5,000 fixed-seed randomized cases through both pipelines, exact positions/messages, independent Go oracle, and 1 MiB linear-time checks |
 | `purr new` module/probe | binary and library trees, exact bytes/modes, generated-project compilation, destination/read-only/step-4/step-5 failures, cleanup notes, race model, and Clang UBSan through both pipelines |
-| `purr-kt` entry point | help/dispatch, Go-usage diff, build/run stubs, real `new` parity through both pipelines, generated-project build/run with the Go `purr`, C parity, size/timing, and Clang UBSan |
+| `purr-kt` entry point | help/dispatch, Go-usage diff, real `new` parity, in-process `build` argument/discovery/pkg-config/failure parity, fixtures and modules, generated projects, capstone fixpoint, C parity, size/timing, and Clang UBSan |
 
 </details>
 
