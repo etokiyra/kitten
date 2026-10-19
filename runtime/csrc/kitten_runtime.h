@@ -585,6 +585,20 @@ int ktn_rt_try_file_info(const ktn_string *path,
                          const ktn_string **message);
 
 /*
+ * Creates an absolute, unique temporary directory. The base is a non-empty
+ * $TMPDIR (made absolute against getcwd when relative) or /tmp; an unusable
+ * base fails instead of falling back. The prefix must be 1..64 ASCII bytes from
+ * [A-Za-z0-9._-], and may not be "..", or the call fails with
+ * "invalid temporary directory prefix" before filesystem access. mkdtemp
+ * supplies the atomic six-character suffix and mode 0700. Returns true and a
+ * fresh GC-managed path, or false and a Go-compatible mkdir/stat message.
+ * Opens no file descriptor and registers no cleanup hook.
+ */
+bool ktn_rt_try_create_temp_directory(const ktn_string *prefix,
+                                      const ktn_string **path,
+                                      const ktn_string **message);
+
+/*
  * Built-in print helpers. Each writes a single value. Callers separate
  * arguments with single spaces and terminate the line with
  * ktn_rt_print_newline.

@@ -136,6 +136,9 @@ const (
 	// TryFileInfoFunction reports file metadata without opening the file.
 	TryFileInfoFunction = "ktn_rt_try_file_info"
 
+	// TryCreateTempDirectoryFunction creates a unique temporary directory.
+	TryCreateTempDirectoryFunction = "ktn_rt_try_create_temp_directory"
+
 	// Runtime-module raw-memory and syscall helpers.
 	RawLoad8Function   = "ktn_rt_raw_load8"
 	RawStore8Function  = "ktn_rt_raw_store8"

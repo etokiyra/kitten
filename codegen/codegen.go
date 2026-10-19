@@ -573,7 +573,10 @@ func (g *generator) emitPreludeHelper() error {
 	if err := g.emitCapturePreludeHelper(); err != nil {
 		return err
 	}
-	return g.emitFileInfoPreludeHelper()
+	if err := g.emitFileInfoPreludeHelper(); err != nil {
+		return err
+	}
+	return g.emitTempDirectoryPreludeHelper()
 }
 
 // emitReadFilePreludeHelper emits the helper that turns the runtime's non-fatal
@@ -824,6 +827,32 @@ func (g *generator) emitFileInfoPreludeHelper() error {
 	g.line("if (ktn_result == KTN_RT_FILE_INFO_MISSING) {")
 	g.indent++
 	g.line("return %s();", variantConstructorName(unionType, "Missing"))
+	g.indent--
+	g.line("}")
+	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))
+	g.indent--
+	g.line("}")
+	g.line("")
+	return nil
+}
+
+// emitTempDirectoryPreludeHelper emits the TempDirectoryResult helper.
+func (g *generator) emitTempDirectoryPreludeHelper() error {
+	if _, ok := g.checked.Builtins["try_create_temp_directory"]; !ok {
+		return nil
+	}
+	unionType, err := g.preludeUnionType("TempDirectoryResult")
+	if err != nil {
+		return err
+	}
+	cStruct := structName(unionType.Name, unionType.Module)
+	g.line("%s *%s(const ktn_string *ktn_prefix) {", cStruct, preludeHelperName(unionType.Module, "try_create_temp_directory"))
+	g.indent++
+	g.line("const ktn_string *ktn_path = NULL;")
+	g.line("const ktn_string *ktn_message = NULL;")
+	g.line("if (%s(ktn_prefix, &ktn_path, &ktn_message)) {", runtime.TryCreateTempDirectoryFunction)
+	g.indent++
+	g.line("return %s(ktn_path);", variantConstructorName(unionType, "Ok"))
 	g.indent--
 	g.line("}")
 	g.line("return %s(ktn_message);", variantConstructorName(unionType, "Failed"))

@@ -90,6 +90,9 @@ const (
 	// BuiltinTryFileInfo reports file metadata without opening a file.
 	BuiltinTryFileInfo
 
+	// BuiltinTryCreateTempDirectory creates a unique temporary directory.
+	BuiltinTryCreateTempDirectory
+
 	// BuiltinRawLoad8, BuiltinRawStore8, BuiltinRawLoad64, and
 	// BuiltinRawStore64 are runtime-module memory intrinsics.
 	BuiltinRawLoad8

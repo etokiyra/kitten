@@ -1168,18 +1168,13 @@ bool ktn_rt_try_getenv(const ktn_string *name, const ktn_string **value) {
     return true;
 }
 
-bool ktn_rt_try_current_directory(const ktn_string **path, const ktn_string **message) {
-    if (path == NULL || message == NULL) {
-        ktn_rt_fail("try_current_directory received a null result slot");
-    }
-    *path = NULL;
-    *message = NULL;
-
+/* Returns getcwd's absolute path as a fresh GC-managed string. */
+static ktn_string *ktn_rt_getcwd_string(const ktn_string **message) {
     size_t capacity = 256;
     char *buffer = (char *)malloc(capacity);
     if (buffer == NULL) {
         *message = ktn_rt_operation_error("getwd", ENOMEM);
-        return false;
+        return NULL;
     }
     for (;;) {
         if (getcwd(buffer, capacity) != NULL) {
@@ -1187,30 +1182,162 @@ bool ktn_rt_try_current_directory(const ktn_string **path, const ktn_string **me
             ktn_string *result = ktn_rt_string_allocate((int64_t)length);
             memcpy(ktn_rt_string_bytes(result), buffer, length);
             free(buffer);
-            *path = result;
-            return true;
+            return result;
         }
         int error = errno;
         if (error != ERANGE) {
             free(buffer);
             *message = ktn_rt_operation_error("getwd", error);
-            return false;
+            return NULL;
         }
         if (capacity > SIZE_MAX / 2) {
             free(buffer);
             *message = ktn_rt_operation_error("getwd", ENAMETOOLONG);
-            return false;
+            return NULL;
         }
         size_t next = capacity * 2;
         char *grown = (char *)realloc(buffer, next);
         if (grown == NULL) {
             free(buffer);
             *message = ktn_rt_operation_error("getwd", ENOMEM);
-            return false;
+            return NULL;
         }
         buffer = grown;
         capacity = next;
     }
+}
+
+bool ktn_rt_try_current_directory(const ktn_string **path, const ktn_string **message) {
+    if (path == NULL || message == NULL) {
+        ktn_rt_fail("try_current_directory received a null result slot");
+    }
+    *path = NULL;
+    *message = NULL;
+    *path = ktn_rt_getcwd_string(message);
+    return *path != NULL;
+}
+
+/* Reports whether a temporary-directory prefix is a safe literal component. */
+static bool ktn_rt_valid_temp_prefix(const ktn_string *prefix) {
+    if (prefix->length <= 0 || prefix->length > 64) {
+        return false;
+    }
+    if (prefix->length == 2 && prefix->data[0] == '.' && prefix->data[1] == '.') {
+        return false;
+    }
+    for (int64_t index = 0; index < prefix->length; index++) {
+        unsigned char value = (unsigned char)prefix->data[index];
+        bool allowed = (value >= 'A' && value <= 'Z') ||
+                       (value >= 'a' && value <= 'z') ||
+                       (value >= '0' && value <= '9') ||
+                       value == '.' || value == '_' || value == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Copies a byte range into a fresh GC-managed string. */
+static ktn_string *ktn_rt_string_copy_bytes(const char *bytes, size_t length) {
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    memcpy(ktn_rt_string_bytes(result), bytes, length);
+    return result;
+}
+
+/* Joins two path pieces with exactly one separator between them. */
+static ktn_string *ktn_rt_string_join_path(const ktn_string *left, const ktn_string *right) {
+    bool left_has_separator = left->length > 0 && left->data[left->length - 1] == '/';
+    size_t length = (size_t)left->length + (left_has_separator ? 0 : 1) + (size_t)right->length;
+    ktn_string *result = ktn_rt_string_allocate((int64_t)length);
+    char *bytes = ktn_rt_string_bytes(result);
+    memcpy(bytes, left->data, (size_t)left->length);
+    size_t offset = (size_t)left->length;
+    if (!left_has_separator) {
+        bytes[offset] = '/';
+        offset++;
+    }
+    memcpy(bytes + offset, right->data, (size_t)right->length);
+    return result;
+}
+
+bool ktn_rt_try_create_temp_directory(const ktn_string *prefix,
+                                      const ktn_string **path,
+                                      const ktn_string **message) {
+    if (path == NULL || message == NULL) {
+        ktn_rt_fail("try_create_temp_directory received a null result slot");
+    }
+    *path = NULL;
+    *message = NULL;
+
+    const ktn_string *checked = ktn_rt_string_value(prefix);
+    if (!ktn_rt_valid_temp_prefix(checked)) {
+        *message = ktn_rt_plain_error("invalid temporary directory prefix");
+        return false;
+    }
+
+    const char *temporary = getenv("TMPDIR");
+    ktn_string *base = NULL;
+    if (temporary == NULL || temporary[0] == '\0') {
+        base = ktn_rt_string_copy_bytes("/tmp", 4);
+    } else {
+        size_t temporary_length = strlen(temporary);
+        ktn_string *configured = ktn_rt_string_copy_bytes(temporary, temporary_length);
+        if (configured->data[0] == '/') {
+            base = configured;
+        } else {
+            ktn_string *current = ktn_rt_getcwd_string(message);
+            if (current == NULL) {
+                return false;
+            }
+            base = ktn_rt_string_join_path(current, configured);
+        }
+    }
+
+    ktn_string *suffix = ktn_rt_string_copy_bytes(".XXXXXX", 7);
+    const ktn_string *template_text = ktn_rt_string_join_path(base, checked);
+    template_text = ktn_rt_string_concat(template_text, suffix);
+
+    size_t template_length = (size_t)template_text->length;
+    char *template = (char *)malloc(template_length + 1);
+    if (template == NULL) {
+        ktn_rt_fail("try_create_temp_directory could not allocate a path template");
+    }
+    memcpy(template, template_text->data, template_length + 1);
+
+    /*
+     * mkdtemp requests mode 0700, but the process umask still applies. This
+     * runtime is not required to be thread-safe, so clear the umask only around
+     * the atomic creation instead of racing a later chmod with another process
+     * that can rename or replace the new directory.
+     */
+    mode_t previous_umask = umask(0);
+    char *created = mkdtemp(template);
+    int creation_error = errno;
+    umask(previous_umask);
+    errno = creation_error;
+    if (created == NULL) {
+        int error = creation_error;
+        if (error == ENOENT || error == ENOTDIR) {
+            struct stat base_info;
+            if (stat(base->data, &base_info) != 0) {
+                int check = errno;
+                if (check == ENOENT || check == ENOTDIR) {
+                    free(template);
+                    *message = ktn_rt_path_error("stat", base, check);
+                    return false;
+                }
+            }
+        }
+        free(template);
+        *message = ktn_rt_path_error("mkdir", template_text, error);
+        return false;
+    }
+
+    size_t created_length = strlen(created);
+    *path = ktn_rt_string_copy_bytes(created, created_length);
+    free(template);
+    return true;
 }
 
 /* Writes every byte or reports the first write failure. */

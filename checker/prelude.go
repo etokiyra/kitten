@@ -61,6 +61,12 @@ const (
     Failed { string message; }
 }
 `
+
+	tempDirectoryResultPrelude = `public union TempDirectoryResult {
+    Ok { string path; }
+    Failed { string message; }
+}
+`
 )
 
 // preludeModulePath and runtimeModulePath identify the two compiler-reserved
@@ -97,12 +103,13 @@ type preludeUses struct {
 	environment      bool
 	capture          bool
 	fileInfo         bool
+	tempDirectory    bool
 }
 
 // any reports whether any prelude built-in is used.
 func (u preludeUses) any() bool {
 	return u.readFile || u.writeFile || u.writeBytes || u.createDirectory ||
-		u.remove || u.listDirectory || u.run || u.currentDirectory || u.environment || u.capture || u.fileInfo
+		u.remove || u.listDirectory || u.run || u.currentDirectory || u.environment || u.capture || u.fileInfo || u.tempDirectory
 }
 
 // preludeSource assembles the fixed prelude source for the used built-ins. The
@@ -134,6 +141,9 @@ func preludeSource(uses preludeUses) string {
 	if uses.fileInfo {
 		source.WriteString(fileInfoResultPrelude)
 	}
+	if uses.tempDirectory {
+		source.WriteString(tempDirectoryResultPrelude)
+	}
 	return source.String()
 }
 
@@ -156,7 +166,7 @@ func parseSyntheticModule(path, source string) (*parser.Module, error) {
 	return &parser.Module{Path: path, Program: program}, nil
 }
 
-// scanPreludeUses scans every module for syntactic calls to the eleven prelude
+// scanPreludeUses scans every module for syntactic calls to the twelve prelude
 // built-ins. It is deliberately syntactic: a user function with one of these
 // names may cause the prelude to be injected unused, but helpers are non-static
 // and no semantic rule depends on the false positive.
@@ -173,6 +183,7 @@ func scanPreludeUses(modules []*parser.Module) preludeUses {
 		environment:      usesCallee(modules, "try_getenv"),
 		capture:          usesCallee(modules, "try_run_capture"),
 		fileInfo:         usesCallee(modules, "try_file_info"),
+		tempDirectory:    usesCallee(modules, "try_create_temp_directory"),
 	}
 }
 
@@ -341,6 +352,7 @@ var preludeReservedNames = map[string]bool{
 	"EnvResult":              true,
 	"CapturedRunResult":      true,
 	"FileInfoResult":         true,
+	"TempDirectoryResult":    true,
 }
 
 // registerPreludeBuiltins adds the built-ins whose calls triggered the prelude.
@@ -366,6 +378,7 @@ func (c *checker) registerPreludeBuiltins(uses preludeUses) error {
 		{uses.environment, "try_getenv", []*Type{StringType}, "EnvResult", BuiltinTryGetenv},
 		{uses.capture, "try_run_capture", []*Type{StringType, c.arrayType(StringType)}, "CapturedRunResult", BuiltinTryRunCapture},
 		{uses.fileInfo, "try_file_info", []*Type{StringType}, "FileInfoResult", BuiltinTryFileInfo},
+		{uses.tempDirectory, "try_create_temp_directory", []*Type{StringType}, "TempDirectoryResult", BuiltinTryCreateTempDirectory},
 	}
 	for _, entry := range registrations {
 		if !entry.used {

@@ -360,7 +360,11 @@ fn emit_all_prelude_helper_sections(DeclarationEmitter emitter) -> EmitStep {
     if (!emit_ok(capture_helper)) {
         return capture_helper;
     }
-    return emit_file_info_prelude_helper_section(emitter);
+    EmitStep file_info_helper = emit_file_info_prelude_helper_section(emitter);
+    if (!emit_ok(file_info_helper)) {
+        return file_info_helper;
+    }
+    return emit_temp_directory_prelude_helper_section(emitter);
 }
 
 // emit_read_file_prelude_helper_section emits the helper that turns the
@@ -851,6 +855,48 @@ fn emit_file_info_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep
     emitter.indent = emitter.indent - 1;
     EmitStep close_missing = emit_line(emitter, "}");
     if (!emit_ok(close_missing)) { return close_missing; }
+    EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
+    if (!emit_ok(failed)) { return failed; }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close = emit_line(emitter, "}");
+    if (!emit_ok(close)) { return close; }
+    return emit_line(emitter, "");
+}
+
+// emit_temp_directory_prelude_helper_section emits the TempDirectoryResult helper.
+fn emit_temp_directory_prelude_helper_section(DeclarationEmitter emitter) -> EmitStep {
+    if (!has(emitter.model.builtins, "try_create_temp_directory")) {
+        return EmitStep.Ok;
+    }
+    if (!has(emitter.model.visible_types, "TempDirectoryResult")) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared TempDirectoryResult is not registered")
+        };
+    }
+    Type union_type = emitter.model.visible_types["TempDirectoryResult"];
+    if (!is_union(union_type)) {
+        return EmitStep.Failed {
+            error = generate_error(1, 1, "the predeclared TempDirectoryResult is not a union")
+        };
+    }
+    string c_struct = struct_name(union_type.name, union_type.module);
+    EmitStep open = emit_line(emitter, c_struct + " *" + prelude_helper_name(union_type.module, "try_create_temp_directory") + "(const ktn_string *ktn_prefix) {");
+    if (!emit_ok(open)) {
+        return open;
+    }
+    emitter.indent = emitter.indent + 1;
+    EmitStep path = emit_line(emitter, "const ktn_string *ktn_path = NULL;");
+    if (!emit_ok(path)) { return path; }
+    EmitStep message = emit_line(emitter, "const ktn_string *ktn_message = NULL;");
+    if (!emit_ok(message)) { return message; }
+    EmitStep condition = emit_line(emitter, "if (" + try_create_temp_directory_function() + "(ktn_prefix, &ktn_path, &ktn_message)) {");
+    if (!emit_ok(condition)) { return condition; }
+    emitter.indent = emitter.indent + 1;
+    EmitStep ok = emit_line(emitter, "return " + variant_constructor_name(union_type, "Ok") + "(ktn_path);");
+    if (!emit_ok(ok)) { return ok; }
+    emitter.indent = emitter.indent - 1;
+    EmitStep close_if = emit_line(emitter, "}");
+    if (!emit_ok(close_if)) { return close_if; }
     EmitStep failed = emit_line(emitter, "return " + variant_constructor_name(union_type, "Failed") + "(ktn_message);");
     if (!emit_ok(failed)) { return failed; }
     emitter.indent = emitter.indent - 1;

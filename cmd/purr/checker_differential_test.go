@@ -527,6 +527,37 @@ fn main() {
     print(try_file_info("x"));
 }
 `)
+	add("try_create_temp_directory and TempDirectoryResult", `fn describe(TempDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    TempDirectoryResult direct_ok = TempDirectoryResult.Ok { path = "/tmp/x" };
+    TempDirectoryResult direct_failed = TempDirectoryResult.Failed { message = "m" };
+    print(describe(try_create_temp_directory("purr")), describe(direct_ok), describe(direct_failed));
+}
+`)
+	add("try_create_temp_directory only", `fn main() {
+    match (try_create_temp_directory("purr")) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`)
+	add("try_create_temp_directory with try_file_info", `fn main() {
+    try_create_temp_directory("purr");
+    try_file_info("x");
+}
+`)
+	add("shadowed try_create_temp_directory still injects its prelude", `fn try_create_temp_directory(string prefix) -> int {
+    return 1;
+}
+fn main() {
+    print(try_create_temp_directory("x"));
+}
+`)
 	add("shadowed try_run still injects its prelude", `fn try_run(string program, string[] args) -> int {
     return 1;
 }
@@ -793,6 +824,14 @@ fn main() {
 		"fn f() { try_file_info(); }\n",
 		"fn f() { try_file_info(1); }\n",
 		"fn f() { try_file_info(\"x\", \"y\"); }\n",
+		"fn f() { match (try_create_temp_directory(\"x\")) { Ok(path) { } } }\n",
+		"fn f() { try_create_temp_directory(); }\n",
+		"fn f() { try_create_temp_directory(1); }\n",
+		"fn f() { try_create_temp_directory(\"x\", \"y\"); }\n",
+		"fn TempDirectoryResult() {}\n",
+		"struct TempDirectoryResult {}\n",
+		"enum TempDirectoryResult { A }\n",
+		"union TempDirectoryResult { A }\n",
 		"fn FileInfoResult() {}\n",
 		"struct FileInfoResult {}\n",
 		"enum FileInfoResult { A }\n",
@@ -986,6 +1025,17 @@ fn main() {
     match (result) {
         Ok { return 1; }
         Failed(message) { return 2; }
+    }
+}
+`)
+	addModules("try_create_temp_directory from an imported module", `import "input2.txt";
+fn main() {
+    print(classify(try_create_temp_directory("purr")));
+}
+`, `public fn classify(TempDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
     }
 }
 `)

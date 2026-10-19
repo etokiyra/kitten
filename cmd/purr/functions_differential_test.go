@@ -486,6 +486,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "TempDirectoryResult parameters",
+		root: `fn describe(TempDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(describe(try_create_temp_directory("purr")));
+}
+`,
+	}, {
 		description: "FileInfoResult parameters",
 		root: `fn describe(FileInfoResult result) -> int {
     match (result) {

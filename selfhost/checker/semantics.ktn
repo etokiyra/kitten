@@ -79,6 +79,7 @@ public fn builtin_kind_name(BuiltinKind kind) -> string {
         TryGetenv { return "TryGetenv"; }
         TryRunCapture { return "TryRunCapture"; }
         TryFileInfo { return "TryFileInfo"; }
+        TryCreateTempDirectory { return "TryCreateTempDirectory"; }
         RawLoad8 { return "RawLoad8"; }
         RawStore8 { return "RawStore8"; }
         RawLoad64 { return "RawLoad64"; }

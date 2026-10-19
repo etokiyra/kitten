@@ -1155,6 +1155,15 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_create_temp_directory call and TempDirectoryResult match",
+		root: `fn main() {
+    match (try_create_temp_directory("purr")) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
 		description: "try_run_capture call and CapturedRunResult match",
 		root: `fn main() {
     match (try_run_capture("/bin/true", new string[0])) {

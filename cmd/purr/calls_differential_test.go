@@ -320,6 +320,18 @@ fn main() {
 }
 `,
 	}, {
+		description: "temp directory result through call arguments",
+		root: `fn inspect(TempDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+fn main() {
+    print(inspect(try_create_temp_directory("purr")));
+}
+`,
+	}, {
 		description: "file info result through call arguments",
 		root: `fn inspect(FileInfoResult result) -> int {
     match (result) {

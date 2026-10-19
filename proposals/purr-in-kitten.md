@@ -4,9 +4,10 @@
 >
 > The human approved this plan on 2026-10-18. Implementation proceeds one commit
 > per step in the order below. The `try_getenv`/`EnvResult`,
-> `try_run_capture`/`CapturedRunResult`, and `try_file_info`/`FileInfoResult`
-> steps are implemented so far; no `purr` command described here is implemented
-> unless explicitly marked **already implemented**.
+> `try_run_capture`/`CapturedRunResult`, `try_file_info`/`FileInfoResult`, and
+> `try_create_temp_directory`/`TempDirectoryResult` steps are implemented so
+> far; no `purr` command described here is implemented unless explicitly marked
+> **already implemented**.
 >
 > Date: 2026-10-18. Starting commit: `bbc0343`; adoption recorded at `9e98165`.
 >
@@ -76,8 +77,8 @@ Implementation status:
 | 1. `try_getenv` / `EnvResult` | **implemented in 9.1** |
 | 2. `try_run_capture` | **implemented in 9.2** |
 | 3. `try_file_info` | **implemented in 9.3** |
-| 4. `try_create_temp_directory` | proposed, next |
-| 5. Embedded runtime generation | proposed |
+| 4. `try_create_temp_directory` | **implemented in 9.4** |
+| 5. Embedded runtime generation | proposed, next |
 | 6. TOML subset parser | proposed |
 | 7. `purr new` | proposed |
 | 8. Kitten `purr` source-mode build/run | proposed |
@@ -360,12 +361,12 @@ bool ktn_rt_try_run_capture(const ktn_string *program,
 
 **Blocks:** `build` and `run`; not `new`.
 
-### 3.4 `try_create_temp_directory`
+### 3.4 `try_create_temp_directory` (implemented in 9.4)
 
 **Needed for:** `build` writing `program.c`/runtime sources, and `run` writing a
 temporary executable, without a C `mkdtemp` call exposed to user code.
 
-**Proposal.**
+**Implemented shape.**
 
 ```text
 try_create_temp_directory(string prefix) -> TempDirectoryResult
@@ -378,12 +379,33 @@ union TempDirectoryResult {
 }
 ```
 
-- Equivalent to `mkdtemp` under `TMPDIR` or `/tmp`.
-- Absolute path, unique, mode 0700.
-- The prefix is a literal safe component; path separators are rejected with a
-  clear error.
-- Cleanup uses existing `try_remove` after removing known files; no recursive
-  removal is added.
+- The base is non-empty `$TMPDIR`, otherwise `/tmp`. A non-empty but unusable
+  `$TMPDIR` fails; there is no fallback to `/tmp`. A relative `$TMPDIR` is made
+  absolute against `getcwd` using the same behavior as
+  `try_current_directory`, and the returned path is always absolute.
+- The prefix is 1 to 64 bytes from ASCII `[A-Za-z0-9._-]`; `..` is additionally
+  rejected even though its bytes are allowed. Any prefix outside that rule fails
+  with `invalid temporary directory prefix` before any filesystem access, so
+  path separators and traversal cannot enter the name.
+- Creation is atomic through `mkdtemp` with the template
+  `<base>/<prefix>.XXXXXX`, giving a six-character random suffix and mode
+  exactly 0700 regardless of umask. The runtime clears the umask only around
+  the atomic call and restores it immediately; thread safety is not required,
+  and a post-creation chmod would race.
+- Success returns the absolute path as a fresh GC-managed string. The runtime
+  registers no cleanup hook; the caller empties and removes the directory with
+  `try_remove`.
+- A missing base reports `stat <base>: <reason>`, matching Go's
+  `os.MkdirTemp`. A regular-file or unwritable base reports
+  `mkdir <base>/<prefix>.XXXXXX: <reason>`, the template form of Go's
+  `mkdir <base>/<prefix><random>: <reason>`. Reasons use the shared
+  Go-compatible errno mapping.
+- No file descriptor is opened and no signal handler is installed. Thread-safe
+  use is not required.
+- The future libc-free runtime must source the random suffix from
+  `getrandom(2)` or `/dev/urandom` and create the directory with `mkdir(2)` in
+  mode 0700 while no umask can reduce it, retrying on `EEXIST`. This
+  requirement is recorded but not implemented here.
 
 Runtime ABI:
 
@@ -898,10 +920,11 @@ design-only phase.
    exact limits and statuses.
 3. **File information** (`try_file_info`) — implemented in 9.3; PATH search is
    then written in Kitten, with no `try_find_program` built-in.
-4. **Temp directory** (`try_create_temp_directory`) — next; mode/unique/cleanup.
-   Acceptance: build/run temp trees and failure cleanup.
-5. **Embedded runtime generation** — generator, generated `purr/embedded.ktn`,
-   drift test, MIT notice. Acceptance: regenerate byte-identical.
+4. **Temp directory** (`try_create_temp_directory`) — implemented in 9.4;
+   mode/unique/cleanup. Acceptance: build/run temp trees and failure cleanup.
+5. **Embedded runtime generation** — next; generator, generated
+   `purr/embedded.ktn`, drift test, MIT notice. Acceptance: regenerate
+   byte-identical.
 6. **TOML subset parser** — `purr/manifest.ktn`, independent Kitten tests and
    exact errors. Acceptance: valid/unsupported corpus.
 7. **`purr new`** — CLI, templates, modes, cleanup, name validation. Acceptance:

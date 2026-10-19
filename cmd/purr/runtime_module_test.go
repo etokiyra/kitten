@@ -108,9 +108,38 @@ func TestRuntimeModuleMemoryHelper(t *testing.T) {
 	}
 }
 
+func TestRuntimeModuleWithTempDirectory(t *testing.T) {
+	requireToolchain(t)
+	source := `fn main() {
+    try_create_temp_directory("purr");
+    copy_bytes(new byte[0]);
+}
+`
+	modules, checked := runtimeModules(t, source)
+	if len(checked.Modules) != 4 {
+		t.Fatalf("module count = %d, want root, import, prelude, and runtime", len(checked.Modules))
+	}
+	if checked.Modules[2].Path != "<prelude>" || checked.Modules[2].ID != 2 {
+		t.Errorf("prelude = %q id %d", checked.Modules[2].Path, checked.Modules[2].ID)
+	}
+	if checked.Modules[3].Path != runtimeModulePathForTest() || checked.Modules[3].ID != 3 {
+		t.Errorf("runtime = %q id %d", checked.Modules[3].Path, checked.Modules[3].ID)
+	}
+	generated, err := codegen.Generate(modules, checked)
+	if err != nil {
+		t.Fatalf("generating C: %v", err)
+	}
+	unitExecutable := buildKittenUnit(t)
+	kittenText := runKittenWithRuntime(t, unitExecutable, runtimeMemorySource(t), source, "")
+	if difference := unitDifference(kittenText, generated); difference != "" {
+		t.Fatalf("runtime translation unit differs: %s", difference)
+	}
+}
+
 func TestRuntimeModuleModuleIDs(t *testing.T) {
 	source := `fn main() {
     try_read_file("x");
+    try_create_temp_directory("purr");
     copy_bytes(new byte[0]);
 }
 `

@@ -218,6 +218,8 @@ func builtinKindName(kind checker.BuiltinKind) string {
 		return "TryRunCapture"
 	case checker.BuiltinTryFileInfo:
 		return "TryFileInfo"
+	case checker.BuiltinTryCreateTempDirectory:
+		return "TryCreateTempDirectory"
 	case checker.BuiltinRawLoad8:
 		return "RawLoad8"
 	case checker.BuiltinRawStore8:

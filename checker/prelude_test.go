@@ -32,7 +32,9 @@ func TestPreludeSourceSubsets(t *testing.T) {
 		{"capture and environment", preludeUses{capture: true, environment: true}, envResultPrelude + capturedRunResultPrelude},
 		{"file info only", preludeUses{fileInfo: true}, fileInfoResultPrelude},
 		{"file info and capture", preludeUses{fileInfo: true, capture: true}, capturedRunResultPrelude + fileInfoResultPrelude},
-		{"all", preludeUses{readFile: true, writeFile: true, writeBytes: true, createDirectory: true, remove: true, listDirectory: true, run: true, currentDirectory: true, environment: true, capture: true, fileInfo: true}, readFileResultPrelude + fileResultPrelude + listDirectoryResultPrelude + runResultPrelude + currentDirectoryResultPrelude + envResultPrelude + capturedRunResultPrelude + fileInfoResultPrelude},
+		{"temp directory only", preludeUses{tempDirectory: true}, tempDirectoryResultPrelude},
+		{"temp directory and file info", preludeUses{tempDirectory: true, fileInfo: true}, fileInfoResultPrelude + tempDirectoryResultPrelude},
+		{"all", preludeUses{readFile: true, writeFile: true, writeBytes: true, createDirectory: true, remove: true, listDirectory: true, run: true, currentDirectory: true, environment: true, capture: true, fileInfo: true, tempDirectory: true}, readFileResultPrelude + fileResultPrelude + listDirectoryResultPrelude + runResultPrelude + currentDirectoryResultPrelude + envResultPrelude + capturedRunResultPrelude + fileInfoResultPrelude + tempDirectoryResultPrelude},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -51,15 +53,16 @@ func TestPreludeModuleSubsets(t *testing.T) {
 		unusedTypes []string
 		builtin     string
 	}{
-		{"no trigger", "fn main() {\n}\n", nil, []string{"ReadFileResult", "FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "CapturedRunResult", "FileInfoResult"}, ""},
-		{"read", "fn main() {\n    try_read_file(\"x\");\n}\n", []string{"ReadFileResult"}, []string{"FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_read_file"},
-		{"write", "fn main() {\n    try_write_file(\"x\", \"y\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_write_file"},
-		{"write bytes", "fn main() {\n    try_write_bytes(\"x\", new byte[1]);\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_write_bytes"},
-		{"create", "fn main() {\n    try_create_directory(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_create_directory"},
-		{"remove", "fn main() {\n    try_remove(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_remove"},
-		{"list", "fn main() {\n    try_list_directory(\"x\");\n}\n", []string{"ListDirectoryResult"}, []string{"ReadFileResult", "FileResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_list_directory"},
+		{"no trigger", "fn main() {\n}\n", nil, []string{"ReadFileResult", "FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, ""},
+		{"read", "fn main() {\n    try_read_file(\"x\");\n}\n", []string{"ReadFileResult"}, []string{"FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_read_file"},
+		{"write", "fn main() {\n    try_write_file(\"x\", \"y\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_write_file"},
+		{"write bytes", "fn main() {\n    try_write_bytes(\"x\", new byte[1]);\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_write_bytes"},
+		{"create", "fn main() {\n    try_create_directory(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_create_directory"},
+		{"remove", "fn main() {\n    try_remove(\"x\");\n}\n", []string{"FileResult"}, []string{"ReadFileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_remove"},
+		{"list", "fn main() {\n    try_list_directory(\"x\");\n}\n", []string{"ListDirectoryResult"}, []string{"ReadFileResult", "FileResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_list_directory"},
 		{"run", "fn main() {\n    try_run(\"/bin/true\", new string[0]);\n}\n", []string{"RunResult"}, []string{"ReadFileResult", "FileResult", "ListDirectoryResult", "CurrentDirectoryResult"}, "try_run"},
-		{"read and write", "fn main() {\n    try_read_file(\"x\");\n    try_write_file(\"y\", \"z\");\n}\n", []string{"ReadFileResult", "FileResult"}, []string{"ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_write_file"},
+		{"read and write", "fn main() {\n    try_read_file(\"x\");\n    try_write_file(\"y\", \"z\");\n}\n", []string{"ReadFileResult", "FileResult"}, []string{"ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"}, "try_write_file"},
+		{"temp directory", "fn main() {\n    try_create_temp_directory(\"x\");\n}\n", []string{"TempDirectoryResult"}, []string{"ReadFileResult", "FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"}, "try_create_temp_directory"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -108,7 +111,7 @@ func TestFileAndDirectoryResultNamesAreReserved(t *testing.T) {
 		{"enum", "enum %s { A }\n"},
 		{"union", "union %s { A }\n"},
 	}
-	for _, typeName := range []string{"FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult"} {
+	for _, typeName := range []string{"FileResult", "ListDirectoryResult", "RunResult", "CurrentDirectoryResult", "EnvResult", "CapturedRunResult", "FileInfoResult", "TempDirectoryResult"} {
 		for _, kind := range kinds {
 			t.Run(typeName+"/"+kind.name, func(t *testing.T) {
 				source := strings.Replace(kind.source, "%s", typeName, 1)
@@ -137,6 +140,7 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
     try_getenv("PATH");
     try_run_capture("/bin/true", new string[0]);
     try_file_info("x");
+    try_create_temp_directory("x");
 }
 `
 	checked, err := CheckModules([]*parser.Module{parseTestModule(t, "input.txt", 0, source)})
@@ -153,7 +157,8 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
 	envResult := checked.Types["EnvResult"]
 	captureResult := checked.Types["CapturedRunResult"]
 	fileInfoResult := checked.Types["FileInfoResult"]
-	if fileResult == nil || listResult == nil || runResult == nil || currentResult == nil || envResult == nil || captureResult == nil || fileInfoResult == nil {
+	tempDirectoryResult := checked.Types["TempDirectoryResult"]
+	if fileResult == nil || listResult == nil || runResult == nil || currentResult == nil || envResult == nil || captureResult == nil || fileInfoResult == nil || tempDirectoryResult == nil {
 		t.Fatalf("prelude result types are missing")
 	}
 	checks := []struct {
@@ -172,6 +177,7 @@ func TestFileDirectoryBuiltinsHaveExactSignatures(t *testing.T) {
 		{"try_getenv", BuiltinTryGetenv, 1, envResult},
 		{"try_run_capture", BuiltinTryRunCapture, 2, captureResult},
 		{"try_file_info", BuiltinTryFileInfo, 1, fileInfoResult},
+		{"try_create_temp_directory", BuiltinTryCreateTempDirectory, 1, tempDirectoryResult},
 	}
 	for _, check := range checks {
 		function, ok := checked.Builtins[check.name]

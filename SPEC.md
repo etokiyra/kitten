@@ -1036,12 +1036,12 @@ Notes:
 
 ### 18.8 Built-in functions
 
-Twenty-three functions are provided by the language: `print`, `eprint`, `exit`,
+Twenty-four functions are provided by the language: `print`, `eprint`, `exit`,
 `length`, `argv`, `has`, `substring`, `read_file`, `try_read_file`,
 `try_write_file`, `try_write_bytes`, `try_create_directory`, `try_remove`,
 `try_list_directory`, `try_run`, `try_run_capture`, `try_current_directory`,
-`try_getenv`, `try_file_info`, `int_from_byte`, `byte_from_int`,
-`string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
+`try_getenv`, `try_file_info`, `try_create_temp_directory`, `int_from_byte`,
+`byte_from_int`, `string_to_bytes`, and `bytes_to_string`. All are represented in the semantic environment rather than
 special-cased in expression checking. A user-defined top-level declaration with
 the same name shadows the built-in.
 
@@ -1176,9 +1176,9 @@ the same name shadows the built-in.
   error.
 - Its return type is `ReadFileResult`, and it is not variadic.
 
-**File, directory, and process result types and prelude injection**
+**Predeclared result types and prelude injection**
 
-- The language also provides two predeclared public unions:
+- The language also provides the following predeclared public unions:
 
   ```kitten
   union FileResult {
@@ -1216,6 +1216,11 @@ the same name shadows the built-in.
       Missing
       Failed { string message; }
   }
+
+  union TempDirectoryResult {
+      Ok { string path; }
+      Failed { string message; }
+  }
   ```
 
 - `FileResult.Ok` carries no payload; it is written without braces, as
@@ -1226,30 +1231,32 @@ the same name shadows the built-in.
   `CurrentDirectoryResult.Failed { message = ... }`,
   `EnvResult.Set { value = ... }`, `EnvResult.Unset`,
   `CapturedRunResult.Ok { ... }`, `CapturedRunResult.Failed { ... }`,
-  `FileInfoResult.Ok { ... }`, `FileInfoResult.Missing`, and
-  `FileInfoResult.Failed { ... }` are ordinary variant constructions.
-- The eight predeclared union names `ReadFileResult`, `FileResult`,
+  `FileInfoResult.Ok { ... }`, `FileInfoResult.Missing`,
+  `FileInfoResult.Failed { ... }`, `TempDirectoryResult.Ok { ... }`, and
+  `TempDirectoryResult.Failed { ... }` are ordinary variant constructions.
+- The nine predeclared union names `ReadFileResult`, `FileResult`,
   `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
-  `CapturedRunResult`, and `FileInfoResult` are reserved in **every** program:
-  any user top-level declaration with one of those names is an error, whether or
-  not the corresponding implicit type is introduced.
-- `file` and `directory` built-ins use one synthetic prelude module, appended
+  `CapturedRunResult`, `FileInfoResult`, and `TempDirectoryResult` are reserved
+  in **every** program: any user top-level declaration with one of those names
+  is an error, whether or not the corresponding implicit type is introduced.
+- The prelude built-ins use one synthetic prelude module, appended
   after every loaded module with `id = module count` and path `<prelude>`. The
   module contains only the result unions required by the program's syntactic
   calls, in the fixed order `ReadFileResult`, `FileResult`,
   `ListDirectoryResult`, `RunResult`, `CurrentDirectoryResult`, `EnvResult`,
-  `CapturedRunResult`, `FileInfoResult`, with each union's fixed source text
-  concatenated directly (each block ends with its closing brace and newline). A program using
-  only `try_read_file` therefore gets exactly the existing `ReadFileResult`
-  prelude and is otherwise unchanged.
+  `CapturedRunResult`, `FileInfoResult`, `TempDirectoryResult`, with each
+  union's fixed source text concatenated directly (each block ends with its
+  closing brace and newline). A program using only `try_read_file` therefore
+  gets exactly the existing `ReadFileResult` prelude and is otherwise unchanged.
 - The trigger is syntactic for each built-in name, as it is for
   `try_read_file`: an identifier call named `try_write_file` (even if shadowed
   by a user function) introduces `FileResult` and its generated helper; the same
   applies to the other new built-ins, including `try_run`/`RunResult`,
   `try_current_directory`/`CurrentDirectoryResult`,
-  `try_getenv`/`EnvResult`, `try_run_capture`/`CapturedRunResult`, and
-  `try_file_info`/`FileInfoResult`. A program with no new built-in and no
-  `try_read_file` gets no prelude module.
+  `try_getenv`/`EnvResult`, `try_run_capture`/`CapturedRunResult`,
+  `try_file_info`/`FileInfoResult`, and
+  `try_create_temp_directory`/`TempDirectoryResult`. A program with no new
+  built-in and no `try_read_file` gets no prelude module.
 - The same prelude module also carries a non-static generated helper for each
   used built-in. Helpers build the result union with the generated constructors;
   the runtime only returns success/failure and a message or payload. A user
@@ -1429,6 +1436,62 @@ the same name shadows the built-in.
   `executable` alone.
 - Calling it with the wrong number of arguments or a non-`string` argument is an
   error. Its return type is `FileInfoResult`, and it is not variadic.
+
+**`try_create_temp_directory`**
+
+- `try_create_temp_directory(prefix)` takes exactly one `string` prefix and
+  returns `TempDirectoryResult`:
+
+  ```kitten
+  union TempDirectoryResult {
+      Ok { string path; }
+      Failed { string message; }
+  }
+  ```
+
+- The base directory is `$TMPDIR` when it is set to a non-empty value, and
+  `/tmp` otherwise. An empty `TMPDIR` is treated as unset. There is no silent
+  fallback when a non-empty `TMPDIR` is not usable; the result is `Failed`.
+- A relative `TMPDIR` is made absolute against the process's current directory
+  using the same `getcwd` behavior as `try_current_directory`. The returned path
+  is always absolute.
+- The prefix must be non-empty, at most 64 bytes, and contain only ASCII
+  letters, digits, `.`, `_`, and `-`. The prefix `..` is additionally rejected
+  even though its bytes are allowed. An invalid prefix is
+  `Failed { message = "invalid temporary directory prefix" }` before any
+  filesystem access.
+- The directory is created atomically by `mkdtemp(3)` with the template
+  `<base>/<prefix>.XXXXXX`. The six replacement characters are the C library's
+  random name characters; on the verified Linux/glibc host they are ASCII
+  letters and digits. The creation mode is exactly `0700` regardless of the
+  process umask: the runtime clears the umask only around the atomic
+  `mkdtemp` call and restores it immediately. Thread-safe use is not required,
+  and a post-creation `chmod` would race with another process.
+- A failure to create is `Failed`. When `mkdtemp` reports `ENOENT` or
+  `ENOTDIR`, the base is checked with `stat`; if that check also reports
+  `ENOENT` or `ENOTDIR`, the message is `stat <base>: <reason>`, matching Go's
+  `os.MkdirTemp`. Otherwise the message is `mkdir <base>/<prefix>.XXXXXX:
+  <reason>`, using the same lower-case Go-compatible reason mapping as the other
+  file built-ins. A missing base therefore reports
+  `stat <base>: no such file or directory`; a regular-file or unwritable base
+  reports `mkdir <base>/<prefix>.XXXXXX: <reason>`.
+- The returned path is a fresh GC-managed string. The runtime registers no
+  cleanup hook: the caller removes the directory with `try_remove` after
+  emptying it.
+- The built-in opens no file descriptor and installs no signal handler. Its
+  runtime ABI is:
+
+  ```c
+  bool ktn_rt_try_create_temp_directory(const ktn_string *prefix,
+                                        const ktn_string **path,
+                                        const ktn_string **message);
+  ```
+
+- Calling it with the wrong number of arguments or a non-`string` argument is an
+  error. Its return type is `TempDirectoryResult`, and it is not variadic.
+- The future libc-free runtime must obtain the random suffix from
+  `getrandom(2)` or `/dev/urandom` and create the directory with `mkdir(2)` in
+  mode `0700` while no umask can reduce it, retrying on `EEXIST`.
 
 **`try_current_directory`**
 
@@ -1637,7 +1700,8 @@ is **deferred**.
   `ktn_rt_try_write_bytes`, `ktn_rt_try_create_directory`,
   `ktn_rt_try_remove`, `ktn_rt_try_list_directory`, `ktn_rt_try_run`,
   `ktn_rt_try_current_directory`, `ktn_rt_try_getenv`,
-  `ktn_rt_try_run_capture`, `ktn_rt_try_file_info`, `ktn_rt_exit`, the
+  `ktn_rt_try_run_capture`, `ktn_rt_try_file_info`,
+  `ktn_rt_try_create_temp_directory`, `ktn_rt_exit`, the
   `ktn_rt_i64_*` integer helpers, `ktn_rt_string_to_bytes`,
   `ktn_rt_bytes_to_string`, and the built-in print and eprint helpers.
 - Strings are pointer-carrying objects, so structs may still contain pointers
@@ -2179,6 +2243,12 @@ loader prefix.
   and the followed target's file/directory/executable/size facts. Missing paths,
   dangling links, symlink loops, and permission failures use the exact shapes
   above. It opens no file descriptor.
+- `try_create_temp_directory(prefix) -> TempDirectoryResult` creates an
+  absolute, uniquely named directory under a non-empty `$TMPDIR` or `/tmp`,
+  using an atomic `mkdtemp` creation with a six-character random suffix and mode
+  `0700`. Invalid prefixes are rejected before filesystem access, an unusable
+  `$TMPDIR` is a recoverable failure with Go-compatible text, and the caller
+  removes the directory with `try_remove`.
 
 Current-working-directory changes, recursive removal, atomic replacement, and
 file metadata beyond the operations above are **not** implemented.
@@ -2304,6 +2374,11 @@ The following are **not** implemented and must not be assumed:
     itself through `is_symlink`, treats dangling links as `Ok` with false facts,
     and uses `lstat`/`stat` path errors. PATH lookup must require
     `is_file && executable`.
+17. `try_create_temp_directory` uses non-empty `$TMPDIR` or `/tmp` with no
+    fallback, validates a 64-byte ASCII prefix before filesystem access, creates
+    atomically with `mkdtemp` and mode `0700`, returns an absolute path, and
+    reports missing or unusable bases with Go-compatible text. The runtime
+    registers no cleanup hook.
 
 ---
 
@@ -3145,7 +3220,9 @@ expressions of the runtime helpers for each argument's type, separated by the
 space helper and terminated by the newline helper, which has type void and is the
 built-in's own type; `length` becomes the array, map, or string length helper
 chosen by the argument's type; and `has`, `substring`, `read_file`, `argv`, and
-`exit` are one runtime call each. Arguments
+`exit` are one runtime call each. Every prelude built-in is a call to its
+non-static generated helper, which builds the result union from the runtime's
+success flag and payload or message. Arguments
 are rendered left to right and the first failure among them stops the call, so a call
 is never emitted with a hole where an argument failed. The built-ins whose argument
 is a container choose their length or membership helper from the argument's type, and

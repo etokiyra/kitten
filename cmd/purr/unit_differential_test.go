@@ -793,6 +793,7 @@ fn main() {
     try_getenv("PATH");
     try_run_capture("/bin/true", new string[0]);
     try_file_info("x");
+    try_create_temp_directory("purr");
 }
 `,
 	}, {
@@ -965,6 +966,38 @@ fn main() {
 }
 `,
 	}, {
+		description: "try_create_temp_directory with TempDirectoryResult",
+		root: `fn main() {
+    match (try_create_temp_directory("purr")) {
+        Ok(path) { print(path); }
+        Failed(message) { print(message); }
+    }
+}
+`,
+	}, {
+		description: "direct TempDirectoryResult construction",
+		root: `fn main() {
+    try_create_temp_directory("x");
+    TempDirectoryResult ok = TempDirectoryResult.Ok { path = "/tmp/x" };
+    TempDirectoryResult failed = TempDirectoryResult.Failed { message = "m" };
+    match (ok) { Ok(path) { print(path); } Failed(message) { print(message); } }
+}
+`,
+	}, {
+		description: "try_create_temp_directory from an imported module",
+		root: `import "input2.txt";
+fn main() {
+    print(classify(try_create_temp_directory("purr")));
+}
+`,
+		imported: `public fn classify(TempDirectoryResult result) -> int {
+    match (result) {
+        Ok(path) { return length(path); }
+        Failed(message) { return -1; }
+    }
+}
+`,
+	}, {
 		description: "direct FileInfoResult construction",
 		root: `fn main() {
     try_file_info("x");
@@ -1032,6 +1065,15 @@ fn main() {
 }
 fn main() {
     print(try_run_capture("x", new string[0]));
+}
+`,
+	}, {
+		description: "a shadowed try_create_temp_directory still emits the prelude helper",
+		root: `fn try_create_temp_directory(string prefix) -> int {
+    return 1;
+}
+fn main() {
+    print(try_create_temp_directory("x"));
 }
 `,
 	}, {
