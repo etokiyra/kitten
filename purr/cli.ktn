@@ -471,16 +471,24 @@ fn run_run(string[] arguments, int count) {
     }
 }
 
+fn new_usage_error() {
+    eprint("usage: purr new [--lib] <name>");
+    exit(2);
+}
+
 fn run_new(string[] arguments, int count) {
     bool library = false;
     bool have_name = false;
+    bool want_help = false;
     bool bad = false;
     string name = "";
 
     int index = 2;
     while (index < count) {
         string argument = arguments[index];
-        if (argument == "--lib") {
+        if (argument == "-h" || argument == "--help") {
+            want_help = true;
+        } else if (argument == "--lib") {
             if (library) {
                 bad = true;
             } else {
@@ -497,9 +505,15 @@ fn run_new(string[] arguments, int count) {
         index++;
     }
 
+    // Help wins over every other argument, matching the top-level help flags,
+    // which ignore extra arguments.
+    if (want_help) {
+        print(new_help_text());
+        exit(0);
+    }
+
     if (bad || !have_name) {
-        eprint("usage: purr new [--lib] <name>");
-        exit(2);
+        new_usage_error();
     }
 
     match (new_project(name, library)) {

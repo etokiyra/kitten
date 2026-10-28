@@ -3453,6 +3453,25 @@ private temp tree, invokes the C compiler, and validates the output.
 inherited standard streams, propagates its status, and cleans up
 non-recursively.
 
+`new` accepts the 9.7 argument grammar. `-h` and `--help` are recognized
+anywhere in the `new` argument list, print the dedicated project-scaffolding help
+to stdout, and exit 0 without touching the filesystem; every other argument is
+ignored when help is requested. The help text is:
+
+```text
+Kitten project scaffolding
+
+Usage:
+  purr new [--lib] <name>
+
+Options:
+  --lib    Create a library project instead of a binary
+  -h, --help
+```
+
+Without help, `new` still requires exactly one name, accepts `--lib` once, and
+reports usage errors on stderr with exit 2.
+
 ### 29.1 Project mode
 
 Project mode activates only for `purr-kt build` or `purr-kt run` with no source

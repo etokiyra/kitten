@@ -14,6 +14,19 @@ public union NewResult {
     Failed { string message; }
 }
 
+// new_help_text is the dedicated `purr new --help` text. It is shared by the
+// sidecar command and the command-shaped probe so the two cannot drift.
+public fn new_help_text() -> string {
+    return "Kitten project scaffolding\n" +
+        "\n" +
+        "Usage:\n" +
+        "  purr new [--lib] <name>\n" +
+        "\n" +
+        "Options:\n" +
+        "  --lib    Create a library project instead of a binary\n" +
+        "  -h, --help";
+}
+
 // created_paths is fixed at the five paths one invocation can create:
 // project, src, .gitignore, purr.toml, and one source file.
 fn cleanup_created(string[] created, int count) -> string {

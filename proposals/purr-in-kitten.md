@@ -82,7 +82,7 @@ Implementation status:
 | 5. Embedded runtime generation | **implemented in 9.5** |
 | 6. TOML subset parser | **implemented in 9.6** |
 | 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
-| 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build added in 9.8b** |
+| 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; `new -h`/`--help` added later; build added in 9.8b** |
 | 8b. Kitten `purr` build | **implemented in 9.8b** |
 | 8c. Kitten `purr` run + full parity | **run implemented; full parity suite remains** |
 | 9. Project mode | **implemented: current-directory binary build/run; library builds deferred** |
@@ -598,6 +598,11 @@ Options:
   -h, --help
 ```
 
+The text is implemented once in `purr/new.ktn` and shared by the probe and the
+`purr-kt` command. `-h` and `--help` are recognized anywhere in the `new`
+argument list, print this text to stdout, and exit 0; other arguments are
+ignored, matching the top-level help flags.
+
 ## 7. `purr.toml`: the smallest useful TOML subset (implemented in 9.6)
 
 The first manifest is deliberately smaller than TOML. A file outside the
@@ -873,7 +878,9 @@ Implemented in 9.8a:
 - `help`, `-h`, `--help`: usage on stdout, exit 0, extra arguments ignored;
 - unknown command: `purr: unknown command "<name>"`, blank line, usage, stderr,
   exit 2;
-- `new`: the 9.7 module and probe behavior, with output and statuses unchanged;
+- `new`: the 9.7 module and probe creation behavior, with output and statuses
+  unchanged; `-h`/`--help` prints the dedicated project-scaffolding text to
+  stdout and exits 0 without touching the filesystem;
 - `build`: the in-process 9.8b implementation, with Go-compatible argument
   parsing, diagnostics, streams, and statuses; and
 - `run`: shared Go-compatible argument parsing, `-o` rejection, a `purr-run.`

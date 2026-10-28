@@ -379,18 +379,38 @@ func TestKittenPurrNewParity(t *testing.T) {
 			{"--", "a"},
 			{"-x"},
 			{"-a"},
-			// The 9.7 probe treats -h and --help as unknown flags (usage,
-			// exit 2). The proposal's dedicated new help text is not
-			// implemented yet, so these cases pin current probe/purr-kt
-			// parity only; they do not bless the design gap.
-			{"--help"},
-			{"-h"},
 			{"--lib=1", "one"},
 			{"--LIB", "one"},
 		}
 		for _, arguments := range argumentSets {
 			purrArguments := append([]string{"new"}, arguments...)
 			runNewParityCase(t, probe, purrs, arguments, purrArguments, "", nil)
+		}
+	})
+
+	t.Run("help", func(t *testing.T) {
+		cases := [][]string{
+			{"--help"},
+			{"-h"},
+			{"--help", "one"},
+			{"--lib", "--help"},
+			{"--bad", "--help"},
+			{"one", "--help"},
+		}
+		for _, arguments := range cases {
+			purrArguments := append([]string{"new"}, arguments...)
+			runNewParityCase(t, probe, purrs, arguments, purrArguments, "", nil)
+			for pipeline, purr := range purrs {
+				directory := t.TempDir()
+				result := runPurrKT(t, purr, directory, purrArguments)
+				if result.status != 0 || result.stdout != newHelpText()+"\n" || result.stderr != "" {
+					t.Errorf("%s %v: status %d, stdout %q, stderr %q; want status 0, stdout %q, stderr empty",
+						pipeline, arguments, result.status, result.stdout, result.stderr, newHelpText()+"\n")
+				}
+				if len(newSnapshot(t, directory)) != 0 {
+					t.Errorf("%s %v touched the filesystem", pipeline, arguments)
+				}
+			}
 		}
 	})
 

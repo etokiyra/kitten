@@ -252,7 +252,8 @@ runtime sources in `purr/embedded.ktn`, Phase 9.6 implemented the `purr.toml`
 subset parser in `purr/manifest.ktn`, Phase 9.7 implemented the `purr new`
 module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, and Phase 9.8a
 implemented the `purr-kt` entry point, help/usage, and `new` dispatch in
-`purr.ktn` and `purr/cli.ktn`, in both pipelines. Phase 9.8b added the
+`purr.ktn` and `purr/cli.ktn`, in both pipelines, including the dedicated
+`purr new -h`/`--help` text. Phase 9.8b added the
 in-process `build` command in `purr/build.ktn`, and Phase 9.8c implemented the
 `run` command in `purr/cli.ktn` with focused both-pipeline tests. Project mode
 then added `purr/project.ktn`, current-directory manifest discovery, and
@@ -326,12 +327,13 @@ and `embedded.ktn`; it does not import the probe drivers that define their own
 `main`. The binary name is always `purr-kt`; the Go CLI remains the authoritative
 `purr`. Help and usage name the program `purr` deterministically, never argv[0].
 
-`purr-kt` supports `help`, `new`, `build`, and `run`. The build path mirrors the
-Go CLI's argument grammar, compiler/PATH/pkg-config discovery, compiler argv,
-output validation, diagnostics, and statuses, with the two documented
-deviations for combined stream order and signal status. `run` shares that
-argument grammar, rejects `-o`, builds into a `purr-run.` temporary directory,
-executes with `try_run`, propagates the child's status, and cleans up
+`purr-kt` supports `help`, `new`, `build`, and `run`. `new -h`/`--help` prints
+the dedicated project-scaffolding text from `purr/new.ktn`. The build path
+mirrors the Go CLI's argument grammar, compiler/PATH/pkg-config discovery,
+compiler argv, output validation, diagnostics, and statuses, with the two
+documented deviations for combined stream order and signal status. `run`
+shares that argument grammar, rejects `-o`, builds into a `purr-run.` temporary
+directory, executes with `try_run`, propagates the child's status, and cleans up
 non-recursively with notes. A signaled child therefore reports `128 + signal`
 through `try_run`; the Go CLI's `ExitCode()` path reports `-1`, observed as 255
 on POSIX. That difference is unavoidable while the documented `try_run` mapping

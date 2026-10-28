@@ -309,6 +309,50 @@ func sameSnapshot(left, right map[string]newTreeEntry) bool {
 	return true
 }
 
+func newHelpText() string {
+	return "Kitten project scaffolding\n" +
+		"\n" +
+		"Usage:\n" +
+		"  purr new [--lib] <name>\n" +
+		"\n" +
+		"Options:\n" +
+		"  --lib    Create a library project instead of a binary\n" +
+		"  -h, --help"
+}
+
+func TestNewProjectHelp(t *testing.T) {
+	requireToolchain(t)
+	stage1 := buildStage1(t)
+	probes := map[string]string{
+		"Go":     buildNewProbeWithGo(t),
+		"Kitten": buildNewProbeWithKitten(t, stage1),
+	}
+	// Help wins over every other argument, including an unknown flag or a
+	// name, matching the top-level help flags' treatment of extra arguments.
+	cases := [][]string{
+		{"--help"},
+		{"-h"},
+		{"--help", "one"},
+		{"--lib", "--help"},
+		{"--bad", "--help"},
+		{"one", "--help"},
+	}
+	for _, arguments := range cases {
+		for name, probe := range probes {
+			directory := t.TempDir()
+			before := newSnapshot(t, directory)
+			result := runNewProbe(t, probe, directory, arguments)
+			if result.status != 0 || result.stdout != newHelpText()+"\n" || result.stderr != "" {
+				t.Errorf("%s %v: status %d, stdout %q, stderr %q; want status 0, stdout %q, stderr empty",
+					name, arguments, result.status, result.stdout, result.stderr, newHelpText()+"\n")
+			}
+			if !sameSnapshot(before, newSnapshot(t, directory)) {
+				t.Errorf("%s %v touched the filesystem", name, arguments)
+			}
+		}
+	}
+}
+
 func TestNewProjectUsage(t *testing.T) {
 	requireToolchain(t)
 	stage1 := buildStage1(t)

@@ -275,7 +275,8 @@ deferred decision; nothing is silently invented.
 `purr-kt` is the Kitten-written sidecar entry point. It currently supports
 `help`, `new`, `build`, and `run`. `build` links the Kitten-written compiler
 frontend and invokes the C compiler in process; `run` builds into a temporary
-directory, executes the program, propagates its status, and cleans up. With no
+directory, executes the program, propagates its status, and cleans up. `new`
+includes its dedicated `-h`/`--help` text. With no
 source argument and a `purr.toml` in the current directory, `build` and `run`
 use the manifest and `src/main.ktn`, write `target/<name>`, and run that
 executable. Library builds remain a documented deferred error. The full
@@ -384,7 +385,7 @@ It is also the only way a self-hosting claim means anything.
 | `try_create_temp_directory` runtime | `TMPDIR` selection, relative/symlinked bases, invalid prefixes, mode under four umasks, uniqueness, 1,000 creations, Go-compatible failures, and a descriptor-limited loop through both pipelines |
 | Embedded runtime module | 98,173-byte generated `purr/embedded.ktn`; three-way byte identity, generated-file round trip, embedded-runtime fixture, NUL/invalid-UTF-8 failures, and Clang UBSan |
 | `purr.toml` parser | 164 pinned inputs, 5,000 fixed-seed randomized cases through both pipelines, exact positions/messages, independent Go oracle, and 1 MiB linear-time checks |
-| `purr new` module/probe | binary and library trees, exact bytes/modes, generated-project compilation, destination/read-only/step-4/step-5 failures, cleanup notes, race model, and Clang UBSan through both pipelines |
+| `purr new` module/probe | binary and library trees, exact bytes/modes, dedicated `-h`/`--help` text, generated-project compilation, destination/read-only/step-4/step-5 failures, cleanup notes, race model, and Clang UBSan through both pipelines |
 | `purr-kt` entry point | help/dispatch, Go-usage diff, real `new` parity, in-process `build` argument/discovery/pkg-config/failure parity, fixtures and modules, generated projects, binary project mode, capstone fixpoint, C parity, size/timing, and Clang UBSan |
 
 </details>

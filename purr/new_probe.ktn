@@ -1,6 +1,7 @@
 // purr/new_probe.ktn - test/CLI-shaped driver for purr new.
 //
 // Usage: new_probe [--lib] <name>
+// `-h` and `--help` print the dedicated new help text to stdout and exit 0.
 // Success and failure messages go to stderr. Exit status is 0 for Created, 1
 // for a validation/filesystem failure, and 2 for a usage error.
 
@@ -14,13 +15,16 @@ fn usage() {
 fn main() {
     bool library = false;
     bool have_name = false;
+    bool want_help = false;
     bool bad = false;
     string name = "";
 
     int index = 1;
     while (index < length(argv())) {
         string argument = argv()[index];
-        if (argument == "--lib") {
+        if (argument == "-h" || argument == "--help") {
+            want_help = true;
+        } else if (argument == "--lib") {
             if (library) {
                 bad = true;
             } else {
@@ -35,6 +39,13 @@ fn main() {
             have_name = true;
         }
         index++;
+    }
+
+    // Help wins over every other argument, matching the top-level help flags,
+    // which ignore extra arguments.
+    if (want_help) {
+        print(new_help_text());
+        exit(0);
     }
 
     if (bad || !have_name) {
