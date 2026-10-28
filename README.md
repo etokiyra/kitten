@@ -258,7 +258,7 @@ go build -o /tmp/purr ./cmd/purr
 | Type checker | complete for the specified language, with diagnostics and positions |
 | C code generator | complete for the specified language; emits C, compiled by the host C compiler |
 | C runtime | strings, arrays, maps, file reading, printing, and the garbage collector |
-| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build sidecar are implemented; `run` is a stub and the Go CLI remains authoritative |
+| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build/run sidecar are implemented; the full parity suite is still pending and the Go CLI remains authoritative |
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
@@ -273,10 +273,11 @@ deferred decision; nothing is silently invented.
 ### Kitten-written `purr` (in progress)
 
 `purr-kt` is the Kitten-written sidecar entry point. It currently supports
-`help`, `new`, and `build`; `run` remains a recognized stub. `build` links the
-Kitten-written compiler frontend and invokes the C compiler in process. The Go
-CLI remains the authoritative `purr`; `purr-kt` is not installed under the
-`purr` name.
+`help`, `new`, `build`, and `run`. `build` links the Kitten-written compiler
+frontend and invokes the C compiler in process; `run` builds into a temporary
+directory, executes the program, propagates its status, and cleans up. The full
+Go/Kitten parity suite is still pending, and the Go CLI remains the
+authoritative `purr`; `purr-kt` is not installed under the `purr` name.
 
 ---
 

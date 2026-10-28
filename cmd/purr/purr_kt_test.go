@@ -106,80 +106,70 @@ func TestKittenPurrHelpAndDispatch(t *testing.T) {
 		t.Fatalf("usage relationship differs from the Go text:\n%s", wantUsage)
 	}
 
-	cases := []struct {
+	type cliCase struct {
 		name      string
 		arguments []string
 		status    int
 		stdout    string
 		stderr    string
-	}{
+	}
+	cases := []cliCase{
 		{"no arguments", nil, 2, "", purrUsageText() + "\n"},
 		{"help", []string{"help"}, 0, purrUsageText() + "\n", ""},
 		{"dash h", []string{"-h"}, 0, purrUsageText() + "\n", ""},
 		{"dash dash help", []string{"--help"}, 0, purrUsageText() + "\n", ""},
 		{"help extra", []string{"help", "extra"}, 0, purrUsageText() + "\n", ""},
+		{"dash h extra", []string{"-h", "extra"}, 0, purrUsageText() + "\n", ""},
+		{"dash dash help extra", []string{"--help", "extra"}, 0, purrUsageText() + "\n", ""},
 		{"unknown", []string{"wat"}, 2, "", "purr: unknown command \"wat\"\n\n" + purrUsageText() + "\n"},
 		{"empty command", []string{""}, 2, "", "purr: unknown command \"\"\n\n" + purrUsageText() + "\n"},
 		{"flag command", []string{"--version"}, 2, "", "purr: unknown command \"--version\"\n\n" + purrUsageText() + "\n"},
 		{"build usage", []string{"build"}, 2, "", "purr build: missing source file\n\n" + purrUsageText() + "\n"},
 		{"build extension", []string{"build", "x"}, 2, "", "purr build: \"x\" is not a Kitten source file (expected a .ktn file)\n"},
-		{"run stub", []string{"run", "x.ktn"}, 2, "", "purr: command \"run\" is not implemented in this build yet\n" + purrUsageText() + "\n"},
+		{"run usage", []string{"run"}, 2, "", "purr run: missing source file\n\n" + purrUsageText() + "\n"},
+		{"run extension", []string{"run", "x"}, 2, "", "purr run: \"x\" is not a Kitten source file (expected a .ktn file)\n"},
+		{"run output rejected", []string{"run", "-o", "out", "x.ktn"}, 2, "", "purr run: -o is not supported; run compiles to a temporary executable\n"},
+		{"run missing output value", []string{"run", "-o"}, 2, "", "purr run: -o requires a path\n\n" + purrUsageText() + "\n"},
 	}
+	// Go's %q and Kitten's quote_argument agree on these ASCII forms. The
+	// expected text exercises the same quoting in both implementations. They
+	// deliberately do not agree on printable non-ASCII UTF-8: Go's %q emits
+	// the rune, while Kitten's byte-oriented quote_argument emits \xNN for each
+	// byte above 0x7F. That known gap is not changed in this test-only slice.
+	for _, command := range []string{"a\"b", "a\\b", "a\nb", "a\tb", "a\rb", "\x01", "\x7f"} {
+		cases = append(cases, cliCase{
+			name:      "unknown " + quoteForTest(command),
+			arguments: []string{command},
+			status:    2,
+			stdout:    "",
+			stderr:    "purr: unknown command " + quoteForTest(command) + "\n\n" + purrUsageText() + "\n",
+		})
+	}
+
 	for _, testCase := range cases {
-		for pipeline, executable := range map[string]string{"Go": goKT, "Kitten": kittenKT} {
-			result := runPurrKT(t, executable, t.TempDir(), testCase.arguments)
-			if result.status != testCase.status || result.stdout != testCase.stdout || result.stderr != testCase.stderr {
-				t.Errorf("%s %s: status %d, stdout %q, stderr %q; want %d, %q, %q",
-					pipeline, testCase.name, result.status, result.stdout, result.stderr,
-					testCase.status, testCase.stdout, testCase.stderr)
+		t.Run(testCase.name, func(t *testing.T) {
+			// The Go CLI and both Kitten builds must agree on status, stdout,
+			// and stderr. The only permitted difference is the documented
+			// usage block, which the Kitten sidecar extends by two lines.
+			goResult := runPurrKT(t, goPurr, t.TempDir(), testCase.arguments)
+			if goResult.status != testCase.status {
+				t.Errorf("Go status %d, want %d", goResult.status, testCase.status)
 			}
-		}
-	}
-
-	// Shared dispatch must match the Go CLI except for the usage block.
-	for _, arguments := range [][]string{nil, {"help"}, {"-h"}, {"--help"}, {"help", "x"}, {"wat"}, {""}, {"--version"}} {
-		goResult := runPurrKT(t, goPurr, t.TempDir(), arguments)
-		ktResult := runPurrKT(t, goKT, t.TempDir(), arguments)
-		if goResult.status != ktResult.status {
-			t.Errorf("%v: status Go %d, Kitten %d", arguments, goResult.status, ktResult.status)
-		}
-		if arguments != nil && arguments[0] == "wat" || len(arguments) == 1 && arguments[0] == "" || len(arguments) == 1 && arguments[0] == "--version" {
-			prefix := ""
-			if len(arguments) > 0 {
-				prefix = "purr: unknown command " + quoteForTest(arguments[0]) + "\n\n"
+			if normalizeBuildUsage(t, goResult.stdout) != normalizeBuildUsage(t, testCase.stdout) {
+				t.Errorf("Go stdout %q, want %q (normalized)", goResult.stdout, testCase.stdout)
 			}
-			if ktResult.stderr != prefix+purrUsageText()+"\n" {
-				t.Errorf("%v: unknown stderr %q", arguments, ktResult.stderr)
+			if normalizeBuildUsage(t, goResult.stderr) != normalizeBuildUsage(t, testCase.stderr) {
+				t.Errorf("Go stderr %q, want %q (normalized)", goResult.stderr, testCase.stderr)
 			}
-		} else {
-			// Go usage is the Kitten usage with the two added lines removed.
-			goStderr := goResult.stderr
-			goStdout := goResult.stdout
-			ktStderr := ktResult.stderr
-			ktStdout := ktResult.stdout
-			if strings.Contains(goStderr, "purr build") {
-				goStderr = strings.Replace(goStderr, goUsage, "", 1)
-				ktStderr = strings.Replace(ktStderr, purrUsageText(), "", 1)
+			for pipeline, executable := range map[string]string{"Go-built": goKT, "Kitten-built": kittenKT} {
+				result := runPurrKT(t, executable, t.TempDir(), testCase.arguments)
+				if result.status != testCase.status || result.stdout != testCase.stdout || result.stderr != testCase.stderr {
+					t.Errorf("%s %s: status %d, stdout %q, stderr %q; want %d, %q, %q",
+						pipeline, testCase.name, result.status, result.stdout, result.stderr,
+						testCase.status, testCase.stdout, testCase.stderr)
+				}
 			}
-			if strings.Contains(goStdout, "purr build") {
-				goStdout = strings.Replace(goStdout, goUsage, "", 1)
-				ktStdout = strings.Replace(ktStdout, purrUsageText(), "", 1)
-			}
-			if goStderr != ktStderr || goStdout != ktStdout {
-				t.Errorf("%v: Go stdout/stderr %q/%q, Kitten %q/%q", arguments, goResult.stdout, goResult.stderr, ktResult.stdout, ktResult.stderr)
-			}
-		}
-	}
-
-	// Even an unusual command name is quoted like Go's %q for the tested ASCII forms.
-	for _, command := range []string{"a\"b", "a\\b", "a\nb"} {
-		goResult := runPurrKT(t, goPurr, t.TempDir(), []string{command})
-		ktResult := runPurrKT(t, goKT, t.TempDir(), []string{command})
-		goPrefix := strings.SplitN(goResult.stderr, "\n\n", 2)[0]
-		ktPrefix := strings.SplitN(ktResult.stderr, "\n\n", 2)[0]
-		if goPrefix != ktPrefix {
-			t.Errorf("command %q: Go unknown line %q, Kitten %q", command, goPrefix, ktPrefix)
-		}
+		})
 	}
 }
 

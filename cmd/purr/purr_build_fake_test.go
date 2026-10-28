@@ -46,6 +46,15 @@ case "$mode" in
     printf 'fake stderr\n' >&2
     exit 1
     ;;
+  args-fail)
+    printf 'fake compiler diagnostic\n' >&2
+    index=0
+    for argument in "$@"; do
+      printf 'arg%s=%s\n' "$index" "$argument" >&2
+      index=$((index + 1))
+    done
+    exit 1
+    ;;
   no-output)
     exit 0
     ;;

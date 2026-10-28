@@ -253,8 +253,9 @@ subset parser in `purr/manifest.ktn`, Phase 9.7 implemented the `purr new`
 module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, and Phase 9.8a
 implemented the `purr-kt` entry point, help/usage, and `new` dispatch in
 `purr.ktn` and `purr/cli.ktn`, in both pipelines. Phase 9.8b added the
-in-process `build` command in `purr/build.ktn`; `run` remains a stub. The next
-implementation step is 9.8c's `run` command and the full parity suite. `try_find_program` is
+in-process `build` command in `purr/build.ktn`, and Phase 9.8c implemented the
+`run` command in `purr/cli.ktn` with focused both-pipeline tests. The remaining
+9.8c work is the full parity suite. `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
 separate later change. File writing now unblocks `purr new` and process launch
@@ -320,12 +321,17 @@ loader, lexer, parser, checker, code generator, loader path helpers, and
 `main`. The binary name is always `purr-kt`; the Go CLI remains the authoritative
 `purr`. Help and usage name the program `purr` deterministically, never argv[0].
 
-`purr-kt` supports `help`, `new`, and `build`; `run` remains a stub. The build
-path mirrors the Go CLI's argument grammar, compiler/PATH/pkg-config discovery,
-compiler argv, output validation, diagnostics, and statuses, with the two
-documented deviations for combined stream order and signal status. Cleanup is
-non-recursive and reports leftovers. 9.8c adds run and the full parity suite,
-and 9.9 is the Go-CLI freeze/name swap. Tests must keep the Go CLI behavior
+`purr-kt` supports `help`, `new`, `build`, and `run`. The build path mirrors the
+Go CLI's argument grammar, compiler/PATH/pkg-config discovery, compiler argv,
+output validation, diagnostics, and statuses, with the two documented
+deviations for combined stream order and signal status. `run` shares that
+argument grammar, rejects `-o`, builds into a `purr-run.` temporary directory,
+executes with `try_run`, propagates the child's status, and cleans up
+non-recursively with notes. A signaled child therefore reports `128 + signal`
+through `try_run`; the Go CLI's `ExitCode()` path reports `-1`, observed as 255
+on POSIX. That difference is unavoidable while the documented `try_run` mapping
+remains. The run feature is implemented; the full 9.8c parity suite remains, and
+9.9 is the Go-CLI freeze/name swap. Tests must keep the Go CLI behavior
 unchanged.
 
 ### Adding a built-in

@@ -1,7 +1,7 @@
 // purr/cli.ktn - the Kitten-written purr command surface.
 //
-// This build intentionally links only the new-project module, not the compiler.
-// build and run are recognized stubs until 9.8b/9.8c.
+// It dispatches help, new, build, and run. build and run link the in-process
+// compiler modules; run compiles to a temporary executable and executes it.
 
 import "build.ktn";
 import "new.ktn";
@@ -81,7 +81,14 @@ fn ends_with(string value, string suffix) -> bool {
     return substring(value, length(value) - length(suffix), length(value)) == suffix;
 }
 
-fn run_build(string[] arguments, int count) {
+struct ParsedCommand {
+    string source;
+    string output;
+    bool valid;
+    string error;
+}
+
+fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
     string source = "";
     string output = "";
     int positional_count = 0;
@@ -132,22 +139,33 @@ fn run_build(string[] arguments, int count) {
             error = "expected one source file, got " + decimal(positional_count);
         }
     }
-    if (bad) {
-        eprint("purr build: " + error);
+    return ParsedCommand {
+        source = source,
+        output = output,
+        valid = !bad,
+        error = error
+    };
+}
+
+fn run_build(string[] arguments, int count) {
+    ParsedCommand parsed = parse_command_arguments(arguments, count);
+    if (!parsed.valid) {
+        eprint("purr build: " + parsed.error);
         eprint("");
         print_usage_to_stderr();
         exit(2);
     }
-    if (!ends_with(source, ".ktn")) {
-        eprint("purr build: " + quote_argument(source) +
+    if (!ends_with(parsed.source, ".ktn")) {
+        eprint("purr build: " + quote_argument(parsed.source) +
             " is not a Kitten source file (expected a .ktn file)");
         exit(2);
     }
+    string output = parsed.output;
     if (output == "") {
-        output = build_default_output(source);
+        output = build_default_output(parsed.source);
     }
 
-    match (build_project(source, output)) {
+    match (build_project(parsed.source, output)) {
         Ok(warnings, notes) {
             if (warnings != "") {
                 eprint(warnings);
@@ -167,6 +185,108 @@ fn run_build(string[] arguments, int count) {
                 eprint(notes);
             }
             exit(1);
+        }
+    }
+}
+
+fn path_exists(string path) -> bool {
+    match (try_file_info(path)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            return true;
+        }
+        Missing {
+            return false;
+        }
+        Failed(message) {
+            return false;
+        }
+    }
+}
+
+fn cleanup_run_notes(string executable, string directory) -> string {
+    string notes = "";
+    if (path_exists(executable)) {
+        match (try_remove(executable)) {
+            Ok {}
+            Failed(message) {
+                notes = "       note: could not remove " + executable + ": " + message;
+            }
+        }
+    }
+    if (notes != "") {
+        notes = notes + "\n";
+    }
+    match (try_remove(directory)) {
+        Ok {}
+        Failed(message) {
+            notes = notes + "       note: could not remove " + directory + ": " + message;
+        }
+    }
+    return notes;
+}
+
+fn finish_run(string executable, string directory, int status) {
+    string notes = cleanup_run_notes(executable, directory);
+    if (notes != "") {
+        eprint(notes);
+    }
+    exit(status);
+}
+
+fn run_run(string[] arguments, int count) {
+    ParsedCommand parsed = parse_command_arguments(arguments, count);
+    if (!parsed.valid) {
+        eprint("purr run: " + parsed.error);
+        eprint("");
+        print_usage_to_stderr();
+        exit(2);
+    }
+    if (parsed.output != "") {
+        eprint("purr run: -o is not supported; run compiles to a temporary executable");
+        exit(2);
+    }
+    if (!ends_with(parsed.source, ".ktn")) {
+        eprint("purr run: " + quote_argument(parsed.source) +
+            " is not a Kitten source file (expected a .ktn file)");
+        exit(2);
+    }
+
+    match (try_create_temp_directory("purr-run")) {
+        Failed(message) {
+            eprint("purr run: " + message);
+            exit(1);
+        }
+        Ok(directory) {
+            string executable = directory + "/program";
+            match (build_project(parsed.source, executable)) {
+                Ok(warnings, notes) {
+                    if (warnings != "") {
+                        eprint(warnings);
+                    }
+                    if (notes != "") {
+                        eprint(notes);
+                    }
+                    match (try_run(executable, new string[0])) {
+                        Ok(status) {
+                            finish_run(executable, directory, status);
+                        }
+                        Failed(message) {
+                            eprint("purr run: " + message);
+                            finish_run(executable, directory, 1);
+                        }
+                    }
+                }
+                Failed(message, output_text, notes) {
+                    eprint(message);
+                    if (output_text != "") {
+                        eprint(output_text);
+                    }
+                    if (notes != "") {
+                        eprint(notes);
+                    }
+                    finish_run(executable, directory, 1);
+                }
+            }
         }
     }
 }
@@ -236,10 +356,8 @@ public fn run_cli() {
         return;
     }
     if (command == "run") {
-        eprint("purr: command " + quote_argument(command) +
-            " is not implemented in this build yet");
-        print_usage_to_stderr();
-        exit(2);
+        run_run(arguments, count);
+        return;
     }
 
     eprint("purr: unknown command " + quote_argument(command));

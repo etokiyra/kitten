@@ -84,7 +84,7 @@ Implementation status:
 | 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
 | 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build added in 9.8b** |
 | 8b. Kitten `purr` build | **implemented in 9.8b** |
-| 8c. Kitten `purr` run + full parity | proposed, next |
+| 8c. Kitten `purr` run + full parity | **run implemented; full parity suite remains** |
 | 9. Project mode | proposed |
 | 10. Library object mode | proposed, deferred |
 | 11. Freeze / name swap | proposed (9.9 milestone) |
@@ -864,7 +864,8 @@ command.
 The sidecar binary is always named `purr-kt`; the Go CLI remains the
 authoritative `purr`. In 9.8a the sidecar imported only `new.ktn` and stayed
 small. 9.8b adds `build.ktn` and links the in-process compiler modules, so the
-current sidecar is substantially larger; `run` is still a stub.
+current sidecar is substantially larger. 9.8c implements `run`; the full parity
+suite remains.
 
 Implemented in 9.8a:
 
@@ -875,9 +876,11 @@ Implemented in 9.8a:
 - `new`: the 9.7 module and probe behavior, with output and statuses unchanged;
 - `build`: the in-process 9.8b implementation, with Go-compatible argument
   parsing, diagnostics, streams, and statuses; and
-- `run`: a recognized stub printing
-  `purr: command "run" is not implemented in this build yet`, then usage on
-  stderr, exit 2.
+- `run`: shared Go-compatible argument parsing, `-o` rejection, a `purr-run.`
+  temporary directory, an in-process build to `<temp>/program`, execution with
+  `try_run`, direct child-status propagation, and non-recursive cleanup notes.
+  A signaled child reports `128 + signal`; the Go CLI observes 255 because
+  `ExitCode()` is `-1` and `os.Exit(-1)` is 255 on POSIX.
 
 The usage text is the Go text plus two lines, in this order:
 

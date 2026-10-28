@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,11 +46,21 @@ func buildStage1(t *testing.T) string {
 // runExternal runs a program and returns its streams and status.
 func runExternal(t *testing.T, executable string, arguments []string, directory string, environment []string) programResult {
 	t.Helper()
+	return runExternalWithInput(t, executable, arguments, directory, nil, environment)
+}
+
+// runExternalWithInput is runExternal with an optional stdin. A nil input
+// leaves stdin connected to /dev/null, matching the previous helper.
+func runExternalWithInput(t *testing.T, executable string, arguments []string, directory string, input io.Reader, environment []string) programResult {
+	t.Helper()
 
 	command := exec.Command(executable, arguments...)
 	command.Dir = directory
 	if environment != nil {
 		command.Env = append(os.Environ(), environment...)
+	}
+	if input != nil {
+		command.Stdin = input
 	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
