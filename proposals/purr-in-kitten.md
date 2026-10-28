@@ -85,7 +85,7 @@ Implementation status:
 | 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; build added in 9.8b** |
 | 8b. Kitten `purr` build | **implemented in 9.8b** |
 | 8c. Kitten `purr` run + full parity | **run implemented; full parity suite remains** |
-| 9. Project mode | proposed |
+| 9. Project mode | **implemented: current-directory binary build/run; library builds deferred** |
 | 10. Library object mode | proposed, deferred |
 | 11. Freeze / name swap | proposed (9.9 milestone) |
 
@@ -891,10 +891,12 @@ The usage text is the Go text plus two lines, in this order:
 
 The sidecar uses the deterministic program name `purr`, never `argv()[0]`.
 
-## 9. Project mode and output naming
+## 9. Project mode and output naming (implemented for binary projects)
 
-Project mode activates only for `purr build`/`purr run` with no source argument
-and a `purr.toml` in the **current directory**.
+Project mode activates only for `purr build`/`purr run` with no source argument,
+no output option, and a `purr.toml` in the **current directory**. It never
+searches parent directories. The implementation lives in `purr/project.ktn` and
+is dispatched from `purr/cli.ktn`.
 
 - Parse `purr.toml`; detect exactly one of `src/main.ktn` (binary) or
   `src/lib.ktn` (library).
@@ -908,11 +910,18 @@ and a `purr.toml` in the **current directory**.
 - A library has no `main` and today's `codegen.Generate` requires one. The
   first library implementation slice will add a no-entry-point generation mode
   and compile `target/<name>.o` with the C compiler (no executable). Until that
-  slice lands, `purr build` on a library reports a clear
-  `library builds are not implemented yet` and `purr run` on a library is a
-  project error. `purr new --lib` still scaffolds the layout.
+  slice lands, `purr build` on a library reports `purr build: library builds are
+  not implemented yet` and `purr run` on a library reports `purr run: library
+  projects cannot be run`. `purr new --lib` still scaffolds the layout.
 - No parent-directory manifest search, workspace, profiles, features, or
   dependency sections in 9.0.
+- A malformed manifest is reported after the command prefix with the parser's
+  positioned message. Both source files report `project has both src/main.ktn
+  and src/lib.ktn`; neither reports `project has neither src/main.ktn nor
+  src/lib.ktn`.
+- A failed build removes a partial output it created and removes a `target`
+  directory it created once it is empty. A pre-existing target, its contents,
+  and a pre-existing output are never removed.
 
 `target/` is the only generated project directory; `.gitignore` contains
 `/target`.

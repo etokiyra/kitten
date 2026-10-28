@@ -5,6 +5,7 @@
 
 import "build.ktn";
 import "new.ktn";
+import "project.ktn";
 
 fn usage_text() -> string {
     return "Kitten compiler\n" +
@@ -84,6 +85,8 @@ fn ends_with(string value, string suffix) -> bool {
 struct ParsedCommand {
     string source;
     string output;
+    bool have_source;
+    bool have_output;
     bool valid;
     string error;
 }
@@ -92,12 +95,15 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
     string source = "";
     string output = "";
     int positional_count = 0;
+    bool have_source = false;
+    bool have_output = false;
     bool bad = false;
     string error = "";
     int index = 2;
     while (index < count && !bad) {
         string argument = arguments[index];
         if (argument == "-o" || argument == "--output") {
+            have_output = true;
             if (index + 1 >= count) {
                 bad = true;
                 error = argument + " requires a path";
@@ -106,8 +112,10 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
                 index++;
             }
         } else if (starts_with(argument, "-o=")) {
+            have_output = true;
             output = substring(argument, 3, length(argument));
         } else if (starts_with(argument, "--output=")) {
+            have_output = true;
             output = substring(argument, 9, length(argument));
         } else if (argument == "--") {
             index++;
@@ -115,6 +123,7 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
                 positional_count++;
                 if (positional_count == 1) {
                     source = arguments[index];
+                    have_source = true;
                 }
                 index++;
             }
@@ -125,6 +134,7 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
             positional_count++;
             if (positional_count == 1) {
                 source = arguments[index];
+                have_source = true;
             }
         }
         index++;
@@ -142,6 +152,8 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
     return ParsedCommand {
         source = source,
         output = output,
+        have_source = have_source,
+        have_output = have_output,
         valid = !bad,
         error = error
     };
@@ -150,6 +162,10 @@ fn parse_command_arguments(string[] arguments, int count) -> ParsedCommand {
 fn run_build(string[] arguments, int count) {
     ParsedCommand parsed = parse_command_arguments(arguments, count);
     if (!parsed.valid) {
+        if (!parsed.have_source && !parsed.have_output && path_exists("purr.toml")) {
+            run_project_build();
+            return;
+        }
         eprint("purr build: " + parsed.error);
         eprint("");
         print_usage_to_stderr();
@@ -203,6 +219,166 @@ fn path_exists(string path) -> bool {
     }
 }
 
+// ProjectTarget records the result of preparing the project's target directory.
+// created is true only when this invocation created it, so a failed build can
+// remove an otherwise empty target it introduced without touching a directory
+// that already existed.
+struct ProjectTarget {
+    bool created;
+    string error;
+}
+
+fn prepare_project_target(string target) -> ProjectTarget {
+    match (try_file_info(target)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            if (is_directory) {
+                return ProjectTarget { created = false, error = "" };
+            }
+            return ProjectTarget { created = false, error = "target is not a directory" };
+        }
+        Missing {
+            match (try_create_directory(target)) {
+                Ok {
+                    return ProjectTarget { created = true, error = "" };
+                }
+                Failed(message) {
+                    return ProjectTarget { created = false, error = message };
+                }
+            }
+        }
+        Failed(message) {
+            return ProjectTarget { created = false, error = message };
+        }
+    }
+}
+
+// cleanup_failed_project removes a partial output the failed build introduced,
+// and removes a target directory this invocation created once it is empty. A
+// pre-existing output or target is never removed.
+fn cleanup_failed_project(string output, bool output_existed, string target, bool target_created) -> string {
+    string notes = "";
+    if (!output_existed && path_exists(output)) {
+        match (try_remove(output)) {
+            Ok {}
+            Failed(message) {
+                notes = "       note: could not remove " + output + ": " + message;
+            }
+        }
+    }
+    if (target_created) {
+        match (try_remove(target)) {
+            Ok {}
+            Failed(message) {
+                if (notes != "") {
+                    notes = notes + "\n";
+                }
+                notes = notes + "       note: could not remove " + target + ": " + message;
+            }
+        }
+    }
+    return notes;
+}
+
+fn report_build_messages(string warnings, string notes) {
+    if (warnings != "") {
+        eprint(warnings);
+    }
+    if (notes != "") {
+        eprint(notes);
+    }
+}
+
+fn report_build_failure(string message, string output_text, string notes) {
+    eprint(message);
+    if (output_text != "") {
+        eprint(output_text);
+    }
+    if (notes != "") {
+        eprint(notes);
+    }
+}
+
+fn run_project_build() {
+    match (discover_project()) {
+        Failed(message) {
+            eprint("purr build: " + message);
+            exit(1);
+        }
+        Library(name, source) {
+            eprint("purr build: library builds are not implemented yet");
+            exit(1);
+        }
+        Binary(name, source, target, output) {
+            ProjectTarget prepared = prepare_project_target(target);
+            if (prepared.error != "") {
+                eprint("purr build: " + prepared.error);
+                exit(1);
+            }
+            bool output_existed = path_exists(output);
+            match (build_project(source, output)) {
+                Ok(warnings, notes) {
+                    report_build_messages(warnings, notes);
+                    print("built", output);
+                    exit(0);
+                }
+                Failed(message, output_text, notes) {
+                    report_build_failure(message, output_text, notes);
+                    string cleanup = cleanup_failed_project(output, output_existed,
+                        target, prepared.created);
+                    if (cleanup != "") {
+                        eprint(cleanup);
+                    }
+                    exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn run_project_run() {
+    match (discover_project()) {
+        Failed(message) {
+            eprint("purr run: " + message);
+            exit(1);
+        }
+        Library(name, source) {
+            eprint("purr run: library projects cannot be run");
+            exit(1);
+        }
+        Binary(name, source, target, output) {
+            ProjectTarget prepared = prepare_project_target(target);
+            if (prepared.error != "") {
+                eprint("purr run: " + prepared.error);
+                exit(1);
+            }
+            bool output_existed = path_exists(output);
+            match (build_project(source, output)) {
+                Ok(warnings, notes) {
+                    report_build_messages(warnings, notes);
+                }
+                Failed(message, output_text, notes) {
+                    report_build_failure(message, output_text, notes);
+                    string cleanup = cleanup_failed_project(output, output_existed,
+                        target, prepared.created);
+                    if (cleanup != "") {
+                        eprint(cleanup);
+                    }
+                    exit(1);
+                }
+            }
+            match (try_run(output, new string[0])) {
+                Ok(status) {
+                    exit(status);
+                }
+                Failed(message) {
+                    eprint("purr run: " + message);
+                    exit(1);
+                }
+            }
+        }
+    }
+}
+
 fn cleanup_run_notes(string executable, string directory) -> string {
     string notes = "";
     if (path_exists(executable)) {
@@ -236,6 +412,10 @@ fn finish_run(string executable, string directory, int status) {
 fn run_run(string[] arguments, int count) {
     ParsedCommand parsed = parse_command_arguments(arguments, count);
     if (!parsed.valid) {
+        if (!parsed.have_source && !parsed.have_output && path_exists("purr.toml")) {
+            run_project_run();
+            return;
+        }
         eprint("purr run: " + parsed.error);
         eprint("");
         print_usage_to_stderr();

@@ -254,8 +254,11 @@ module and probe in `purr/new.ktn` and `purr/new_probe.ktn`, and Phase 9.8a
 implemented the `purr-kt` entry point, help/usage, and `new` dispatch in
 `purr.ktn` and `purr/cli.ktn`, in both pipelines. Phase 9.8b added the
 in-process `build` command in `purr/build.ktn`, and Phase 9.8c implemented the
-`run` command in `purr/cli.ktn` with focused both-pipeline tests. The remaining
-9.8c work is the full parity suite. `try_find_program` is
+`run` command in `purr/cli.ktn` with focused both-pipeline tests. Project mode
+then added `purr/project.ktn`, current-directory manifest discovery, and
+`target/<name>` build/run for binary projects; library builds remain the
+approved deferred error. The remaining 9.8c work is the full parity suite.
+`try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
 separate later change. File writing now unblocks `purr new` and process launch
@@ -308,16 +311,18 @@ imports `manifest.ktn` for name validation and uses only `try_file_info`,
 It tracks only paths it created, removes them in reverse order on failure, never
 recurses, and reports cleanup notes. Modes honor the umask; no chmod exists.
 
-`purr new` is not yet a user-facing command: the CLI entry point, argument
-parsing, and help belong to 9.8. Any change to the templates or cleanup behavior
-must update the both-pipeline tests in `cmd/purr/new_test.go`.
+The Go CLI does not dispatch `new` yet, so `purr/new_probe.ktn` built with the
+Go pipeline remains the reference. `purr-kt` dispatches `new` with the probe's
+argument grammar, messages, and statuses. Any change to the templates or cleanup
+behavior must update the both-pipeline tests in `cmd/purr/new_test.go` and the
+purr-kt parity tests in `cmd/purr/purr_kt_test.go`.
 
 ### Kitten `purr` sidecar
 
 `purr.ktn` is the repository-root entry point; `purr/cli.ktn` parses argv and
-imports `new.ktn` and `build.ktn`. `purr/build.ktn` imports the in-process
-loader, lexer, parser, checker, code generator, loader path helpers, and
-`embedded.ktn`; it does not import the probe drivers that define their own
+imports `new.ktn`, `build.ktn`, and `project.ktn`. `purr/build.ktn` imports the
+in-process loader, lexer, parser, checker, code generator, loader path helpers,
+and `embedded.ktn`; it does not import the probe drivers that define their own
 `main`. The binary name is always `purr-kt`; the Go CLI remains the authoritative
 `purr`. Help and usage name the program `purr` deterministically, never argv[0].
 
@@ -330,9 +335,12 @@ executes with `try_run`, propagates the child's status, and cleans up
 non-recursively with notes. A signaled child therefore reports `128 + signal`
 through `try_run`; the Go CLI's `ExitCode()` path reports `-1`, observed as 255
 on POSIX. That difference is unavoidable while the documented `try_run` mapping
-remains. The run feature is implemented; the full 9.8c parity suite remains, and
-9.9 is the Go-CLI freeze/name swap. Tests must keep the Go CLI behavior
-unchanged.
+remains. Without a source argument, no output option, and a `purr.toml` in the
+current directory, `build` and `run` enter binary project mode: they use the
+manifest and `src/main.ktn`, write `target/<name>`, and run that executable.
+Library projects report the approved deferred errors. The run feature and
+project mode are implemented; the full 9.8c parity suite remains, and 9.9 is the
+Go-CLI freeze/name swap. Tests must keep the Go CLI behavior unchanged.
 
 ### Adding a built-in
 

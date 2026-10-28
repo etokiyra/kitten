@@ -295,6 +295,9 @@ func runNewParityCase(t *testing.T, probe string, purrs map[string]string, probe
 	}
 }
 
+// The Go CLI does not implement `new` yet, so the reference implementation is
+// purr/new_probe.ktn built with the Go pipeline. Both purr-kt builds must match
+// that probe byte for byte, including generated trees and cleanup notes.
 func TestKittenPurrNewParity(t *testing.T) {
 	requireToolchain(t)
 	stage1 := buildStage1(t)
@@ -316,6 +319,16 @@ func TestKittenPurrNewParity(t *testing.T) {
 			{"077", "restricted", false, false},
 			{"000", "permissive", false, false},
 			{"022", "tail", true, true},
+			// Valid names across the manifest grammar: one byte, digits,
+			// embedded separators, the maximum length, and the default and
+			// explicit library modes.
+			{"022", "a", false, false},
+			{"022", "a1", false, false},
+			{"022", "hello-world", false, false},
+			{"022", "hello_world", false, false},
+			{"022", "x2-y_3", false, false},
+			{"022", strings.Repeat("a", 64), false, false},
+			{"022", "max-name", true, false},
 		}
 		for _, testCase := range cases {
 			probeArguments := []string{testCase.name}
@@ -340,6 +353,8 @@ func TestKittenPurrNewParity(t *testing.T) {
 			{strings.Repeat("a", 65)},
 			{"A"},
 			{"a/b"},
+			{"./a"},
+			{"a/"},
 			{"."},
 			{".."},
 			{"x-"},
@@ -347,11 +362,31 @@ func TestKittenPurrNewParity(t *testing.T) {
 			{"a b"},
 			{"caf\u00e9"},
 			{"a\n"},
+			{"1a"},
+			{"aB"},
+			{"a.b"},
+			{"_a"},
 			{"one", "two"},
+			{"one", "two", "three"},
+			{"one", ""},
 			{"--bad", "one"},
 			{"--lib", "--lib", "one"},
+			{"one", "--lib", "--lib"},
+			{"--lib"},
+			{"--lib", "--lib"},
+			{"--lib", "one", "two"},
 			{"--"},
+			{"--", "a"},
 			{"-x"},
+			{"-a"},
+			// The 9.7 probe treats -h and --help as unknown flags (usage,
+			// exit 2). The proposal's dedicated new help text is not
+			// implemented yet, so these cases pin current probe/purr-kt
+			// parity only; they do not bless the design gap.
+			{"--help"},
+			{"-h"},
+			{"--lib=1", "one"},
+			{"--LIB", "one"},
 		}
 		for _, arguments := range argumentSets {
 			purrArguments := append([]string{"new"}, arguments...)
@@ -366,6 +401,11 @@ func TestKittenPurrNewParity(t *testing.T) {
 		}{
 			{"regular file", func(t *testing.T, dir string) {
 				if err := os.WriteFile(filepath.Join(dir, "a"), []byte("keep"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{"empty directory", func(t *testing.T, dir string) {
+				if err := os.Mkdir(filepath.Join(dir, "a"), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}},
@@ -384,6 +424,14 @@ func TestKittenPurrNewParity(t *testing.T) {
 			}},
 			{"directory symlink", func(t *testing.T, dir string) {
 				if err := os.Mkdir(filepath.Join(dir, "target"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("target", filepath.Join(dir, "a")); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{"file symlink", func(t *testing.T, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "target"), []byte("keep"), 0o644); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Symlink("target", filepath.Join(dir, "a")); err != nil {
@@ -438,39 +486,83 @@ func TestKittenPurrNewParity(t *testing.T) {
 
 func TestKittenPurrGeneratedProject(t *testing.T) {
 	requireToolchain(t)
-	purr := buildPurrKTWithGo(t)
+	stage1 := buildStage1(t)
 	goPurr := buildGoPurr(t)
-	directory := t.TempDir()
-	start := time.Now()
-	result := runPurrKT(t, purr, directory, []string{"new", "fromkitten"})
-	elapsed := time.Since(start)
-	if result.status != 0 || result.stdout != "" || result.stderr != "     Created binary (application) fromkitten\n" {
-		t.Fatalf("purr-kt new: status %d, stdout %q, stderr %q", result.status, result.stdout, result.stderr)
+	purrs := map[string]string{
+		"Go-built":     buildPurrKTWithGo(t),
+		"Kitten-built": buildPurrKTWithKitten(t, stage1),
 	}
-	t.Logf("purr-kt new wall time: %s", elapsed)
-	project := filepath.Join(directory, "fromkitten")
-	executable := filepath.Join(directory, "fromkitten-bin")
-	build := runExternal(t, goPurr, []string{"build", filepath.Join(project, "src", "main.ktn"), "-o", executable}, project, nil)
-	if build.status != 0 || build.stderr != "" {
-		t.Fatalf("Go purr build of generated project: status %d, stderr %q", build.status, build.stderr)
-	}
-	run := runExternal(t, executable, nil, project, nil)
-	if run.status != 0 || run.stdout != "Hello, world!\n" || run.stderr != "" {
-		t.Fatalf("generated binary: status %d, stdout %q, stderr %q", run.status, run.stdout, run.stderr)
-	}
-	run = runExternal(t, goPurr, []string{"run", filepath.Join(project, "src", "main.ktn")}, project, nil)
-	if run.status != 0 || run.stdout != "Hello, world!\n" || run.stderr != "" {
-		t.Fatalf("Go purr run of generated project: status %d, stdout %q, stderr %q", run.status, run.stdout, run.stderr)
+	// The Go CLI and the Go-built sidecar both exercise the Go compiler
+	// pipeline; the Kitten-built sidecar exercises the Kitten pipeline. All
+	// three must handle a project that purr-kt just scaffolded.
+	builders := map[string]string{
+		"Go CLI":               goPurr,
+		"Go-built purr-kt":     purrs["Go-built"],
+		"Kitten-built purr-kt": purrs["Kitten-built"],
 	}
 
-	ktExecutable := filepath.Join(directory, "fromkitten-bin-kt")
-	ktBuild := runPurrKT(t, purr, project, []string{"build", filepath.Join(project, "src", "main.ktn"), "-o", ktExecutable})
-	if ktBuild.status != 0 || ktBuild.stderr != "" {
-		t.Fatalf("purr-kt build of generated project: status %d, stderr %q", ktBuild.status, ktBuild.stderr)
-	}
-	ktRun := runExternal(t, ktExecutable, nil, project, nil)
-	if ktRun.status != 0 || ktRun.stdout != "Hello, world!\n" || ktRun.stderr != "" {
-		t.Fatalf("purr-kt built project: status %d, stdout %q, stderr %q", ktRun.status, ktRun.stdout, ktRun.stderr)
+	for generator, purr := range purrs {
+		for _, library := range []bool{false, true} {
+			mode := "binary"
+			wantOutput := "Hello, world!\n"
+			if library {
+				mode = "library"
+				wantOutput = "5\n"
+			}
+			t.Run(generator+"/"+mode, func(t *testing.T) {
+				directory := t.TempDir()
+				name := "fromkitten"
+				arguments := []string{"new", name}
+				wantMessage := "     Created binary (application) " + name + "\n"
+				if library {
+					arguments = []string{"new", "--lib", name}
+					wantMessage = "     Created library " + name + "\n"
+				}
+				start := time.Now()
+				result := runPurrKTWithShell(t, "umask 022; exec \"$@\"", purr, directory, arguments)
+				elapsed := time.Since(start)
+				if result.status != 0 || result.stdout != "" || result.stderr != wantMessage {
+					t.Fatalf("%s new %s: status %d, stdout %q, stderr %q; want status 0, stdout empty, stderr %q",
+						generator, mode, result.status, result.stdout, result.stderr, wantMessage)
+				}
+				t.Logf("%s new %s wall time: %s", generator, mode, elapsed.Round(time.Millisecond))
+				assertNewTree(t, directory, name, library, 0o755, 0o644)
+
+				project := filepath.Join(directory, name)
+				sourcePath := filepath.Join(project, "src", "main.ktn")
+				if library {
+					sourcePath = filepath.Join(project, "test_main.ktn")
+					testSource := "import \"src/lib.ktn\";\nfn main() {\n    print(add(2, 3));\n}\n"
+					if err := os.WriteFile(sourcePath, []byte(testSource), 0o644); err != nil {
+						t.Fatalf("writing library test main: %v", err)
+					}
+				}
+
+				for pipeline, builder := range builders {
+					label := strings.ReplaceAll(pipeline, " ", "-")
+					executable := filepath.Join(directory, "program-"+generator+"-"+mode+"-"+label)
+					build := runPurrKT(t, builder, project, []string{"build", sourcePath, "-o", executable})
+					if build.status != 0 || build.stderr != "" {
+						t.Errorf("%s via %s: status %d, stdout %q, stderr %q",
+							mode, pipeline, build.status, build.stdout, build.stderr)
+						continue
+					}
+					run := runExternal(t, executable, nil, project, nil)
+					if run.status != 0 || run.stdout != wantOutput || run.stderr != "" {
+						t.Errorf("%s via %s: run status %d, stdout %q, stderr %q; want status 0, stdout %q, stderr empty",
+							mode, pipeline, run.status, run.stdout, run.stderr, wantOutput)
+					}
+				}
+
+				// The sidecar's own run path must also work on the generated
+				// project, using the pipeline that built that sidecar.
+				run := runPurrKT(t, purr, project, []string{"run", sourcePath})
+				if run.status != 0 || run.stdout != wantOutput || run.stderr != "" {
+					t.Errorf("%s via %s run: status %d, stdout %q, stderr %q; want status 0, stdout %q, stderr empty",
+						mode, generator, run.status, run.stdout, run.stderr, wantOutput)
+				}
+			})
+		}
 	}
 }
 

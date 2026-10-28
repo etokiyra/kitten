@@ -3437,16 +3437,57 @@ through a Kitten-written pipeline and reproduce the same behavior.
 
 ## 29. Kitten-written `purr` sidecar (experimental)
 
-`purr.ktn`, `purr/cli.ktn`, and `purr/build.ktn` are a Kitten-written sidecar
-command, built and tested as `purr-kt`. The Go CLI remains the authoritative
-`purr`. The sidecar currently supports `help`, `new`, and `build`; `run` is a
-recognized stub. It does not implement project discovery or library builds.
+`purr.ktn`, `purr/cli.ktn`, `purr/build.ktn`, and `purr/project.ktn` are a
+Kitten-written sidecar command, built and tested as `purr-kt`. The Go CLI remains
+the authoritative `purr`. The sidecar supports `help`, `new`, `build`, and `run`,
+including current-directory binary project mode. Library project builds remain
+deferred.
 
 `build` links the Kitten-written loader, lexer, parser, checker, and generator
 in process, discovers `CC` or `cc`/`gcc`/`clang` with PATH rules matching Go's
 `exec.LookPath` (relative PATH results are rejected as Go's `ErrDot`), reads
 `pkg-config bdw-gc` flags, writes the generated C and embedded runtime to a
 private temp tree, invokes the C compiler, and validates the output.
+
+`run` builds into a `purr-run.` temporary directory, executes the program with
+inherited standard streams, propagates its status, and cleans up
+non-recursively.
+
+### 29.1 Project mode
+
+Project mode activates only for `purr-kt build` or `purr-kt run` with no source
+argument, no `-o`/`--output` option, and a `purr.toml` in the **current
+directory**. There is no parent-directory search. The manifest is parsed with
+the strict subset parser in `purr/manifest.ktn`, and exactly one of
+`src/main.ktn` (binary) or `src/lib.ktn` (library) must exist.
+
+For a binary project named by the manifest:
+
+- `purr-kt build` writes `target/<name>`, creates `target` with mode `0755`
+  (subject to the umask) when absent, and prints `built target/<name>`.
+- If `target` exists and is not a directory, the build fails with
+  `purr build: target is not a directory`; the existing path is untouched.
+- `purr-kt run` builds the same target and executes it with inherited standard
+  streams, propagating the child's status. The built target remains.
+- A failed build removes a partial output that this invocation created and
+  removes a `target` directory that this invocation created once it is empty.
+  A pre-existing target, its contents, and a pre-existing output are never
+  removed.
+
+A library project is deferred: `purr-kt build` reports
+`purr build: library builds are not implemented yet` and `purr-kt run` reports
+`purr run: library projects cannot be run`; neither creates `target`.
+
+Project-discovery failures use the command prefix and exit 1:
+
+- a manifest read or parse failure reports the runtime or parser message after
+  `purr build: ` or `purr run: `;
+- both source files report `project has both src/main.ktn and src/lib.ktn`;
+- neither source reports `project has neither src/main.ktn nor src/lib.ktn`.
+
+Without `purr.toml`, the existing `missing source file` usage error and status 2
+are preserved. An explicit source argument, or any output option without a
+source, retains source-mode parsing and never enters project mode.
 
 The sidecar intentionally differs from the Go CLI in four tool-behavior details:
 

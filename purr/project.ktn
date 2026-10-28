@@ -1,0 +1,82 @@
+// purr/project.ktn - current-directory project discovery for purr build/run.
+//
+// Project mode activates only when the command has no source argument, no
+// output option, and purr.toml exists in the current directory. The manifest is
+// parsed by the existing strict subset parser, and exactly one of src/main.ktn
+// or src/lib.ktn selects a binary or library project.
+//
+// This module performs discovery only. Building and running stay in purr/cli.ktn
+// and purr/build.ktn.
+
+import "manifest.ktn";
+
+public union ProjectResult {
+    Binary { string name; string source; string target; string output; }
+    Library { string name; string source; }
+    Failed { string message; }
+}
+
+fn project_path_exists(string path) -> bool {
+    match (try_file_info(path)) {
+        Ok(is_file, is_directory, is_symlink, executable, size) {
+            return true;
+        }
+        Missing {
+            return false;
+        }
+        Failed(message) {
+            return false;
+        }
+    }
+}
+
+// discover_project reads and validates purr.toml in the current directory and
+// selects the project kind. A read or parse failure is returned unchanged so
+// the command can add its own "purr build:" or "purr run:" prefix.
+public fn discover_project() -> ProjectResult {
+    string text = "";
+    match (try_read_file("purr.toml")) {
+        Failed(message) {
+            return ProjectResult.Failed { message = message };
+        }
+        Ok(value) {
+            text = value;
+        }
+    }
+
+    string name = "";
+    match (parse_manifest(text)) {
+        Failed(message) {
+            return ProjectResult.Failed { message = message };
+        }
+        Ok(parsed_name, version) {
+            name = parsed_name;
+        }
+    }
+
+    bool has_binary = project_path_exists("src/main.ktn");
+    bool has_library = project_path_exists("src/lib.ktn");
+    if (has_binary && has_library) {
+        return ProjectResult.Failed {
+            message = "project has both src/main.ktn and src/lib.ktn"
+        };
+    }
+    if (has_library) {
+        return ProjectResult.Library {
+            name = name,
+            source = "src/lib.ktn"
+        };
+    }
+    if (!has_binary) {
+        return ProjectResult.Failed {
+            message = "project has neither src/main.ktn nor src/lib.ktn"
+        };
+    }
+
+    return ProjectResult.Binary {
+        name = name,
+        source = "src/main.ktn",
+        target = "target",
+        output = "target/" + name
+    };
+}
