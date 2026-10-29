@@ -2922,9 +2922,12 @@ The sources are:
 `selfhost/checker/README.md` describes how to build and run it. The checker driver
 still checks exactly the two modules it is given — `input.txt` as the root and
 `input2.txt` as an import — so that cross-module checking can be exercised without
-a loader. The Kitten-written loader under `selfhost/loader` discovers imports for an
-absolute root and feeds the checker directly through `selfhost/loadunit.ktn`; its
-documented exclusion is a relative root (Sections 22.2 and 22.4).
+a loader. The Kitten-written loader under `selfhost/loader` discovers imports and
+feeds the checker directly through `selfhost/loadunit.ktn`. Root paths may be
+relative: `resolve_root` resolves a relative spelling against the kernel's
+current-directory query the way the reference's `canonicalPath` does with
+`filepath.Abs`, so the loader language parity with the reference is complete
+(Sections 22.2 and 22.4).
 
 ### 27.2 API
 
@@ -3057,8 +3060,9 @@ Kitten-written code generator: the layer that turns resolved names and types int
 C text and the bounded accumulation it writes into, the declaration emitter, the
 expression emitter, the string literal pool, the statement and function-body
 emitter, and the translation unit assembly. The Kitten-written module loader under
-`selfhost/loader` supplies the module set for an absolute root path; its README
-records the exact parity and the two exclusions.
+`selfhost/loader` supplies the module set, accepting absolute and relative root
+paths with the reference's `filepath.Abs`-shaped resolution; its README records
+the exact parity and the remaining exclusions.
 
 ### 28.1 Location and role
 
@@ -3416,17 +3420,13 @@ produce its expected output when compiled and run.
 - **Writing and building the unit.** The unit driver prints the complete C to
   standard output; nothing writes a file, invokes a C compiler, or sets a process
   exit status, because the self-hosted runtime offers none of those.
-- **Relative root paths.** The Kitten-written loader reports missing, unreadable,
-  and directory paths as loader errors, but still requires an absolute root
-  because the self-hosted runtime has no working directory (Sections 22.2 and
-  22.4).
 - Driver integration of process launch and the file-writing and directory
   operations; the self-hosted driver does not use them.
 
 Kitten is not self-hosting. The lexer, the parser, the checker, the module loader,
 and the generator's helper, declaration, expression, literal-pool, statement, and
 unit layers are written in Kitten, and every expression kind the language has is now
-emitted; but relative roots still need a language decision, and production
+emitted; but production
 integration, the pipeline that writes and compiles the output, and the production
 compiler are Go. The Go compiler must therefore remain
 the bootstrap reference until the Kitten-written compiler can compile its own source

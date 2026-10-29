@@ -21,14 +21,17 @@ The driver's usage prefix changed from `kitten-selfhost` to `purr-selfhost`.
 Usage:
 
 ```text
-purr-selfhost <absolute-source.ktn>
+purr-selfhost <source.ktn>
 ```
 
-- It reads exactly one argument, `argv()[1]`, which must be an absolute path.
+- It reads exactly one argument, `argv()[1]`. It may be relative; the loader's
+  `resolve_root` resolves a relative spelling against the current directory
+  exactly as the reference's `canonicalPath` does with `filepath.Abs`, so a
+  relative source produces the same unit as its absolute form.
 - It writes one complete C translation unit to standard output.
 - Diagnostics go to standard error.
 - Exit status is 0 on success, 1 for a load/check/generation failure, and 2 for a
-  usage error (wrong argument count or a non-absolute path).
+  usage error (a wrong argument count).
 - It parses no options, writes no files, and invokes no processes.
 
 The driver is at `selfhost/driver.ktn`, not `selfhost/driver/main.ktn`, because the
@@ -101,10 +104,10 @@ missing, unreadable, or directory root or import produces the Go loader's
 no-position `cannot read source file: ...` diagnostic. Both stage 1 and stage 2
 are compared byte for byte with the Go CLI's stderr and exit status.
 
-A relative path is accepted by the wrapper, which makes it absolute, matching the
-Go CLI. The driver itself rejects a relative path with status 2 because it has no
-working-directory primitive; that is the driver's documented contract, not a
-wrapper-visible error.
+A relative path is accepted by both: the wrapper makes it absolute, and the
+driver itself accepts it and resolves it with `resolve_root` the way the
+reference's `canonicalPath` does, so the driver's run on the relative spelling is
+byte-identical to its run on the absolute path.
 
 Linux is verified. The wrapper is POSIX shell and avoids bashisms, but macOS is
 not claimed as tested.

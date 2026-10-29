@@ -181,7 +181,7 @@ both pipelines. Phase 5.3 added `exit(status)` and one shared flush path:
 it while keeping its message and status 1, and the runtime fixture checks stdout,
 stderr, and the exact status, including POSIX low-eight-bit behavior. Phase 5.6
 added the Kitten-written driver `selfhost/driver.ktn` and the temporary POSIX-sh
-wrapper `selfhost/driver/purr-bootstrap.sh`: the driver takes one absolute source path,
+wrapper `selfhost/driver/purr-bootstrap.sh`: the driver takes one source path,
 emits byte-identical C on stdout, reports diagnostics on stderr, and uses exit
 statuses 0/1/2; the wrapper builds and runs fixtures and `tests/modules/` under
 GCC and Clang. The implementation order changed: `ReadFileResult`/`try_read_file`
@@ -276,8 +276,15 @@ pipeline-specific test builds. Library object builds (Proposal Section 12.3)
 remain the approved deferred case.
 `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
-`try_file_info`. The Kitten loader/driver can now accept relative roots in a
-separate later change. File writing now unblocks `purr new` and process launch
+`try_file_info`.
+Phase 9.10 then resolved the deferred relative loader roots:
+`selfhost/loader/resolve_root` resolves an absolute and a relative root exactly
+as the reference's `canonicalPath` does with `filepath.Abs`, using
+`try_current_directory` (the kernel's `getcwd`, ignoring `$PWD`) for the
+relative case; `load_program`, the `load.ktn`/`loadunit.ktn` probes, and
+`selfhost/driver.ktn` accept relative roots, and the differential corpus grew to
+165 relative spellings plus `tests/modules/` and the whole unit pipeline in both
+root forms. File writing now unblocks `purr new` and process launch
 makes `purr run`-style tooling writable in Kitten, both as separate later
 phases. A SPEC cleanup of Go/C-flavored wording remains a later candidate. The
 native backend and a standard library remain unauthorized.
@@ -459,8 +466,9 @@ authorization after the design is approved.
    all nine top-level fixtures now compile and run through the Kitten backend;
    Phase 4E.1 added the Kitten-written module loader for absolute roots, with the
    same order, ids, paths, and diagnostics as Go over the loader corpus, and a
-   fully Kitten-written path through `tests/modules/`. Relative roots remain
-   deferred because there is no working-directory primitive; Phase 5.1
+   fully Kitten-written path through `tests/modules/`. Relative roots were
+   deferred then because there was no working-directory primitive, and were
+   accepted in Phase 9.10; Phase 5.1
    added `argv()` in both pipelines and the `argc`/`argv`-capturing C entry point;
    Phase 5.2 added `eprint(...)`, the flushing stderr helpers, and separate-stream
    runtime coverage; Phase 5.3 added `exit(status)`, a shared flush-and-exit path,

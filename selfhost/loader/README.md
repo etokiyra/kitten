@@ -17,8 +17,9 @@ and `purr run` still use the Go loader, which remains authoritative.
   and the within-root test, matching Go's `path/filepath` on Linux.
 - `selfhost/loader/loader.ktn` — `load_program`, the loader state, parsing each
   module with the Kitten-written lexer and parser, and import recursion.
-- `selfhost/load.ktn` — the loader driver. It reads an absolute root path from
-  `input.txt` and prints the ordered module set or the loader's failure.
+- `selfhost/load.ktn` — the loader driver. It reads a root path (absolute or
+  relative) from `input.txt` and prints the ordered module set or the loader's
+  failure.
 - `selfhost/loadunit.ktn` — the whole-path driver. It loads, checks, and emits a
   complete C translation unit with the Kitten-written stages.
 - `cmd/purr/loader_differential_test.go` — the differential harness.
@@ -35,6 +36,14 @@ public fn load_program(string root_path) -> LoadResult
   modules in depth-first import order, and `module.id` equal to its index;
 - `Failure { LoadError error; }`, with `LoadError { path; line; column; message }`.
 
+`root_path` may be relative; `resolve_root` makes it absolute the way the
+reference's `canonicalPath` does with `filepath.Abs`: a relative path is resolved
+against the kernel's current directory (`try_current_directory`, which ignores
+`$PWD`) and then cleaned, while an absolute path is cleaned without consulting
+the directory. A working-directory failure becomes a loader failure naming the
+unresolved path. Imports are always joined onto an absolute directory, so only
+the root can be relative.
+
 `Module` is the checker's existing parsed-module type: canonical path, id, parsed
 program, and the parser's expression and type-reference counts. The loader feeds
 it to `check_modules` and the emitters unchanged. The loader never injects the
@@ -47,7 +56,9 @@ the loader uses; nothing in them reads the filesystem.
 
 ## What the loader does
 
-1. Canonicalize the absolute root path with `clean_path`.
+1. Resolve the root path with `resolve_root`: an absolute path is cleaned, a
+   relative one is joined onto the current directory and cleaned, exactly as
+   `filepath.Abs` does in the reference.
 2. Set the resolution root to the root file's parent directory.
 3. Load a module with this order, exactly as `loader.Load` does:
    - return immediately when its canonical path is already loaded, which
@@ -83,12 +94,13 @@ separator boundary (`/rooted` is not inside `/root`).
 A filename such as `..hidden.ktn` is an ordinary component; only the exact
 component `..` is a parent.
 
-## Documented exclusion
+## Relative roots and matched read failures
 
-**An absolute root path is required.** The self-hosted runtime exposes no working
-directory, so a relative root cannot be made absolute the way `filepath.Abs` does.
-The harness always supplies an absolute root. The reference loader also accepts
-relative roots; that difference is not exercised here.
+**Relative roots are accepted.** Since `try_current_directory` landed (the
+kernel's `getcwd`, ignoring `$PWD`), `resolve_root` can resolve a relative root
+exactly as `filepath.Abs` does, so the loader language parity with the reference
+is complete: any root spelling the reference accepts, this loader accepts and
+produces the same canonical modules and diagnostics for.
 
 **Read failures are matched.** The loader calls `try_read_file`; a missing,
 unreadable, or directory path becomes the reference's no-position
@@ -103,7 +115,7 @@ The loaders read the root path from `input.txt`; the working directory selects i
 purr build selfhost/load.ktn -o /tmp/load-probe
 purr build selfhost/loadunit.ktn -o /tmp/loadunit-probe
 mkdir -p /tmp/example && cd /tmp/example
-printf '%s' /absolute/path/to/main.ktn > input.txt
+printf '%s' /absolute/path/to/main.ktn > input.txt   # or a path relative to here
 /tmp/load-probe
 ```
 
@@ -128,8 +140,7 @@ single diagnostic line otherwise.
 
 ## Differential testing
 
-`cmd/purr/loader_differential_test.go` compares against `loader.Load` for the
-same absolute root:
+`cmd/purr/loader_differential_test.go` compares against `loader.Load`:
 
 - **33 targeted trees**, covering a simple import, diamonds, cycles, self-import,
   duplicate spellings, nested directories, `..` inside and outside the root,
@@ -137,12 +148,18 @@ same absolute root:
   separators, absolute-looking imports, dot-prefixed filenames, lexical and
   syntax errors in imported modules, missing and unreadable roots and imports,
   directories, and error ordering through cycles;
-- **`tests/modules/`**, the real nested fixture, with its actual canonical paths;
-- **15 multi-file checker corpus programs**, materialized as `input.txt` and
+- **165 relative root spellings**, every targeted tree reloaded through the
+  root itself, a leading `./`, redundant separators, a removable `..`
+  component, and a trailing separator, with the probe's working directory at
+  the tree and the reference result taken from the equivalent absolute root;
+- **`tests/modules/`**, the real nested fixture, in both root forms: absolute
+  and `tests/modules/main.ktn` relative to the repository root;
+- **23 multi-file checker corpus programs**, materialized as `input.txt` and
   `input2.txt`, including malformed modules;
-- **the full path** over `tests/modules/`: load, check, and emit with the
-  Kitten-written stages, compare the unit with the Go reference, then compile,
-  link, run, and compare the expected output under the compiler `CC` selects.
+- **the full path** over `tests/modules/` in both root forms: load, check, and
+  emit with the Kitten-written stages, compare the unit with the Go reference,
+  then compile, link, run, and compare the expected output under the compiler
+  `CC` selects.
 
 The harness compares canonical paths, ids, order, and diagnostics byte for byte,
 and reports zero mismatches. Running the suite under GCC and Clang covers the
@@ -150,6 +167,5 @@ pipeline under both.
 
 ## What is not here
 
-- Relative root paths (no working-directory primitive).
 - A compiler CLI: the drivers read a fixed path, print to standard output, and
   write no files or exit status. Those driver capabilities are a later phase.

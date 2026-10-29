@@ -389,7 +389,7 @@ It is also the only way a self-hosting claim means anything.
 | Checker + semantic model | 2,030 inputs, byte-identical |
 | Declaration, expression, statement, and literal-pool emission | whole translation units, byte-for-byte |
 | Entry point and translation-unit assembly | 174 whole units, 10,307 lines |
-| Module loader | 33 targeted trees, 15 multi-file corpus programs, `tests/modules/` |
+| Module loader | 33 targeted trees, 165 relative root spellings, `tests/modules/` in both root forms, 23 multi-file corpus programs |
 | Full Kitten-written path | `tests/modules/` loaded, checked, emitted, compiled, run, and matched |
 | `argv()` runtime | 3 argument vectors through both pipelines, under GCC and Clang |
 | `eprint()` runtime | stdout and stderr captured separately through both pipelines |
@@ -430,8 +430,10 @@ left the pipeline. A C compiler and the temporary POSIX wrapper
 There is no known behavioral gap against the Go reference in the covered
 corpora. Missing, unreadable, and directory imports are **matched** by the
 Kitten loader, which now uses `try_read_file`; its diagnostics agree with the Go
-loader's. Relative source paths are made absolute by the wrapper; the driver
-itself requires an absolute path. Goal 2 (no C) and Goal 3 (the `purr`
+loader's. Relative source roots are matched as well: the loader resolves a
+relative spelling against the kernel's current directory exactly as
+`filepath.Abs` does, and the wrapper still absolutizes paths for good measure.
+Goal 2 (no C) and Goal 3 (the `purr`
 ecosystem) have not started.
 
 To reproduce the fixpoint by hand:
