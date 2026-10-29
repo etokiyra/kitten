@@ -84,7 +84,7 @@ Implementation status:
 | 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
 | 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; `new -h`/`--help` added later; build added in 9.8b** |
 | 8b. Kitten `purr` build | **implemented in 9.8b** |
-| 8c. Kitten `purr` run + full parity | **run implemented; full parity suite remains** |
+| 8c. Kitten `purr` run + full parity | **implemented in 9.8c: run and the Section 12 parity suite (`cmd/purr/purr_build_test.go`, `purr_build_fake_test.go`, `purr_run_test.go`, `purr_project_test.go`, `purr_kt_test.go`, `new_test.go`, `manifest_test.go`); the freeze run of Section 12.4 remains** |
 | 9. Project mode | **implemented: current-directory binary build/run; library builds deferred** |
 | 10. Library object mode | proposed, deferred |
 | 11. Freeze / name swap | proposed (9.9 milestone) |
@@ -1122,12 +1122,14 @@ design-only phase.
    no license in templates. The CLI entry point remains 9.8.
 8. **Kitten `purr`**
    8a. **Entry point, help, and `new`** — implemented in 9.8a as
-   `purr.ktn` + `purr/cli.ktn`; `build` was added in 9.8b, `run` remains a
-   stub.
+   `purr.ktn` + `purr/cli.ktn`; `build` was added in 9.8b and `run` in 9.8c.
    8b. **In-process `build`** — implemented in 9.8b; compiler linkage, C
    compiler subprocess, temp dirs, current diagnostics and statuses.
-   8c. **`run` and full parity suite** — next; compile to a temporary executable,
-   run it, preserve statuses, and pass the complete Go/Kitten parity suite.
+   8c. **`run` and full parity suite** — implemented in 9.8c; `run` compiles to
+   a temporary executable, preserves statuses, and the Section 12 parity suite
+   is in place (`cmd/purr/purr_build_test.go`, `purr_build_fake_test.go`,
+   `purr_run_test.go`, `purr_project_test.go`, `purr_kt_test.go`). The Section
+   12.4 freeze run remains for 9.9.
 9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.
 10. **Library build** (if approved) — no-entry generation, object output.

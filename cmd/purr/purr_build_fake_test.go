@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -546,6 +547,95 @@ exit 1
 			default:
 				if !strings.Contains(argsGo, "-lgc") {
 					t.Errorf("pkg %s missing -lgc fallback:\n%s", testCase.name, argsGo)
+				}
+			}
+		})
+	}
+
+	t.Run("absent", func(t *testing.T) {
+		// No pkg-config exists on PATH, so both implementations must fall back
+		// to -lgc without invoking anything.
+		bin := t.TempDir()
+		// The fake compiler script needs `cp` from PATH; provide a link so the
+		// PATH can stay free of a real pkg-config.
+		if cpPath, err := exec.LookPath("cp"); err == nil {
+			_ = os.Symlink(cpPath, filepath.Join(bin, "cp"))
+		}
+		cwd := t.TempDir()
+		tmp := t.TempDir()
+		source := writeBuildFixture(t, cwd)
+		output := filepath.Join(cwd, "app")
+		logs := map[string]string{}
+		for pipeline, executable := range purrs {
+			log := filepath.Join(cwd, "log-"+pipeline)
+			logs[pipeline] = log
+			pkgLog := filepath.Join(cwd, "pkg-"+pipeline)
+			environment := []string{
+				"CC=" + fakeCC,
+				"REAL_CC=" + real,
+				"FAKE_LOG=" + log,
+				"FAKE_MODE=fake-output",
+				"FAKE_OUTPUT=" + output,
+				"PATH=" + bin + ":/usr/bin:/bin",
+				"PKG_LOG=" + pkgLog,
+				"TMPDIR=" + tmp,
+			}
+			result := runBuildCommand(t, executable, cwd, []string{"build", source, "-o", output}, environment)
+			if result.status != 0 {
+				t.Errorf("%s pkg absent: %d %q", pipeline, result.status, result.stderr)
+			}
+		}
+		argsGo := normalizeBuildLog(readFakeLog(t, logs["Go"], ".args"))
+		argsKt := normalizeBuildLog(readFakeLog(t, logs["Kitten"], ".args"))
+		if argsGo != argsKt {
+			t.Errorf("pkg absent args differ:\nGo %s\nKitten %s", argsGo, argsKt)
+		}
+		if !strings.Contains(argsGo, "-lgc") || strings.Contains(argsGo, "-lfoo") || strings.Contains(argsGo, "-DFAKE") {
+			t.Errorf("pkg absent flags wrong:\n%s", argsGo)
+		}
+	})
+}
+
+// TestKittenPurrBuildCompilerNames exercises the three lookup names the two
+// CLI implementations share: cc, gcc, and clang. Each build is a real compile
+// of the hello fixture with the compiler resolved by name on PATH, compared
+// between both purr-kt builds.
+func TestKittenPurrBuildCompilerNames(t *testing.T) {
+	requireToolchain(t)
+	stage1 := buildStage1(t)
+	purrs := map[string]string{
+		"Go":     buildPurrKTWithGo(t),
+		"Kitten": buildPurrKTWithKitten(t, stage1),
+	}
+	real := realCompilerPath(t)
+
+	for _, name := range []string{"cc", "gcc", "clang"} {
+		t.Run(name, func(t *testing.T) {
+			bin := t.TempDir()
+			// Resolve the name to a real binary when the system has one, so a
+			// missing name still exercises lookup parity instead of skipping.
+			resolved, err := exec.LookPath(name)
+			if err != nil {
+				resolved = real
+			}
+			if err := os.Symlink(resolved, filepath.Join(bin, name)); err != nil {
+				t.Fatal(err)
+			}
+			cwd := t.TempDir()
+			source := writeBuildFixture(t, cwd)
+			for pipeline, executable := range purrs {
+				output := filepath.Join(cwd, "app-"+pipeline)
+				result := runBuildCommand(t, executable, cwd,
+					[]string{"build", source, "-o", output},
+					[]string{"CC=" + name, "PATH=" + bin + ":/usr/bin:/bin"})
+				if result.status != 0 || result.stderr != "" || result.stdout != "built "+output+"\n" {
+					t.Errorf("%s CC=%s: status %d, stdout %q, stderr %q",
+						pipeline, name, result.status, result.stdout, result.stderr)
+					continue
+				}
+				run := runExternal(t, output, nil, cwd, nil)
+				if run.status != 0 || run.stdout != "Hello, world!\n" || run.stderr != "" {
+					t.Errorf("%s CC=%s run: %d %q %q", pipeline, name, run.status, run.stdout, run.stderr)
 				}
 			}
 		})

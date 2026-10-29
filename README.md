@@ -258,7 +258,7 @@ go build -o /tmp/purr ./cmd/purr
 | Type checker | complete for the specified language, with diagnostics and positions |
 | C code generator | complete for the specified language; emits C, compiled by the host C compiler |
 | C runtime | strings, arrays, maps, file reading, printing, and the garbage collector |
-| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build/run sidecar with binary project mode are implemented; the full parity suite is still pending and the Go CLI remains authoritative |
+| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build/run sidecar with binary project mode are implemented; the Go/Kitten parity suite is complete in `cmd/purr/` and the Go CLI remains authoritative until the 9.9 freeze/name swap |
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
@@ -279,9 +279,14 @@ directory, executes the program, propagates its status, and cleans up. `new`
 includes its dedicated `-h`/`--help` text. With no
 source argument and a `purr.toml` in the current directory, `build` and `run`
 use the manifest and `src/main.ktn`, write `target/<name>`, and run that
-executable. Library builds remain a documented deferred error. The full
-Go/Kitten parity suite is still pending, and the Go CLI remains the
-authoritative `purr`; `purr-kt` is not installed under the `purr` name.
+executable. Library builds remain a documented deferred error. The Go/Kitten
+parity suite from `proposals/purr-in-kitten.md` Section 12 is implemented in
+`cmd/purr/`: command grammar and usage, the compiler and `pkg-config` discovery
+and argv, every fixture and `tests/modules/` (with byte-identical generated C
+through a logged fake compiler), source and compiler failure diagnostics,
+`run` statuses, streams, and cleanup, `new`, `purr.toml`, and project mode.
+The Go CLI remains the authoritative `purr`; `purr-kt` is not installed under
+the `purr` name, and the Go-CLI freeze/name swap is the 9.9 milestone.
 
 ---
 

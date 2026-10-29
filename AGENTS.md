@@ -258,7 +258,15 @@ in-process `build` command in `purr/build.ktn`, and Phase 9.8c implemented the
 `run` command in `purr/cli.ktn` with focused both-pipeline tests. Project mode
 then added `purr/project.ktn`, current-directory manifest discovery, and
 `target/<name>` build/run for binary projects; library builds remain the
-approved deferred error. The remaining 9.8c work is the full parity suite.
+approved deferred error. The 9.8c parity suite is now complete: the cases from
+`proposals/purr-in-kitten.md` Section 12 are covered across
+`cmd/purr/purr_build_test.go`, `purr_build_fake_test.go`, `purr_run_test.go`,
+`purr_project_test.go`, and `purr_kt_test.go`, including the last path-only
+loader failure (unreadable source), loader import cycles and generated-C
+identity, the `.ktn`/`a.out` default-output fallback, lex-error diagnostics,
+`pkg-config` absent and failing modes, and `CC`/`cc`/`gcc`/`clang` discovery.
+The Section 12.4 freeze run (the whole suite under GCC and Clang, the fixpoint,
+and a clean-checkout build) is the remaining 9.8c/9.9 work.
 `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
@@ -341,7 +349,7 @@ remains. Without a source argument, no output option, and a `purr.toml` in the
 current directory, `build` and `run` enter binary project mode: they use the
 manifest and `src/main.ktn`, write `target/<name>`, and run that executable.
 Library projects report the approved deferred errors. The run feature and
-project mode are implemented; the full 9.8c parity suite remains, and 9.9 is the
+project mode are implemented, and the 9.8c parity suite is complete; 9.9 is the
 Go-CLI freeze/name swap. Tests must keep the Go CLI behavior unchanged.
 
 ### Adding a built-in

@@ -229,6 +229,32 @@ func TestKittenPurrBuildDefaultAndPaths(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("a.out fallback", func(t *testing.T) {
+		// A source named ".ktn" has an empty base name once the extension is
+		// stripped, and both implementations fall back to "a.out".
+		hiddenSource := "fn main() {\n    print(\"hidden\");\n}\n"
+		for pipeline, executable := range map[string]string{"Go": goPurr, "Kitten": kt} {
+			work := t.TempDir()
+			if err := os.WriteFile(filepath.Join(work, ".ktn"), []byte(hiddenSource), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result := runBuildCommand(t, executable, work, []string{"build", ".ktn"}, nil)
+			if result.status != 0 || result.stderr != "" || result.stdout != "built a.out\n" {
+				t.Errorf("%s a.out fallback: status %d, stdout %q, stderr %q",
+					pipeline, result.status, result.stdout, result.stderr)
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(work, "a.out")); err != nil {
+				t.Errorf("%s a.out fallback did not write a.out: %v", pipeline, err)
+				continue
+			}
+			run := runExternal(t, filepath.Join(work, "a.out"), nil, work, nil)
+			if run.status != 0 || run.stdout != "hidden\n" || run.stderr != "" {
+				t.Errorf("%s a.out program: %d %q %q", pipeline, run.status, run.stdout, run.stderr)
+			}
+		}
+	})
 }
 
 func TestKittenPurrBuildDiagnostics(t *testing.T) {
@@ -241,6 +267,9 @@ func TestKittenPurrBuildDiagnostics(t *testing.T) {
 	}{
 		{"type error", "fn main() {\n    int x = \"text\";\n}\n"},
 		{"syntax error", "fn main( {\n}\n"},
+		// A lexer failure is a loader error with a position, distinct from a
+		// parse failure.
+		{"lex error", "fn main() {\n    int x = 1;\n    @\n}\n"},
 		{"missing main", "fn helper() {\n}\n"},
 	}
 	for _, testCase := range cases {
@@ -461,4 +490,135 @@ func TestKittenPurrBuildOutputFailures(t *testing.T) {
 			t.Errorf("unwritable output diagnostics differ:\nGo %q\nKitten %q", goResult.stderr, ktResult.stderr)
 		}
 	})
+}
+
+// TestKittenPurrBuildSourceReadErrors covers the last path-only loader failure
+// in the parity suite: an existing but unreadable source file. The missing,
+// directory, lex, parse, and checker cases live in
+// TestKittenPurrBuildDiagnostics.
+func TestKittenPurrBuildSourceReadErrors(t *testing.T) {
+	requireToolchain(t)
+	goPurr := buildGoPurr(t)
+	kt := buildPurrKTWithGo(t)
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are not meaningful as root")
+	}
+	directory := t.TempDir()
+	source := filepath.Join(directory, "secret.ktn")
+	sourceText := "fn main() {\n    print(\"hidden\");\n}\n"
+	if err := os.WriteFile(source, []byte(sourceText), 0o000); err != nil {
+		t.Fatalf("writing unreadable source: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(source, 0o644) })
+
+	goResult := runBuildCommand(t, goPurr, directory, []string{"build", source}, nil)
+	ktResult := runBuildCommand(t, kt, directory, []string{"build", source}, nil)
+	if goResult.status != 1 || ktResult.status != 1 {
+		t.Fatalf("status Go %d, Kitten %d", goResult.status, ktResult.status)
+	}
+	if goResult.stdout != "" || ktResult.stdout != "" {
+		t.Errorf("stdout Go %q, Kitten %q", goResult.stdout, ktResult.stdout)
+	}
+	if goResult.stderr != ktResult.stderr {
+		t.Errorf("unreadable source diagnostics differ:\nGo %q\nKitten %q", goResult.stderr, ktResult.stderr)
+	}
+	if !strings.HasPrefix(goResult.stderr, source+": cannot read source file: ") {
+		t.Errorf("Go stderr %q does not have the loader's prefix", goResult.stderr)
+	}
+
+	// A failed build of an unreadable source must not touch the filesystem.
+	// The source is unreadable by design, so only entry names can be compared.
+	listNames := func() []string {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatalf("reading directory: %v", err)
+		}
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		return names
+	}
+	before := listNames()
+	ktAgain := runBuildCommand(t, kt, directory, []string{"build", source}, nil)
+	if after := listNames(); len(after) != len(before) {
+		t.Errorf("failed build changed the directory entries: %v != %v", after, before)
+	}
+	if ktAgain.stderr != ktResult.stderr {
+		t.Errorf("repeat run stderr %q differs from %q", ktAgain.stderr, ktResult.stderr)
+	}
+}
+
+// TestKittenPurrBuildImportCycle covers the loader's cycle handling through the
+// CLI: a module importing a module that imports it back. The load must succeed
+// and both pipelines must produce byte-identical C and identical behavior.
+func TestKittenPurrBuildImportCycle(t *testing.T) {
+	requireToolchain(t)
+	stage1 := buildStage1(t)
+	goPurr := buildGoPurr(t)
+	purrs := map[string]string{
+		"Go":     buildPurrKTWithGo(t),
+		"Kitten": buildPurrKTWithKitten(t, stage1),
+	}
+	directory := t.TempDir()
+	mainSource := "import \"helper.ktn\";\n" +
+		"fn main() {\n" +
+		"    print(label(2));\n" +
+		"}\n"
+	helperSource := "import \"main.ktn\";\n" +
+		"public fn label(int count) -> string {\n" +
+		"    int index = 0;\n" +
+		"    string result = \"\";\n" +
+		"    while (index < count) {\n" +
+		"        result = result + \"cycle\";\n" +
+		"        index = index + 1;\n" +
+		"    }\n" +
+		"    return result;\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(directory, "main.ktn"), []byte(mainSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "helper.ktn"), []byte(helperSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(directory, "main.ktn")
+
+	// Real builds through both CLIs and both purr-kt builds: the loader cycle
+	// terminates and the program works.
+	pipelines := map[string]string{"Go": goPurr, "Go purr-kt": purrs["Go"], "Kitten purr-kt": purrs["Kitten"]}
+	for pipeline, executable := range pipelines {
+		output := filepath.Join(directory, strings.ReplaceAll(pipeline, " ", "-"))
+		result := runBuildCommand(t, executable, directory, []string{"build", mainPath, "-o", output}, nil)
+		if result.status != 0 || result.stderr != "" || result.stdout != "built "+output+"\n" {
+			t.Errorf("%s cycle build: status %d, stdout %q, stderr %q",
+				pipeline, result.status, result.stdout, result.stderr)
+			continue
+		}
+		run := runExternal(t, output, nil, directory, nil)
+		if run.status != 0 || run.stdout != "cyclecycle\n" || run.stderr != "" {
+			t.Errorf("%s cycle run: %d %q %q", pipeline, run.status, run.stdout, run.stderr)
+		}
+	}
+
+	// Fake compiler: byte-identical generated C across both pipelines.
+	fake := writeFakeCompiler(t)
+	tmp := t.TempDir()
+	logs := map[string]string{}
+	for pipeline, executable := range map[string]string{"Go": goPurr, "Kitten": purrs["Kitten"]} {
+		log := filepath.Join(directory, "cycle-log-"+pipeline)
+		logs[pipeline] = log
+		output := filepath.Join(directory, "cycle-fake-"+pipeline)
+		result := runBuildCommand(t, executable, directory,
+			[]string{"build", mainPath, "-o", output},
+			fakeBuildEnvironment(t, fake, log, "success", output, tmp))
+		if result.status != 0 || result.stderr != "" {
+			t.Errorf("%s fake cycle build: %d %q", pipeline, result.status, result.stderr)
+			continue
+		}
+	}
+	goC := readFakeLog(t, logs["Go"], ".program.c")
+	ktC := readFakeLog(t, logs["Kitten"], ".program.c")
+	if goC != ktC {
+		t.Errorf("cycle program C differs between pipelines")
+	}
 }
