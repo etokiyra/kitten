@@ -186,7 +186,7 @@ fn evaluate(Expression expression) -> int {
 Going from nothing to a working, autocompleting Kitten toolchain should be one line. Not
 a compiler here, a language server there, and an editor plugin found by searching:
 
-<!-- Planned. None of these commands exist yet. -->
+<!-- purr new and purr run work today; purr install awaits the registry. -->
 ```sh
 purr new hello-world     # scaffold a project
 purr run                 # build and run it
@@ -201,13 +201,14 @@ developer never has to assemble them by hand.
 
 ### Scaffolding: `purr new`
 
-Creating a project should produce a layout you already recognise, with a manifest, a
+Creating a project produces the layout you already recognise, with a manifest, a
 source directory, and nothing to configure.
 
-<!-- The shape we are aiming for, matching Cargo's conventions. Not implemented. -->
+<!-- As implemented by purr new; matching Cargo's conventions. Library builds
+     still report a deferred error. -->
 ```text
 $ purr new hello-world
-     Created binary (application) `hello-world`
+     Created binary (application) hello-world
 
 hello-world/
 ├── .gitignore
@@ -216,7 +217,7 @@ hello-world/
     └── main.ktn
 
 $ purr new --lib catnip
-     Created library `catnip`
+     Created library catnip
 
 catnip/
 ├── .gitignore
@@ -237,16 +238,26 @@ development headers.
 git clone https://github.com/etokiyra/kitten.git
 cd kitten
 
-# Build the compiler outside the repository root; purr/ is a source directory.
-go build -o /tmp/purr ./cmd/purr
+# Build the bootstrap outside the repository root; purr/ is a source directory.
+go build -o /tmp/purr-bootstrap ./cmd/purr
 
 # Compile and run a program.
-/tmp/purr run tests/fizzbuzz.ktn
+/tmp/purr-bootstrap run tests/fizzbuzz.ktn
 
 # Compile it to an executable.
-/tmp/purr build tests/fizzbuzz.ktn -o fizzbuzz
+/tmp/purr-bootstrap build tests/fizzbuzz.ktn -o fizzbuzz
 ./fizzbuzz
+
+# Install the Kitten-written `purr`; the install location is outside the
+# repository, where purr/ is not a source directory.
+/tmp/purr-bootstrap build purr.ktn -o ~/.local/bin/purr
 ```
+
+The tool you install as `purr` is the one written in Kitten — the sidecar that
+owns `new`, `build`, and `run` end to end. The Go CLI at `./cmd/purr` remains in
+the repository as the frozen bootstrap and testing reference; building the
+Kitten `purr` still requires it. `purr new` and `purr run` work today; the
+registry commands await the package ecosystem.
 
 ---
 
@@ -258,7 +269,7 @@ go build -o /tmp/purr ./cmd/purr
 | Type checker | complete for the specified language, with diagnostics and positions |
 | C code generator | complete for the specified language; emits C, compiled by the host C compiler |
 | C runtime | strings, arrays, maps, file reading, printing, and the garbage collector |
-| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`; runtime embedding, the `purr.toml` parser, the `purr new` module/probe, and the `purr-kt` help/new/build/run sidecar with binary project mode are implemented; the Go/Kitten parity suite is complete in `cmd/purr/` and the Go CLI remains authoritative until the 9.9 freeze/name swap |
+| Kitten `purr` CLI, `purr new`, and `purr.toml` | design adopted in `proposals/purr-in-kitten.md`, implemented through 9.9: embedded runtime, the `purr.toml` parser, `purr new`, and the `help`/`new`/`build`/`run` sidecar with binary project mode; the Go/Kitten parity suite and freeze run are complete, the Go CLI is frozen as the bootstrap/reference, and the Kitten-written sidecar takes over the `purr` name |
 | The compiler CLI | `build` and `run`, including multi-file programs |
 | Module system | `import`, cross-module visibility, `public` / `private` |
 | Core types | `int`, `float`, `bool`, `string`, `struct`, `enum`, tagged `union`, arrays, maps |
@@ -270,23 +281,32 @@ interfaces, closures, package management, a formatter, a language server, a debu
 cross-compilation, and a backend that does not go through C. The specification lists every
 deferred decision; nothing is silently invented.
 
-### Kitten-written `purr` (in progress)
+### The Kitten-written `purr`
 
-`purr-kt` is the Kitten-written sidecar entry point. It currently supports
+`purr.ktn` (with `purr/cli.ktn`, `purr/build.ktn`, `purr/new.ktn`, and
+`purr/project.ktn`) is the toolchain written in Kitten. It supports
 `help`, `new`, `build`, and `run`. `build` links the Kitten-written compiler
 frontend and invokes the C compiler in process; `run` builds into a temporary
 directory, executes the program, propagates its status, and cleans up. `new`
-includes its dedicated `-h`/`--help` text. With no
-source argument and a `purr.toml` in the current directory, `build` and `run`
-use the manifest and `src/main.ktn`, write `target/<name>`, and run that
-executable. Library builds remain a documented deferred error. The Go/Kitten
-parity suite from `proposals/purr-in-kitten.md` Section 12 is implemented in
-`cmd/purr/`: command grammar and usage, the compiler and `pkg-config` discovery
+includes its dedicated `-h`/`--help` text. With no source argument and a
+`purr.toml` in the current directory, `build` and `run` use the manifest and
+`src/main.ktn`, write `target/<name>`, and run that executable. Library builds
+remain a documented deferred error.
+
+After the 9.9 freeze, this sidecar takes over the `purr` name: the Go CLI at
+`./cmd/purr` is frozen as the bootstrap and testing reference, and the tool you
+install as `purr` is the binary built from `purr.ktn` — verified end to end
+from a clean checkout by `TestKittenPurrReleaseBuild` in
+`cmd/purr/purr_kt_test.go`. The sidecar's messages, help, and usage always name
+the program `purr` deterministically; "purr-kt" survives only as the
+differential harnesses' label for pipeline-specific test builds. Building it
+still requires the Go bootstrap; full independence from Go is a separate goal
+that has not started. The Go/Kitten parity suite from
+`proposals/purr-in-kitten.md` Section 12 is implemented in `cmd/purr/`:
+command grammar and usage, the compiler and `pkg-config` discovery
 and argv, every fixture and `tests/modules/` (with byte-identical generated C
 through a logged fake compiler), source and compiler failure diagnostics,
 `run` statuses, streams, and cleanup, `new`, `purr.toml`, and project mode.
-The Go CLI remains the authoritative `purr`; `purr-kt` is not installed under
-the `purr` name, and the Go-CLI freeze/name swap is the 9.9 milestone.
 
 ---
 
@@ -302,7 +322,7 @@ installed and configured.
 | Piece | What it does | Status |
 | --- | --- | --- |
 | `purr build`, `purr run` | compile a source file, or compile and execute it | **works** |
-| `purr new` | scaffold a project or a library with the standard layout | design adopted in `proposals/purr-in-kitten.md`; implementation in progress |
+| `purr new` | scaffold a project or a library with the standard layout; `new` works in the Kitten-written `purr`, while library builds report a documented deferred error | works (scaffolding) |
 | `purr add`, `purr remove` | manage dependencies in the manifest | planned |
 | `purr install` | fetch, build, and install a package in one command | planned |
 | `purr test` | compile and run a project's tests | planned |
@@ -332,7 +352,7 @@ Packages are versioned, namespaced, and fetched by `purr` itself, with documenta
 generated from source. Nothing about using the ecosystem may require another language's
 package manager, and a Kitten package is never a foreign package wearing a costume.
 
-None of this exists yet beyond `build` and `run`. It is the roadmap, not a claim.
+Beyond `build`, `run`, and `new`, this does not exist yet. It is the roadmap, not a claim.
 
 ---
 

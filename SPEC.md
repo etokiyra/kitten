@@ -3435,13 +3435,17 @@ through a Kitten-written pipeline and reproduce the same behavior.
 
 ---
 
-## 29. Kitten-written `purr` sidecar (experimental)
+## 29. Kitten-written `purr` (experimental; frozen under the `purr` name in 9.9)
 
-`purr.ktn`, `purr/cli.ktn`, `purr/build.ktn`, and `purr/project.ktn` are a
-Kitten-written sidecar command, built and tested as `purr-kt`. The Go CLI remains
-the authoritative `purr`. The sidecar supports `help`, `new`, `build`, and `run`,
-including current-directory binary project mode. Library project builds remain
-deferred.
+`purr.ktn`, `purr/cli.ktn`, `purr/build.ktn`, `purr/new.ktn`, and
+`purr/project.ktn` are the toolchain written in Kitten. After the 9.9 freeze the
+binary built from `purr.ktn` takes over the `purr` name, and the Go CLI at
+`./cmd/purr` is frozen as the bootstrap and testing reference; the harnesses
+still label pipeline-specific test builds `purr-kt`, while the binary's own
+help and diagnostics always name the program `purr`. Building the Kitten `purr`
+still requires the Go bootstrap. The sidecar supports `help`, `new`, `build`,
+and `run`, including current-directory binary project mode. Library project
+builds remain deferred.
 
 `build` links the Kitten-written loader, lexer, parser, checker, and generator
 in process, discovers `CC` or `cc`/`gcc`/`clang` with PATH rules matching Go's
@@ -3474,7 +3478,7 @@ reports usage errors on stderr with exit 2.
 
 ### 29.1 Project mode
 
-Project mode activates only for `purr-kt build` or `purr-kt run` with no source
+Project mode activates only for `purr build` or `purr run` with no source
 argument, no `-o`/`--output` option, and a `purr.toml` in the **current
 directory**. There is no parent-directory search. The manifest is parsed with
 the strict subset parser in `purr/manifest.ktn`, and exactly one of
@@ -3482,19 +3486,19 @@ the strict subset parser in `purr/manifest.ktn`, and exactly one of
 
 For a binary project named by the manifest:
 
-- `purr-kt build` writes `target/<name>`, creates `target` with mode `0755`
+- `purr build` writes `target/<name>`, creates `target` with mode `0755`
   (subject to the umask) when absent, and prints `built target/<name>`.
 - If `target` exists and is not a directory, the build fails with
   `purr build: target is not a directory`; the existing path is untouched.
-- `purr-kt run` builds the same target and executes it with inherited standard
+- `purr run` builds the same target and executes it with inherited standard
   streams, propagating the child's status. The built target remains.
 - A failed build removes a partial output that this invocation created and
   removes a `target` directory that this invocation created once it is empty.
   A pre-existing target, its contents, and a pre-existing output are never
   removed.
 
-A library project is deferred: `purr-kt build` reports
-`purr build: library builds are not implemented yet` and `purr-kt run` reports
+A library project is deferred: `purr build` reports
+`purr build: library builds are not implemented yet` and `purr run` reports
 `purr run: library projects cannot be run`; neither creates `target`.
 
 Project-discovery failures use the command prefix and exit 1:

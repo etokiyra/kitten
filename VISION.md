@@ -104,9 +104,9 @@ identical to the Go reference. At that point Go leaves the pipeline and becomes 
 stage 2 from the same source; stage 2 builds stage 3; and the generated C for
 `selfhost/driver.ktn` is byte-identical across Go, stage 1, stage 2, and stage 3.
 Stage 2 also reproduces the Go reference for every fixture and `tests/modules/`.
-Go still builds stage 1 and the production CLI still uses the Go pipeline, so this
-is not yet full independence from Go. The README's self-hosting section states the
-claim and the remaining limits precisely.
+Go still builds stage 1 and the toolchain source still needs the Go bootstrap,
+so this is not yet full independence from Go. The README's self-hosting section
+states the claim and the remaining limits precisely.
 
 ### 2. Independent of C
 
@@ -148,7 +148,11 @@ formats, documents, publishes, and shares all of it using tooling that belongs t
 Kitten, backed by a registry that belongs to Kitten, and never once needs another
 language's package manager.
 
-**Status:** not started beyond `build` and `run`.
+**Status:** in progress: the freeze-and-name-swap milestone (9.9) is complete, so the
+tool installed as `purr` is the Kitten-written toolchain, with `new`, a strict
+`purr.toml` parser, and binary project mode working, and the Go/Kitten parity suite
+green under `cc`, `gcc`, and `clang`. The remaining ecosystem work — dependencies,
+install, test, format, docs, publishing, the registry — has not started.
 
 ### They do not depend on each other
 
@@ -188,8 +192,8 @@ none of which exist yet:
 
 | Capability | What it has to feel like | Status |
 | --- | --- | --- |
-| Build and run | `purr build`, `purr run` — no build system to configure | partially: the binary exists, the project model does not |
-| Scaffolding | `purr new hello-world` creates a directory with a manifest, a `.gitignore`, and `src/main.ktn`; `purr new --lib catnip` creates the same shape with `src/lib.ktn` | not started |
+| Build and run | `purr build`, `purr run` — no build system to configure | works; binary and project mode |
+| Scaffolding | `purr new hello-world` creates a directory with a manifest, a `.gitignore`, and `src/main.ktn`; `purr new --lib catnip` creates the same shape with `src/lib.ktn` | works (scaffolding; library builds still deferred) |
 | Dependencies | `purr add serde`, version resolved and written to the manifest | not started |
 | Install | `purr install <package>` fetches, builds, and puts a working binary on the path, in one command | not started |
 | One-command setup | one command installs the whole toolchain — `purr`, the compiler, the language server, the formatter, and editor and shell completion — and one command updates it | not started |
@@ -295,6 +299,7 @@ loader, driver, and C generator, and reaches a C-level self-hosting fixpoint: Go
 stage 1, stage 2, and stage 3 generate byte-identical C for the compiler source, and
 stage 2 reproduces the Go reference for every fixture.
 
-The remaining limits are stated precisely in the README: Go still builds stage 1, a C
-compiler and the temporary POSIX wrapper are required, the runtime is C, and the
-`purr` ecosystem and native backend have not started. Nothing here claims full independence from Go.
+The remaining limits are stated precisely in the README: Go still builds stage 1 and
+the toolchain source needs the Go bootstrap, a C compiler and the temporary POSIX
+wrapper are required, the runtime is C, and the rest of the `purr` ecosystem and the
+native backend have not started. Nothing here claims full independence from Go.

@@ -243,7 +243,7 @@ module and its harness-only injection hook, runtime-only intrinsics, C lowering,
 and the MIT `runtime/ktn/memory.ktn` helper source. The primitive checklist is
 complete. Phase 9.0 produced the design-only `proposals/purr-in-kitten.md` for
 rewriting `purr`, `purr new`, and `purr.toml`; it is **ADOPTED as the plan;
-implementation in progress**. Phase 9.1 implemented its first step, the `try_getenv`
+implementation complete through 9.9**. Phase 9.1 implemented its first step, the `try_getenv`
 built-in and predeclared `EnvResult` union, and Phase 9.2 implemented
 `try_run_capture` and `CapturedRunResult`, Phase 9.3 implemented
 `try_file_info` and `FileInfoResult`, Phase 9.4 implemented
@@ -265,8 +265,15 @@ approved deferred error. The 9.8c parity suite is now complete: the cases from
 loader failure (unreadable source), loader import cycles and generated-C
 identity, the `.ktn`/`a.out` default-output fallback, lex-error diagnostics,
 `pkg-config` absent and failing modes, and `CC`/`cc`/`gcc`/`clang` discovery.
-The Section 12.4 freeze run (the whole suite under GCC and Clang, the fixpoint,
-and a clean-checkout build) is the remaining 9.8c/9.9 work.
+Phase 9.9 then completed the freeze and name swap: the suite's freeze run
+passed under the discovered `cc`, `CC=gcc`, and `CC=clang`;
+`TestKittenPurrReleaseBuild` verifies the documented release flow from a clean
+git checkout (bootstrap `go build -o ./cmd/purr`, then build `purr.ktn`, install
+the result as `purr`, and use it for `new` and a project `run`); the Go CLI is
+frozen as the bootstrap and testing reference, and the Kitten-written sidecar
+takes over the `purr` name — `purr-kt` survives only as the harness label for
+pipeline-specific test builds. Library object builds (Proposal Section 12.3)
+remain the approved deferred case.
 `try_find_program` is
 intentionally dropped: PATH search will be Kitten code over `try_getenv` and
 `try_file_info`. The Kitten loader/driver can now accept relative roots in a
@@ -349,8 +356,10 @@ remains. Without a source argument, no output option, and a `purr.toml` in the
 current directory, `build` and `run` enter binary project mode: they use the
 manifest and `src/main.ktn`, write `target/<name>`, and run that executable.
 Library projects report the approved deferred errors. The run feature and
-project mode are implemented, and the 9.8c parity suite is complete; 9.9 is the
-Go-CLI freeze/name swap. Tests must keep the Go CLI behavior unchanged.
+project mode are implemented, the 9.8c parity suite is complete, and after the
+9.9 freeze the binary built from `purr.ktn` takes over the `purr` name while
+the Go CLI at `./cmd/purr` stays frozen as the bootstrap and testing
+reference. Tests must keep the Go CLI behavior unchanged.
 
 ### Adding a built-in
 
@@ -473,8 +482,8 @@ authorization after the design is approved.
    is independence from Go. **C-level fixpoint reached** (5.7): Go builds stage 1,
    stage 1 builds stage 2, stage 2 builds stage 3, and the C for `driver.ktn` is
    byte-identical across Go and all stages. Full independence remains open because
-   Go still builds stage 1; the postponed read-result/loader parity work is the
-   next candidate, not part of this finish line yet.
+   Go still builds stage 1; relative loader roots and a Go-free bootstrap install
+   remain open work, not part of this finish line yet.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
    the runtime off C as well. This is independence from C.
 5. Grow a broader standard library and an ecosystem for command-line tools first,

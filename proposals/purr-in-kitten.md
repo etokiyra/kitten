@@ -84,10 +84,10 @@ Implementation status:
 | 7. `purr new` | **implemented in 9.7 as module + probe; CLI dispatch in 9.8a** |
 | 8a. Kitten `purr` entry point, help, `new` | **implemented in 9.8a; `new -h`/`--help` added later; build added in 9.8b** |
 | 8b. Kitten `purr` build | **implemented in 9.8b** |
-| 8c. Kitten `purr` run + full parity | **implemented in 9.8c: run and the Section 12 parity suite (`cmd/purr/purr_build_test.go`, `purr_build_fake_test.go`, `purr_run_test.go`, `purr_project_test.go`, `purr_kt_test.go`, `new_test.go`, `manifest_test.go`); the freeze run of Section 12.4 remains** |
+| 8c. Kitten `purr` run + full parity | **implemented in 9.8c: run and the Section 12 parity suite (`cmd/purr/purr_build_test.go`, `purr_build_fake_test.go`, `purr_run_test.go`, `purr_project_test.go`, `purr_kt_test.go`, `new_test.go`, `manifest_test.go`); the freeze run completed in 9.9, see Section 12.5** |
 | 9. Project mode | **implemented: current-directory binary build/run; library builds deferred** |
 | 10. Library object mode | proposed, deferred |
-| 11. Freeze / name swap | proposed (9.9 milestone) |
+| 11. Freeze / name swap | **implemented in 9.9: freeze run under `cc`/`gcc`/`clang`, release-build test from a clean checkout, Go CLI frozen as bootstrap/reference, Kitten `purr` takes the name; library object mode still deferred** |
 
 ## 2. Audit: the current Go CLI is the parity specification
 
@@ -1097,6 +1097,25 @@ The Go CLI can be frozen only when:
 After freeze, new features land only in the Kitten `purr`; the Go CLI is kept
 for bootstrap/reference and its tests are not the definition of `purr`.
 
+## 12.5 Freeze report (9.9)
+
+The freeze run happened with the suite of this date, three times, once per C
+compiler: the discovered `cc`, `CC=gcc`, and `CC=clang`. All packages passed,
+including all Section 12.1 and 12.2 cases; the compiler C parity (`purr.ktn`
+and the fixpoint stages), fixtures, `tests/modules/`, `new`, and TOML
+expectations held byte-for-byte in every variant.
+
+The release criterion of Section 12.4 is covered by
+`TestKittenPurrReleaseBuild` in `cmd/purr/purr_kt_test.go`: it clones the
+repository into a temp directory (`git clone`, so only the committed tree),
+runs the documented bootstrap build (`go build -o ./cmd/purr`), builds
+`purr.ktn` with it, installs the result outside the repository as `purr`, and
+then uses that installed purr for `help`, `purr new`, and a project `purr run`,
+checking the usage text, the scaffold, the target executable, and the output.
+The Go CLI is frozen under the `purr` name as the bootstrap and testing
+reference; its behavior is covered by unchanged tests. Library object builds
+stay deferred per the approved answer to Question 3.
+
 ## 13. Implementation plan
 
 Each item is a separate commit after approval; none is authorized by this
@@ -1133,9 +1152,10 @@ design-only phase.
 9. **Project mode** — manifest discovery, target output, binary build/run.
    Acceptance: project cases; source mode unchanged.
 10. **Library build** (if approved) — no-entry generation, object output.
-11. **Freeze and name swap (9.9)** — all legacy and new cases, fixpoint,
-    release-build check. Acceptance: parity report, Go CLI frozen, and the
-    Kitten `purr` takes over the `purr` name.
+11. **Freeze and name swap (9.9)** — implemented in 9.9: the Section 12.5
+    freeze report records the evidence. Acceptance: parity report, Go CLI
+    frozen as bootstrap/reference, and the Kitten `purr` takes over the
+    `purr` name.
 
 The recommended order matches the dependency chain: environment -> capture ->
 file_info -> temp -> embedding -> TOML -> new -> build/run -> project ->
