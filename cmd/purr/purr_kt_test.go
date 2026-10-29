@@ -586,6 +586,67 @@ func TestKittenPurrGeneratedProject(t *testing.T) {
 	}
 }
 
+// TestKittenPurrReleaseBuild performs the 9.9 release flow from a clean
+// checkout: bootstrap the Go CLI, build the Kitten-written toolchain from
+// purr.ktn under the `purr` name, and use that installed purr to scaffold and
+// run a project. git clone of the repository copies only the committed tree,
+// so this is the "reproducible from a clean checkout" freeze criterion.
+func TestKittenPurrReleaseBuild(t *testing.T) {
+	requireToolchain(t)
+	repoRoot := repoPath(t, "..", "..")
+	workspace := t.TempDir()
+
+	clone := exec.Command("git", "clone", "--quiet", repoRoot, filepath.Join(workspace, "checkout"))
+	clone.Dir = repoRoot
+	var cloneLog bytes.Buffer
+	clone.Stdout = &cloneLog
+	clone.Stderr = &cloneLog
+	if err := clone.Run(); err != nil {
+		t.Fatalf("cloning a clean checkout: %v\n%s", err, cloneLog.String())
+	}
+	workspace = filepath.Join(workspace, "checkout")
+
+	// Step 1: the documented bootstrap build.
+	bootstrap := filepath.Join(workspace, "purr-bootstrap")
+	build := exec.Command("go", "build", "-o", bootstrap, "./cmd/purr")
+	build.Dir = workspace
+	var diagnostics bytes.Buffer
+	build.Stdout = &diagnostics
+	build.Stderr = &diagnostics
+	if err := build.Run(); err != nil {
+		t.Fatalf("building the Go bootstrap: %v\n%s", err, diagnostics.String())
+	}
+
+	// Step 2: the Kitten-written purr takes over the name. Like a real
+	// install, the binary lives outside the repository: purr/ inside the
+	// checkout is a source directory.
+	purr := filepath.Join(filepath.Dir(workspace), "purr")
+	buildKit := runExternal(t, bootstrap, []string{"build", filepath.Join(workspace, "purr.ktn"), "-o", purr}, workspace, nil)
+	if buildKit.status != 0 || buildKit.stderr != "" || buildKit.stdout != "built "+purr+"\n" {
+		t.Fatalf("building purr.ktn: %d %q %q", buildKit.status, buildKit.stdout, buildKit.stderr)
+	}
+
+	// Step 3: the installed purr identifies itself and works end to end.
+	help := runExternal(t, purr, []string{"help"}, workspace, nil)
+	if help.status != 0 || help.stdout != purrUsageText()+"\n" || help.stderr != "" {
+		t.Fatalf("installed purr help: %d %q %q", help.status, help.stdout, help.stderr)
+	}
+
+	directory := t.TempDir()
+	created := runPurrKTWithShell(t, "umask 022; exec \"$@\"", purr, directory, []string{"new", "release"})
+	if created.status != 0 || created.stdout != "" || created.stderr != "     Created binary (application) release\n" {
+		t.Fatalf("installed purr new: %d %q %q", created.status, created.stdout, created.stderr)
+	}
+	project := filepath.Join(directory, "release")
+	run := runExternal(t, purr, []string{"run"}, project, nil)
+	if run.status != 0 || run.stdout != "Hello, world!\n" || run.stderr != "" {
+		t.Fatalf("installed purr project run: %d %q %q", run.status, run.stdout, run.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(project, "target", "release")); err != nil {
+		t.Fatalf("installed purr left no project target: %v", err)
+	}
+}
+
 func TestKittenPurrSanitizer(t *testing.T) {
 	requireToolchain(t)
 	root := repoPath(t, "..", "..")
