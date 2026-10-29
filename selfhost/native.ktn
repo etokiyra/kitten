@@ -1,0 +1,199 @@
+// native.ktn - the native-backend probe driver.
+//
+// It builds the Phase 10.1 scene corpus with the Kitten-written typed-IR
+// module, runs check_scene over it, and prints the deterministic text
+// rendering. With one argument, it builds one of the failure scenes instead
+// and prints check_scene's message, so the tests can pin the validation texts.
+//
+//     native                print the valid scene's rendering
+//     native <mode>         print one failure scene's check message
+//
+// Modes: no-label, bad-binding, bad-call-count, bad-call-shape, bad-entry,
+// undefined-label. This is test infrastructure: the rendering and error
+// messages go to standard output and standard error stays empty.
+
+import "loader/loader.ktn";
+import "native/ir.ktn";
+import "native/text.ktn";
+
+// one_ref_parameter is a parameter-shape list holding exactly one reference.
+fn one_ref_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Ref;
+    return shapes;
+}
+
+// build_print_hello is the skeleton target's scene: one static blob, a void
+// runtime function taking one reference, and an entry calling it.
+fn build_print_hello() -> NativeScene {
+    NativeScene scene = new_scene();
+    int blob = add_blob(scene, "hello");
+
+    int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
+
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int text = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = text, blob = blob });
+    int[] arguments = new int[1];
+    arguments[0] = text;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = arguments, argument_count = 1 });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
+    return scene;
+}
+
+// failure_scene returns the broken scene a mode names. The check machinery
+// reports the deterministic message the tests pin.
+fn failure_scene(string mode) -> NativeScene {
+    if (mode == "no-label") {
+        NativeScene scene = new_scene();
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        push_instruction(main_function, Instruction.Jump { label = 0 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-binding") {
+        NativeScene scene = new_scene();
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        push_instruction(main_function, Instruction.ConstBool { target = 0, value = true });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-call-count") {
+        NativeScene scene = new_scene();
+        int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        push_instruction(main_function, Instruction.CallVoid { function = print, arguments = new int[1], argument_count = 0 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-call-shape") {
+        NativeScene scene = new_scene();
+        int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        int not_a_ref = new_temporary(main_function, NativeType.Bool);
+        int[] arguments = new int[1];
+        arguments[0] = not_a_ref;
+        push_instruction(main_function, Instruction.CallVoid { function = print, arguments = arguments, argument_count = 1 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-entry") {
+        NativeScene scene = new_scene();
+        add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        scene.entry = 5;
+        return scene;
+    }
+
+    if (mode == "undefined-label") {
+        NativeScene scene = new_scene();
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        int condition = new_temporary(main_function, NativeType.Bool);
+        push_instruction(main_function, Instruction.ConstBool { target = condition, value = true });
+        // Label 0 exists once the Label instruction is appended, but the
+        // branch asks for label 1, which is never defined.
+        push_instruction(main_function, Instruction.Branch { condition = condition, label_true = 1, label_false = 0 });
+        push_instruction(main_function, Instruction.Label { label = 0 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    NativeScene empty = new_scene();
+    return empty;
+}
+
+// build_big is the growth probe: more functions, bindings, and blobs than each
+// table's first allocation, with a cyclic call, so every doubling path in the
+// scene builder runs.
+fn build_big() -> NativeScene {
+    NativeScene scene = new_scene();
+    int blob = 0;
+    while (blob < 9) {
+        add_blob(scene, substring("ab", blob % 2, blob % 2 + 1));
+        blob++;
+    }
+
+    int count = 12;
+    int index = 0;
+    while (index < count) {
+        int function = add_function(scene, "f" + decimal(index), NativeType.Int, new NativeType[0], 0);
+        NativeFunction handle = function_at(scene, function);
+        // Seventeen temporaries exceed the first binding allocation, so the
+        // binding table doubles inside every function.
+        int temporary = 0;
+        while (temporary < 17) {
+            int binding = new_temporary(handle, NativeType.Int);
+            push_instruction(handle, Instruction.ConstInt { target = binding, value = index * 17 + temporary });
+            temporary++;
+        }
+        push_instruction(handle, Instruction.Return { value = 16 });
+        index++;
+    }
+    scene.entry = 0;
+    return scene;
+}
+
+// decimal renders a non-negative integer in decimal.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+fn main() {
+    string[] arguments = argv();
+    if (length(arguments) > 2) {
+        eprint("native: expected zero or one argument");
+        exit(2);
+    }
+    bool failure_mode = false;
+
+    NativeScene scene = build_print_hello();
+    if (length(arguments) == 2) {
+        if (arguments[1] == "big") {
+            scene = build_big();
+        } else {
+            failure_mode = true;
+            scene = failure_scene(arguments[1]);
+        }
+    }
+
+    match (check_scene(scene)) {
+        Failed(message) {
+            print("error " + message);
+            exit(1);
+        }
+        Ok {
+            if (failure_mode) {
+                print("ok");
+                exit(0);
+            }
+            print(render(scene));
+            exit(0);
+        }
+    }
+}

@@ -1,0 +1,187 @@
+// text.ktn - render one NativeScene as deterministic text.
+//
+// The renderer is the native backend's first observer: tests pin its output,
+// later stages diff their work against scene readings through it, and the
+// pinned fixtures protect the scene's shape while the selector and the ELF
+// writer land around it. Every spelling is fixed: bindings are b<N>, labels
+// %<N>, functions @<name>, blobs $blob<N>, and shapes carry their repo
+// spellings from type_name. The blob bytes render as a decimal octet list, so
+// every byte including NUL and separators stays visible and comparable.
+
+import "ir.ktn";
+
+// decimal renders a non-negative integer in decimal.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+// binding_role renders a binding reference: parameters share the binding table,
+// so one spelling covers both.
+fn binding(int index) -> string {
+    return "b" + decimal(index);
+}
+
+// label_name renders a label reference.
+fn label_name(int index) -> string {
+    return "%" + decimal(index);
+}
+
+// render_type_list renders "p0: ref, p1: int" for the first parameter_count
+// bindings of a function.
+fn render_type_list(NativeFunction function) -> string {
+    if (function.parameter_count == 0) {
+        return "";
+    }
+    string result = "";
+    int index = 0;
+    while (index < function.parameter_count) {
+        if (index > 0) {
+            result += ", ";
+        }
+        result += "p" + decimal(index) + ": " + type_name(function.binding_types[index]);
+        index++;
+    }
+    return result;
+}
+
+// render_data renders one blob: its name, then its length, then the octets.
+fn render_data(NativeScene scene, int index) -> string {
+    DataBlob blob = scene.blobs[index];
+    string result = "data " + blob.name + ": " + decimal(length(blob.bytes)) + " bytes";
+    int offset = 0;
+    while (offset < length(blob.bytes)) {
+        result += " " + decimal(blob.bytes[offset]);
+        offset++;
+    }
+    return result;
+}
+
+// render_instruction renders one instruction with its fixed spelling, including
+// the target's shape so every line is self-describing.
+fn render_instruction(NativeFunction function, int index) -> string {
+    Instruction instruction = function.instructions[index];
+    match (instruction) {
+        ConstInt(target, value) {
+            return "  " + binding(target) + ": int = const " + decimal(value);
+        }
+        ConstBool(target, value) {
+            string spelling = "true";
+            if (!value) {
+                spelling = "false";
+            }
+            return "  " + binding(target) + ": bool = const " + spelling;
+        }
+        ConstRefData(target, blob) {
+            return "  " + binding(target) + ": ref = data $blob" + decimal(blob);
+        }
+        Copy(target, source) {
+            return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = copy " + binding(source);
+        }
+        Add(target, left, right) {
+            return "  " + binding(target) + ": int = add " + binding(left) + " " + binding(right);
+        }
+        Subtract(target, left, right) {
+            return "  " + binding(target) + ": int = subtract " + binding(left) + " " + binding(right);
+        }
+        Multiply(target, left, right) {
+            return "  " + binding(target) + ": int = multiply " + binding(left) + " " + binding(right);
+        }
+        WholeDivide(target, left, right) {
+            return "  " + binding(target) + ": int = whole_divide " + binding(left) + " " + binding(right);
+        }
+        WholeRemainder(target, left, right) {
+            return "  " + binding(target) + ": int = whole_remainder " + binding(left) + " " + binding(right);
+        }
+        Negate(target, value) {
+            return "  " + binding(target) + ": int = negate " + binding(value);
+        }
+        Equal(target, left, right) {
+            return "  " + binding(target) + ": bool = equal " + binding(left) + " " + binding(right);
+        }
+        LessThan(target, left, right) {
+            return "  " + binding(target) + ": bool = less_than " + binding(left) + " " + binding(right);
+        }
+        Call(target, callee, arguments, argument_count) {
+            return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = call @" + decimal(callee) + render_arguments(arguments, argument_count);
+        }
+        CallVoid(callee, arguments, argument_count) {
+            return "  call @" + decimal(callee) + render_arguments(arguments, argument_count);
+        }
+        Jump(label) {
+            return "  jump " + label_name(label);
+        }
+        Branch(condition, label_true, label_false) {
+            return "  branch " + binding(condition) + " " + label_name(label_true) + " " + label_name(label_false);
+        }
+        Label(label) {
+            return "  label " + label_name(label);
+        }
+        Return(value) {
+            return "  return " + binding(value);
+        }
+        ReturnVoid {
+            return "  return";
+        }
+    }
+    return "";
+}
+
+// render_arguments appends one space before every argument binding.
+fn render_arguments(int[] arguments, int argument_count) -> string {
+    string result = "";
+    int index = 0;
+    while (index < argument_count) {
+        result += " " + binding(arguments[index]);
+        index++;
+    }
+    return result;
+}
+
+// render_function renders one function: its signature with parameter shapes,
+// its full binding table, and its instructions in order.
+fn render_function(NativeFunction function) -> string {
+    string result = "fn @" + function.name + " (" + render_type_list(function) + ") -> " + type_name(function.result) + "\n";
+    int binding_index = 0;
+    while (binding_index < function.binding_count) {
+        result += "  b" + decimal(binding_index) + ": " + type_name(function.binding_types[binding_index]) + " binding\n";
+        binding_index++;
+    }
+    int instruction_index = 0;
+    while (instruction_index < function.instruction_count) {
+        result += render_instruction(function, instruction_index) + "\n";
+        instruction_index++;
+    }
+    return result;
+}
+
+// render_scene renders the whole scene deterministically: the blobs in order,
+// the entry function's index and name, and then every function in order.
+fn render_scene(NativeScene scene) -> string {
+    string result = "scene\n";
+    int blob = 0;
+    while (blob < scene.blob_count) {
+        result += render_data(scene, blob) + "\n";
+        blob++;
+    }
+    result += "entry " + decimal(scene.entry) + " @" + scene.functions[scene.entry].name + "\n";
+    int function = 0;
+    while (function < scene.function_count) {
+        result += render_function(scene.functions[function]);
+        function++;
+    }
+    return result;
+}
+
+// render is the public whole-scene rendering entry point.
+public fn render(NativeScene scene) -> string {
+    return render_scene(scene);
+}

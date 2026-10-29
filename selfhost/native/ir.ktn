@@ -1,0 +1,613 @@
+// ir.ktn - the typed scene and its well-formedness checks.
+//
+// This is the native backend's input representation: every checked program is
+// reduced later into one NativeScene of functions, bindings, labeled
+// instructions, and static data blobs, and — per
+// proposals/zero-dependency-toolchain.md Section 5 — every later stage, the
+// layout pass, the selector, and the ELF writer, reads this one scene. The
+// shapes follow Section 5.2 and the layout table in Section 5.3: int is a
+// signed 64-bit value, float is IEEE 754 binary64, bool is one unsigned byte,
+// enum values are signed 64-bit tags, and every string, struct, union, array,
+// and map reference is an 8-byte pointer.
+//
+// Bindings are stack slots by default, as the proposal fixes them: every
+// binding is an index into its function's binding table, parameters come
+// first, and temporaries extend that table in creation order. Every
+// instruction names its target binding and its operand bindings, so the scene
+// is three-address and index-addressed: the renderer, the layout pass, and the
+// x86-64 selector can walk the same representation deterministically.
+//
+// What this slice does not carry yet: float arithmetic and conversions (they
+// land with the selector's SSE2 work), struct and union field access,
+// allocation, bounds checks, tag switches, and runtime-module intrinsics. The
+// instruction union is open; each later slice adds its forms together with the
+// selectors that lower them, and this file's validation grows with them.
+
+// NativeType names one of the value shapes the IR carries.
+public union NativeType {
+    Int {}
+    Float {}
+    Bool {}
+    Ref {}
+    Void {}
+}
+
+// type_name is the renderer's stable spelling for each shape.
+public fn type_name(NativeType value) -> string {
+    match (value) {
+        Int { return "int"; }
+        Float { return "float64"; }
+        Bool { return "bool"; }
+        Ref { return "ref"; }
+        Void { return "void"; }
+    }
+}
+
+// type_size is a value's size in bytes, exactly as Section 5.3's layout table
+// fixes them.
+public fn type_size(NativeType value) -> int {
+    match (value) {
+        Int { return 8; }
+        Float { return 8; }
+        Bool { return 1; }
+        Ref { return 8; }
+        Void { return 0; }
+    }
+}
+
+// type_alignment is a value's alignment in bytes from the same table.
+public fn type_alignment(NativeType value) -> int {
+    match (value) {
+        Int { return 8; }
+        Float { return 8; }
+        Bool { return 1; }
+        Ref { return 8; }
+        Void { return 0; }
+    }
+}
+
+// Instruction is one three-address instruction.
+//
+// Binding indices point into the enclosing function's binding table. Label
+// indices point into the function's label set. A call names its callee by
+// scene function index; the argument bindings must match the callee's
+// parameter shapes, and a typed call's target matches the callee's result
+// shape. ConstRefData binds a reference binding to one static data blob's
+// address, which is how a lowered string literal reaches the data section.
+// Forward calls are legal because check_scene runs once, after every function
+// exists.
+public union Instruction {
+    ConstInt { int target; int value; }
+    ConstBool { int target; bool value; }
+    ConstRefData { int target; int blob; }
+    Copy { int target; int source; }
+    Add { int target; int left; int right; }
+    Subtract { int target; int left; int right; }
+    Multiply { int target; int left; int right; }
+    WholeDivide { int target; int left; int right; }
+    WholeRemainder { int target; int left; int right; }
+    Negate { int target; int value; }
+    Equal { int target; int left; int right; }
+    LessThan { int target; int left; int right; }
+    Call { int target; int function; int[] arguments; int argument_count; }
+    CallVoid { int function; int[] arguments; int argument_count; }
+    Jump { int label; }
+    Branch { int condition; int label_true; int label_false; }
+    Label { int label; }
+    Return { int value; }
+    ReturnVoid {}
+}
+
+// DataBlob is one static data object. The name is the renderer's global
+// spelling and the bytes are the raw payload; the data-section layout later
+// associates blobs with the object shapes the runtime defines.
+public struct DataBlob {
+    string name;
+    string bytes;
+}
+
+// NativeFunction is one routine: its result shape, its parameter bindings,
+// its local bindings in creation order, and its instructions in program
+// order. The label count records how many distinct labels the function
+// defines; push_instruction keeps it current as Label instructions are added.
+public struct NativeFunction {
+    string name;
+    NativeType result;
+    NativeType[] parameter_types;
+    int parameter_count;
+    NativeType[] binding_types;
+    int binding_count;
+    int binding_capacity;
+    int label_count;
+    Instruction[] instructions;
+    int instruction_count;
+    int instruction_capacity;
+}
+
+// NativeScene is the whole program: ordered functions, ordered blobs, and the
+// entry function's index. Function order is deterministic because the builder
+// adds functions in a fixed order.
+public struct NativeScene {
+    NativeFunction[] functions;
+    int function_count;
+    int function_capacity;
+    DataBlob[] blobs;
+    int blob_count;
+    int blob_capacity;
+    int entry;
+}
+
+// SceneResult is the well-formedness pass's outcome, or the first failure's
+// deterministic message, naming the scene position that failed.
+public union SceneResult {
+    Ok {}
+    Failed { string message; }
+}
+
+// decimal renders a non-negative integer in decimal. The builder's counters
+// and indices are never negative, so negative values are not a case here.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+// new_function allocates an empty function whose binding table starts with
+// spare space and which defines zero labels.
+fn new_function(string name, NativeType result) -> NativeFunction {
+    return NativeFunction {
+        name = name,
+        result = result,
+        parameter_types = new NativeType[0],
+        parameter_count = 0,
+        binding_types = new NativeType[16],
+        binding_count = 0,
+        binding_capacity = 16,
+        label_count = 0,
+        instructions = new Instruction[16],
+        instruction_count = 0,
+        instruction_capacity = 16
+    };
+}
+
+// new_scene allocates an empty scene; the caller sets entry after the
+// functions exist.
+public fn new_scene() -> NativeScene {
+    return NativeScene {
+        functions = new NativeFunction[8],
+        function_count = 0,
+        function_capacity = 8,
+        blobs = new DataBlob[8],
+        blob_count = 0,
+        blob_capacity = 8,
+        entry = 0
+    };
+}
+
+// grow_bindings doubles a function's binding table. Functions are struct
+// references, so the caller's copy of the function pointer sees the change.
+fn grow_bindings(NativeFunction function) {
+    int capacity = function.binding_capacity * 2;
+    NativeType[] grown = new NativeType[capacity];
+    int index = 0;
+    while (index < function.binding_count) {
+        grown[index] = function.binding_types[index];
+        index++;
+    }
+    function.binding_types = grown;
+    function.binding_capacity = capacity;
+}
+
+// new_binding appends one binding of the given shape and returns its index.
+fn new_binding(NativeFunction function, NativeType shape) -> int {
+    if (function.binding_count == function.binding_capacity) {
+        grow_bindings(function);
+    }
+    function.binding_types[function.binding_count] = shape;
+    function.binding_count++;
+    return function.binding_count - 1;
+}
+
+// grow_instructions doubles a function's instruction list.
+fn grow_instructions(NativeFunction function) {
+    int capacity = function.instruction_capacity * 2;
+    Instruction[] grown = new Instruction[capacity];
+    int index = 0;
+    while (index < function.instruction_count) {
+        grown[index] = function.instructions[index];
+        index++;
+    }
+    function.instructions = grown;
+    function.instruction_capacity = capacity;
+}
+
+// append_instruction adds one instruction in program order; the label count
+// updates at the same time so jump and label validation stays index-exact.
+fn append_instruction(NativeFunction function, Instruction instruction) {
+    if (function.instruction_count == function.instruction_capacity) {
+        grow_instructions(function);
+    }
+    function.instructions[function.instruction_count] = instruction;
+    function.instruction_count++;
+    match (instruction) {
+        Label(ignored) {
+            function.label_count++;
+        }
+        ConstInt(n, v) {}
+        ConstBool(n, v) {}
+        ConstRefData(n, b) {}
+        Copy(n, s) {}
+        Add(n, l, r) {}
+        Subtract(n, l, r) {}
+        Multiply(n, l, r) {}
+        WholeDivide(n, l, r) {}
+        WholeRemainder(n, l, r) {}
+        Negate(n, v) {}
+        Equal(n, l, r) {}
+        LessThan(n, l, r) {}
+        Call(n, c, a, count) {}
+        CallVoid(c, a, count) {}
+        Jump(l) {}
+        Branch(c, t, f) {}
+        Return(v) {}
+        ReturnVoid {}
+    }
+}
+
+// push_instruction is the public append; its name documents that callers push
+// pre-validated indices and let check_scene be the gate.
+public fn push_instruction(NativeFunction function, Instruction instruction) {
+    append_instruction(function, instruction);
+}
+
+// grow_blobs doubles the scene's blob list; the scene is a struct reference, so
+// the caller's copy sees the change.
+fn grow_blobs(NativeScene scene) {
+    int capacity = scene.blob_capacity * 2;
+    DataBlob[] grown = new DataBlob[capacity];
+    int index = 0;
+    while (index < scene.blob_count) {
+        grown[index] = scene.blobs[index];
+        index++;
+    }
+    scene.blobs = grown;
+    scene.blob_capacity = capacity;
+}
+
+// add_blob appends one static data blob and returns its index.
+public fn add_blob(NativeScene scene, string bytes) -> int {
+    if (scene.blob_count == scene.blob_capacity) {
+        grow_blobs(scene);
+    }
+    DataBlob blob = DataBlob {
+        name = "$blob" + decimal(scene.blob_count),
+        bytes = bytes
+    };
+    scene.blobs[scene.blob_count] = blob;
+    scene.blob_count++;
+    return scene.blob_count - 1;
+}
+
+// new_temporary extends a function's binding table with one local binding and
+// returns its index.
+public fn new_temporary(NativeFunction function, NativeType shape) -> int {
+    return new_binding(function, shape);
+}
+
+// grow_functions doubles the scene's function list.
+fn grow_functions(NativeScene scene) {
+    int capacity = scene.function_capacity * 2;
+    NativeFunction[] grown = new NativeFunction[capacity];
+    int index = 0;
+    while (index < scene.function_count) {
+        grown[index] = scene.functions[index];
+        index++;
+    }
+    scene.functions = grown;
+    scene.function_capacity = capacity;
+}
+
+// add_function appends one empty function, pre-creating its parameter bindings
+// in order, and returns the function index. The caller then fills the body
+// through the function reference.
+public fn add_function(NativeScene scene, string name, NativeType result, NativeType[] parameter_types, int parameter_count) -> int {
+    if (scene.function_count == scene.function_capacity) {
+        grow_functions(scene);
+    }
+    NativeFunction function = new_function(name, result);
+    int index = 0;
+    while (index < parameter_count) {
+        new_binding(function, parameter_types[index]);
+        index++;
+    }
+    function.parameter_types = parameter_types;
+    function.parameter_count = parameter_count;
+    scene.functions[scene.function_count] = function;
+    scene.function_count++;
+    return scene.function_count - 1;
+}
+
+// function_at returns the function reference at one scene index.
+public fn function_at(NativeScene scene, int index) -> NativeFunction {
+    return scene.functions[index];
+}
+
+// require_binding checks that an index is in range and, when expected carries a
+// shape, that the binding carries exactly that shape. Passing Void for expected
+// checks the range alone; call sites use this to accept any-shape operands.
+// On failure it returns the full deterministic message, and "" on success.
+fn require_binding(NativeFunction function, int index, NativeType expected, string context) -> string {
+    if (index < 0 || index >= function.binding_count) {
+        return context + " binding " + decimal(index) + " is out of range (the function has " + decimal(function.binding_count) + " bindings)";
+    }
+    if (type_size(expected) != 0) {
+        NativeType actual = function.binding_types[index];
+        if (type_name(actual) != type_name(expected)) {
+            return context + " binding " + decimal(index) + " has " + type_name(actual) + ", expected " + type_name(expected);
+        }
+    }
+    return "";
+}
+
+// require_label checks one label index against the function's label count.
+fn require_label(NativeFunction function, int label, string context) -> string {
+    if (label < 0 || label >= function.label_count) {
+        return context + "label " + decimal(label) + " is out of range (the function defines " + decimal(function.label_count) + " labels)";
+    }
+    return "";
+}
+
+// check_scene validates the whole scene at once: result and binding shapes,
+// instruction index ranges and shapes, label definitions and references, call
+// agreement, and the entry index. It is the native backend's first gate, and
+// the layout pass, the selector, and the ELF writer may rely on a scene that
+// passed it.
+public fn check_scene(NativeScene scene) -> SceneResult {
+    if (scene.entry < 0 || scene.entry >= scene.function_count) {
+        return SceneResult.Failed {
+            message = "entry " + decimal(scene.entry) + " is out of range (the scene has " + decimal(scene.function_count) + " functions)"
+        };
+    }
+
+    int index = 0;
+    while (index < scene.function_count) {
+        NativeFunction function = function_at(scene, index);
+        string failure = check_function(scene, function);
+        if (length(failure) != 0) {
+            return SceneResult.Failed { message = failure };
+        }
+        index++;
+    }
+    return SceneResult.Ok;
+}
+
+// check_function validates one function: every parameter and binding carries a
+// real shape, every label reference has a definition, and every instruction is
+// well-formed against the binding table.
+fn check_function(NativeScene scene, NativeFunction function) -> string {
+    string context = "function @" + function.name + ": ";
+    string start = context + "the function has ";
+
+    int parameter = 0;
+    while (parameter < function.parameter_count) {
+        if (type_size(function.parameter_types[parameter]) == 0) {
+            return start + "no shape for parameter " + decimal(parameter);
+        }
+        parameter++;
+    }
+
+    int binding = 0;
+    while (binding < function.binding_count) {
+        if (type_size(function.binding_types[binding]) == 0) {
+            return start + "no shape for binding " + decimal(binding);
+        }
+        binding++;
+    }
+
+    int label = 0;
+    while (label < function.label_count) {
+        if (!label_defined(function, label)) {
+            return context + "label " + decimal(label) + " is referenced but never defined";
+        }
+        label++;
+    }
+
+    int instruction_index = 0;
+    while (instruction_index < function.instruction_count) {
+        string failure = check_instruction(scene, function, instruction_index);
+        if (length(failure) != 0) {
+            return failure;
+        }
+        instruction_index++;
+    }
+    return "";
+}
+
+// check_instruction validates one instruction's index ranges, operand shapes,
+// and call agreement, reading the enclosing function's binding table. Every
+// failure names the function, the instruction, and the offending role, in that
+// order.
+fn check_instruction(NativeScene scene, NativeFunction function, int instruction_index) -> string {
+    Instruction instruction = function.instructions[instruction_index];
+    string position = "function @" + function.name + ": instruction " + decimal(instruction_index) + ": ";
+    string failure = "";
+
+    match (instruction) {
+        ConstInt(target, value) {
+            failure = require_binding(function, target, NativeType.Int, position + "target");
+        }
+        ConstBool(target, value) {
+            failure = require_binding(function, target, NativeType.Bool, position + "target");
+        }
+        ConstRefData(target, blob) {
+            failure = require_binding(function, target, NativeType.Ref, position + "target");
+        }
+        Copy(target, source) {
+            failure = require_binding(function, source, NativeType.Void, position + "source");
+            if (length(failure) == 0) {
+                NativeType shape = function.binding_types[source];
+                failure = require_binding(function, target, shape, position + "target");
+            }
+        }
+        Add(target, left, right) {
+            failure = check_int_pair(function, target, left, right, position);
+        }
+        Subtract(target, left, right) {
+            failure = check_int_pair(function, target, left, right, position);
+        }
+        Multiply(target, left, right) {
+            failure = check_int_pair(function, target, left, right, position);
+        }
+        WholeDivide(target, left, right) {
+            failure = check_int_pair(function, target, left, right, position);
+        }
+        WholeRemainder(target, left, right) {
+            failure = check_int_pair(function, target, left, right, position);
+        }
+        Negate(target, value) {
+            failure = require_binding(function, value, NativeType.Int, position + "operand");
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+        }
+        Equal(target, left, right) {
+            failure = check_compare(function, target, left, right, position);
+        }
+        LessThan(target, left, right) {
+            failure = check_compare(function, target, left, right, position);
+        }
+        Call(target, callee, arguments, argument_count) {
+            failure = check_call(scene, function, callee, arguments, argument_count, position, true);
+            if (length(failure) == 0) {
+                NativeFunction target_function = function_at(scene, callee);
+                failure = require_binding(function, target, target_function.result, position + "target");
+            }
+        }
+        CallVoid(callee, arguments, argument_count) {
+            failure = check_call(scene, function, callee, arguments, argument_count, position, false);
+        }
+        Jump(label) {
+            failure = require_label(function, label, position);
+        }
+        Branch(condition, label_true, label_false) {
+            failure = require_binding(function, condition, NativeType.Bool, position + "condition");
+            if (length(failure) == 0) {
+                failure = require_label(function, label_true, position + "true ");
+                if (length(failure) == 0) {
+                    failure = require_label(function, label_false, position + "false ");
+                }
+            }
+        }
+        Label(label) {
+            failure = require_label(function, label, position);
+        }
+        Return(value) {
+            failure = require_binding(function, value, function.result, position + "result");
+            if (length(failure) == 0 && type_size(function.result) == 0) {
+                failure = position + "a void function must use ReturnVoid";
+            }
+        }
+        ReturnVoid {
+            if (type_size(function.result) != 0) {
+                failure = position + "a function returning " + type_name(function.result) + " must use Return";
+            }
+        }
+    }
+    return failure;
+}
+
+// check_int_pair is the integer binary-operation gate: both operands and the
+// target carry int shapes.
+fn check_int_pair(NativeFunction function, int target, int left, int right, string position) -> string {
+    string failure = require_binding(function, left, NativeType.Int, position + "left");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    failure = require_binding(function, right, NativeType.Int, position + "right");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    return require_binding(function, target, NativeType.Int, position + "target");
+}
+
+// check_compare is the integer comparison gate: both operands carry int shapes
+// and the target carries bool.
+fn check_compare(NativeFunction function, int target, int left, int right, string position) -> string {
+    string failure = require_binding(function, left, NativeType.Int, position + "left");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    failure = require_binding(function, right, NativeType.Int, position + "right");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    return require_binding(function, target, NativeType.Bool, position + "target");
+}
+
+// check_call validates one call against its callee: an in-range function
+// index, the exact argument count, shape agreement between the caller's
+// argument bindings and the callee's parameters, and, through result_expected,
+// the call kind's agreement with the callee's result.
+fn check_call(NativeScene scene, NativeFunction caller, int callee, int[] arguments, int argument_count, string position, bool result_expected) -> string {
+    if (callee < 0 || callee >= scene.function_count) {
+        return position + "function " + decimal(callee) + " is out of range (the scene has " + decimal(scene.function_count) + " functions)";
+    }
+    NativeFunction target = function_at(scene, callee);
+    if (argument_count != target.parameter_count) {
+        return position + "the call passes " + decimal(argument_count) + " arguments, but @" + target.name + " takes " + decimal(target.parameter_count);
+    }
+    int index = 0;
+    while (index < argument_count) {
+        string argument_failure = require_binding(caller, arguments[index], target.parameter_types[index], position + "argument " + decimal(index));
+        if (length(argument_failure) != 0) {
+            return argument_failure;
+        }
+        index++;
+    }
+    bool target_void = type_size(target.result) == 0;
+    if (target_void == result_expected) {
+        return position + "@" + target.name + " returns " + type_name(target.result) + ", which does not match this kind of call";
+    }
+    return "";
+}
+
+// label_defined reports whether a Label instruction defines the label.
+fn label_defined(NativeFunction function, int label) -> bool {
+    int index = 0;
+    while (index < function.instruction_count) {
+        match (function.instructions[index]) {
+            Label(defined_label) {
+                if (defined_label == label) {
+                    return true;
+                }
+            }
+            ConstInt(n, v) {}
+            ConstBool(n, v) {}
+            ConstRefData(n, b) {}
+            Copy(n, s) {}
+            Add(n, l, r) {}
+            Subtract(n, l, r) {}
+            Multiply(n, l, r) {}
+            WholeDivide(n, l, r) {}
+            WholeRemainder(n, l, r) {}
+            Negate(n, v) {}
+            Equal(n, l, r) {}
+            LessThan(n, l, r) {}
+            Call(n, c, a, count) {}
+            CallVoid(c, a, count) {}
+            Jump(l) {}
+            Branch(c, t, f) {}
+            Return(v) {}
+            ReturnVoid {}
+        }
+        index++;
+    }
+    return false;
+}
