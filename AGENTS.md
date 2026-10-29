@@ -440,7 +440,14 @@ independent cross-check oracle, with the Go files frozen until that parity is
 proven. The staged native-backend work is in that proposal's implementation
 order; a complete standard library remains not designed. Do not claim
 zero dependencies, a native fixpoint, or Go removal before the proposal's
-staged evidence exists.
+staged evidence exists. Phase 10.1 then landed the backend's input
+representation: the typed-IR scene under `selfhost/native` — shapes, binding
+tables, labels, calls, blob data — with the whole-scene `check_scene` gate,
+its deterministic validation messages, and a text renderer pinned through
+`selfhost/native.ktn` and `cmd/purr/native_test.go` in both pipelines
+(Go and Kitten). There is no lowering, selector, or ELF emission yet; the
+next step in the proposal's order is the skeleton slice: static ELF plus
+write/exit syscalls plus string-literal printing with no GC.
 
 ## Roadmap
 
@@ -501,8 +508,9 @@ staged evidence exists.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
    the runtime off C as well. This is independence from C. **Authorized** (Phase
    10.0): the typed-IR/stack-first/direct-ELF design is approved and
-   implementation may begin in the proposal's staged order; nothing is
-   implemented yet.
+   implementation proceeds in the proposal's staged order. Phase 10.1 landed
+   the typed-IR scene (no machine code yet); the skeleton slice — static ELF,
+   write/exit syscalls, string-literal printing, no GC — is next.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
    then GUI, servers, and games. This is independence from other languages'
    ecosystems, and it includes the whole `purr` toolchain: one-command install of

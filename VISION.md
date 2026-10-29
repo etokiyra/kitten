@@ -135,8 +135,11 @@ involved at any step.
 Phase 10.0 approved its decisions — the typed-IR/stack-first/direct-ELF backend,
 `<runtime>`-only unsafe operations, non-moving conservative mark-sweep as the
 first shippable GC, and an exact `%g` in the native runtime — so the staged
-implementation may begin, and after native parity the Go source is removed
-entirely.
+implementation is in progress: Phase 10.1 landed the typed-IR scene in Kitten
+with its validation gate and pinned renderer, and the skeleton slice (static
+ELF, write/exit syscalls, string-literal printing, no GC) is next. After native
+parity the Go source is removed entirely, an accepted loss of the independent
+cross-check oracle.
 
 ### 3. Independent ecosystem
 

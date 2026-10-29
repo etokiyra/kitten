@@ -3526,3 +3526,60 @@ The sidecar intentionally differs from the Go CLI in four tool-behavior details:
 The compiler is executed through a fixed `/bin/sh` `cd` plus `exec` wrapper so
 its working directory matches Go's build-tree `command.Dir`; the compiler
 argument vector is unchanged. These differences do not change the language.
+
+---
+
+## 30. Native backend foundations (experimental)
+
+Phase 10.0 approved the native toolchain's design in
+`proposals/zero-dependency-toolchain.md`: a typed-IR, stack-first,
+direct-ELF64 backend with `<runtime>`-only unsafe operations, a non-moving
+conservative mark-sweep first collector, and an exact `%g` in the native
+runtime. Implementation proceeds in that proposal's staged order, and Section
+29's toolchain remains the production pipeline until the native path proves
+itself; nothing here replaces the C backend while it is still the verified
+oracle.
+
+### 30.1 The typed scene
+
+`selfhost/native/ir.ktn` defines the backend's input representation, one
+`NativeScene` per program:
+
+- **Shapes.** `int` is a signed 64-bit value, `float64` is IEEE 754 binary64,
+  `bool` is one unsigned byte, and every `ref` carries a string, struct,
+  union, array, or map reference as an 8-byte pointer; `void` carries no
+  value. Sizes and alignments follow the proposal's layout table and are
+  enforced by `type_size` and `type_alignment`: 8/8 for `int`, `float64`, and
+  `ref`, 1/1 for `bool`.
+- **Bindings.** Every function carries a binding table: parameter bindings
+  first, then temporaries in creation order. Instructions name bindings by
+  index into that table, which makes the scene three-address and
+  index-addressed, deterministic to walk for the renderer, the layout pass,
+  and the selector alike.
+- **Labels.** Branch and label instructions name per-function label indices;
+  the builder keeps the label count exact as `Label` instructions are
+  appended.
+- **Calls.** A call names its callee by scene function index. Forward calls
+  are legal: `check_scene` runs once, after every function exists, and checks
+  agreement between argument bindings and callee parameters, and between a
+  typed call's target and the callee's result.
+- **Data.** Static blobs are ordered, named, raw byte payloads;
+  `ConstRefData` binds a reference to a blob address. The object layouts the
+  runtime defines arrive with the runtime phase; the scene carries the raw
+  material.
+- **Validation.** `check_scene` is the whole-scene gate: per function it
+  rejects shapeless parameters or bindings, label references without
+  definitions, and any instruction whose index ranges, operand shapes, or
+  call agreement are wrong, with one deterministic message naming function,
+  instruction, and role. No instruction form exists that the gate does not
+  reach; every later instruction kind grows the gate with it.
+
+### 30.2 What Phase 10.1 did not build
+
+There is no lowering from the checked program, no float operations or
+conversions, no field access, allocation, bounds checks, or tag switches, no
+runtime-module intrinsics, no x86-64 selector, and no ELF writer. The
+instruction union stays open and the renderer's pinned text protects the
+scene's shape while the next slices land. The gate pass and its failure texts,
+the renderer's spellings, and the both-pipeline probe agreement are recorded in
+`selfhost/native/README.md`.
