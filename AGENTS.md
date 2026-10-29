@@ -430,11 +430,17 @@ documented in SPEC.md Sections 25 to 28, `selfhost/lexer/README.md`,
 
 The C-level self-hosting fixpoint is reached, but full independence from Go is
 not: Go still builds stage 1. The design of the zero-dependency native toolchain
-(Goal 2) is authorized by Phase 7.0 and lives in
-`proposals/zero-dependency-toolchain.md`; its native-backend implementation and a
-complete standard library remain intentionally unimplemented. Do not start them,
-or claim full self-hosting or zero dependencies, without separate explicit
-authorization after the design is approved.
+(Goal 2) lives in `proposals/zero-dependency-toolchain.md`, and **Phase 10.0
+approved its Section 14 answers, authorizing implementation**: the typed-IR,
+stack-first, direct-ELF backend is approved; unsafe operations stay only in the
+compiler-reserved `<runtime>` module; the first shippable GC is non-moving
+conservative mark-sweep; the native runtime implements `%g` exactly; and after
+native parity the Go source is removed entirely — an accepted loss of the
+independent cross-check oracle, with the Go files frozen until that parity is
+proven. The staged native-backend work is in that proposal's implementation
+order; a complete standard library remains not designed. Do not claim
+zero dependencies, a native fixpoint, or Go removal before the proposal's
+staged evidence exists.
 
 ## Roadmap
 
@@ -493,7 +499,10 @@ authorization after the design is approved.
    Go still builds stage 1; relative loader roots and a Go-free bootstrap install
    remain open work, not part of this finish line yet.
 4. Explore an LLVM IR or native assembly/object-code backend, and eventually move
-   the runtime off C as well. This is independence from C.
+   the runtime off C as well. This is independence from C. **Authorized** (Phase
+   10.0): the typed-IR/stack-first/direct-ELF design is approved and
+   implementation may begin in the proposal's staged order; nothing is
+   implemented yet.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
    then GUI, servers, and games. This is independence from other languages'
    ecosystems, and it includes the whole `purr` toolchain: one-command install of

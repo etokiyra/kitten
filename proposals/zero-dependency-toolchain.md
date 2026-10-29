@@ -591,22 +591,31 @@ claim zero-dependency installation.
 
 ## 14. Human-only questions
 
-1. Approve the recommended backend: typed IR + stack-first calling convention +
-   linear scan later + direct ELF writer, with assembly/QBE/LLVM rejected for
-   the shipped path?
-2. Approve the intrinsic boundary: unsafe operations only in a compiler-reserved
-   runtime module, with no user-facing unsafe block?
-3. Which SPEC choices from Section 10 should be decided first: bitwise/shift
-   operators, a byte type, file/process APIs, and native layout?
-4. Approve non-moving conservative mark-sweep as the first shippable GC, with a
-   bump allocator only as a temporary bootstrap milestone?
-5. Approve the float-format decision: implement `%g` exactly, or deliberately
-   define a new deterministic format and update expected outputs?
-6. Should 5.4/5.5 land before native runtime work, as recommended, or should
-   native codegen proceed in parallel?
-7. Is the frozen-Go bootstrap/reference model acceptable after native parity, or
-   must the Go source be removed entirely (which would lose the independent
-   cross-check)?
-8. Should the native backend remain available alongside the C backend as an
-   oracle, or should C be removed from the shipped toolchain immediately after
-   zero-dependency parity?
+The human answered these in the Phase 10.0 session. Approved answers are
+recorded below and govern implementation.
+
+1. **Approved**: the recommended backend — typed IR + stack-first calling
+   convention + linear scan later + direct ELF writer — with assembly/QBE/LLVM
+   rejected for the shipped path.
+2. **Approved**: unsafe operations only in a compiler-reserved runtime module,
+   with no user-facing unsafe block, ever.
+3. The language choices were already made and shipped (bitwise/shift operators
+   in 8.2, the `byte` type in 8.3b, file/process APIs in 8.4-8.6). The
+   remaining decision is native layout, which is part of the backend work: the
+   ABI sizes and alignments are decided as the generator is written, documented
+   alongside it, and checked against the C backend's observable behavior.
+4. **Approved**: non-moving conservative mark-sweep as the first shippable GC,
+   with a bump allocator only as a temporary bootstrap milestone.
+5. **Approved**: implement `%g` exactly in the native runtime, so every
+   `.expected` output and differential corpus stays valid and both backends
+   produce byte-identical program output.
+6. Moot: 5.4/5.5 landed years of work before authorization.
+7. **Decided: remove the Go source entirely once native parity passes.** The
+   consequence is stated and accepted: the independent cross-check oracle is
+   deleted with it, and the shipped verification becomes the native-era
+   differential corpora themselves (IR-level, native-C output equality, and
+   fixture runs). Until that parity is proven, the Go source stays untouched
+   and frozen.
+8. Same policy as 7: after the native fixpoint, the Go files are removed. C
+   stays removed from the shipped toolchain along with them; the C backend and
+   its runtime are not kept as a second shipped path.

@@ -131,10 +131,12 @@ Two things make this a real project rather than a small one:
 **Finish line:** Kitten source goes in, a native executable comes out, with no C
 involved at any step.
 
-**Status:** design authorized, implementation not started. The zero-dependency
-design is in `proposals/zero-dependency-toolchain.md`; `AGENTS.md` still requires
-separate authorization before implementation, precisely because it should not be
-attempted before the language is finished enough to be worth compiling.
+**Status:** authorized. The design is in `proposals/zero-dependency-toolchain.md`;
+Phase 10.0 approved its decisions — the typed-IR/stack-first/direct-ELF backend,
+`<runtime>`-only unsafe operations, non-moving conservative mark-sweep as the
+first shippable GC, and an exact `%g` in the native runtime — so the staged
+implementation may begin, and after native parity the Go source is removed
+entirely.
 
 ### 3. Independent ecosystem
 
