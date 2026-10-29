@@ -1,21 +1,22 @@
 // paths.ktn - lexical path handling for the Kitten-written module loader.
 //
 // The reference loader uses Go's path/filepath on Linux: Abs, Clean, Dir, Join,
-// and Rel. The loader itself only ever canonicalizes an absolute root path and
-// joins imports onto an absolute directory, so these helpers reproduce the
-// lexical parts of those functions without touching the filesystem. Symlinks are
-// not resolved by filepath either, so this is the same view of a path.
+// and Rel. The loader canonicalizes a root path and joins imports onto an
+// absolute directory, so these helpers reproduce the lexical parts of those
+// functions without touching the filesystem. Symlinks are not resolved by
+// filepath either, so this is the same view of a path.
 //
 // clean_path reproduces filepath.Clean: empty segments and "." elements are
 // removed, each ".." removes the preceding element, a leading ".." is dropped on
 // an absolute path and kept on a relative one, and the root is "/". A trailing
 // slash is removed except for the root itself.
 //
-// The module loader requires an absolute root path. These helpers still define a
-// relative path the way filepath.Clean does, rather than inventing a cwd.
+// These helpers never touch the filesystem. Resolving a relative root against
+// the current directory is resolve_root's job in loader.ktn, which uses the
+// runtime's try_current_directory the way filepath.Abs uses os.Getwd.
 
 // path_separator is the Linux separator byte.
-fn path_separator() -> int { return 47; }
+public fn path_separator() -> int { return 47; }
 
 // dot_component is the parent-directory component.
 fn dot_component() -> string { return ".."; }

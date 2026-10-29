@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//     purr-selfhost <absolute-source.ktn>
+//     purr-selfhost <source.ktn>
 //
 // It loads the source and its imports with the Kitten-written loader, checks them
 // with the Kitten-written checker, emits the complete C translation unit with the
@@ -10,7 +10,9 @@
 // to standard error. Exit status is 0 on success, 1 for a load, check, or
 // generation failure, and 2 for a usage error.
 //
-// The wrapper (purr-bootstrap.sh) makes the source path absolute, writes the emitted C
+// A relative source path is accepted and resolved against the current directory
+// exactly as the reference's canonicalPath does with filepath.Abs. The wrapper
+// (purr-bootstrap.sh) still makes the source path absolute, writes the emitted C
 // to a temporary file, copies the runtime, and invokes the C compiler. The
 // driver itself parses no options and invokes no other process.
 //
@@ -77,21 +79,17 @@ fn report_generate_error(string root, GenerateError error) {
 // usage_error reports a driver invocation error and exits with status 2.
 fn usage_error(string message) {
     eprint("purr-selfhost: " + message);
-    eprint("Usage: purr-selfhost <absolute-source.ktn>");
+    eprint("Usage: purr-selfhost <source.ktn>");
     exit(2);
 }
 
 fn main() {
     string[] arguments = argv();
     if (length(arguments) != 2) {
-        usage_error("expected exactly one absolute source path");
+        usage_error("expected exactly one source path");
     }
 
     string root = arguments[1];
-    if (length(root) == 0 || root[0] != 47) {
-        usage_error("source path must be absolute: " + root);
-    }
-
     match (load_program(root)) {
         Failure(error) {
             report_load_error(error);

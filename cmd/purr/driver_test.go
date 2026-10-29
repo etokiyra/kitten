@@ -270,10 +270,18 @@ func TestKittenDriverDiagnostics(t *testing.T) {
 			wrapperResult.status, goStatus, wrapperResult.stderr, goStderr.String())
 	}
 
-	// The driver itself rejects a relative source path with status 2.
-	relative := runExternal(t, stage1, []string{"relative.ktn"}, directory, nil)
-	if relative.status != 2 || !strings.Contains(relative.stderr, "must be absolute") {
-		t.Errorf("relative path: status %d, stderr %q", relative.status, relative.stderr)
+	// The driver itself accepts a relative source path, resolving it exactly
+	// as the reference's canonicalPath does with filepath.Abs: its run on the
+	// relative spelling must equal its own run on the absolute path. The
+	// absolute runs above already compare against the Go CLI byte for byte.
+	relativeResult := runExternal(t, stage1, []string{"relative.ktn"}, directory, nil)
+	absoluteResult := runExternal(t, stage1, []string{filepath.Join(directory, "relative.ktn")}, directory, nil)
+	if relativeResult.status != absoluteResult.status ||
+		relativeResult.stdout != absoluteResult.stdout ||
+		relativeResult.stderr != absoluteResult.stderr {
+		t.Errorf("relative path differs from the absolute run:\n%d/%q/%q\nvs\n%d/%q/%q",
+			relativeResult.status, relativeResult.stdout, relativeResult.stderr,
+			absoluteResult.status, absoluteResult.stdout, absoluteResult.stderr)
 	}
 
 }

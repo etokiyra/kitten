@@ -1,15 +1,16 @@
 // loadunit.ktn - print a whole translation unit from a root path.
 //
-// It reads the root module's absolute path from input.txt, loads that module and
+// It reads the root module's path from input.txt, loads that module and
 // every module it imports with the Kitten-written loader, checks them with the
 // Kitten-written checker, and emits the complete C translation unit with the
 // Kitten-written generator. Standard output is therefore the unit itself, byte
 // for byte, so one comparison covers the whole self-hosted path: loader, lexer,
 // parser, checker, and generator.
 //
-// The root path is absolute because the self-hosted runtime has no working
-// directory. A failure prints one diagnostic line and no C. Missing, unreadable,
-// and directory paths are loader errors with no position.
+// The root path may be relative; the loader resolves it against the current
+// directory exactly as the reference's canonicalPath does with filepath.Abs. A
+// failure prints one diagnostic line and no C. Missing, unreadable, and
+// directory paths are loader errors with no position.
 //
 // This is test infrastructure, not a compiler CLI: the unit goes to standard
 // output and nothing writes a file, invokes a C compiler, or sets an exit status.

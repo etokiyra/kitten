@@ -108,6 +108,27 @@ func renderGoLoad(t *testing.T, rootPath string) string {
 	return builder.String()
 }
 
+// relativeRootVariants lists relative spellings of an already relative root: the
+// root itself, a leading ./, redundant separators, a removable .. component, and
+// a trailing separator. Deriving them from every targeted case exercises the
+// loader's root resolution over the whole corpus. Duplicates are dropped.
+func relativeRootVariants(root string) []string {
+	variants := []string{}
+	seen := map[string]bool{}
+	add := func(variant string) {
+		if !seen[variant] {
+			seen[variant] = true
+			variants = append(variants, variant)
+		}
+	}
+	add(root)
+	add("./" + root)
+	add(".//" + root)
+	add("sub/../" + root)
+	add(root + "/")
+	return variants
+}
+
 // --- Targeted cases ----------------------------------------------------------
 
 // loaderCase is one tree of source files and the root to load from it.
@@ -395,6 +416,7 @@ func TestKittenLoaderMatchesReference(t *testing.T) {
 
 	compared := 0
 	skipped := 0
+	relativeCompared := 0
 	for _, testCase := range loaderCases() {
 		if len(testCase.unreadable) > 0 && os.Geteuid() == 0 {
 			skipped++
@@ -425,12 +447,27 @@ func TestKittenLoaderMatchesReference(t *testing.T) {
 			continue
 		}
 		compared++
+
+		// Every relative spelling resolves to the same canonical root. The
+		// probe's working directory is the source directory here, so a
+		// relative root is made absolute exactly as filepath.Abs does, and
+		// the reference result is the already-rendered absolute comparison.
+		for _, variant := range relativeRootVariants(testCase.root) {
+			variantGot := runKittenLoader(t, executable, sourceDirectory, variant)
+			if variantGot != want {
+				t.Errorf("%s (relative %q): loader result differs\n--- probe ---\n%s--- reference ---\n%s",
+					testCase.description, variant, variantGot, want)
+				continue
+			}
+			relativeCompared++
+		}
 	}
 
 	if compared+skipped != len(loaderCases()) {
 		t.Fatalf("%d compared and %d skipped for %d targeted loader cases", compared, skipped, len(loaderCases()))
 	}
 	t.Logf("loader: %d targeted trees identical to the reference loader, %d skipped as root", compared, skipped)
+	t.Logf("loader: %d relative root spellings identical to the reference loader", relativeCompared)
 }
 
 // TestKittenLoaderTestsModules compares the loader over tests/modules, the real
@@ -449,6 +486,16 @@ func TestKittenLoaderTestsModules(t *testing.T) {
 	got := runKittenLoader(t, executable, probeDirectory, rootPath)
 	if got != want {
 		t.Fatalf("tests/modules: loader result differs\n--- probe ---\n%s--- reference ---\n%s", got, want)
+	}
+
+	// The same fixture through a relative root, with the probe's working
+	// directory at the repository root so the spelling is reachable. The
+	// pointer file is written into the repository and removed afterwards.
+	repositoryRoot := repoPath(t, "..", "..")
+	relativeGot := runKittenLoader(t, executable, repositoryRoot, "tests/modules/main.ktn")
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(repositoryRoot, "input.txt")) })
+	if relativeGot != want {
+		t.Fatalf("tests/modules (relative root): loader result differs\n--- probe ---\n%s--- reference ---\n%s", relativeGot, want)
 	}
 	t.Logf("loader: tests/modules matched the reference loader over %d modules", strings.Count(got, "module "))
 }
@@ -543,17 +590,35 @@ func TestKittenLoaderFullPipeline(t *testing.T) {
 	}
 	command := exec.Command(executable)
 	command.Dir = probeDirectory
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("running the loadunit probe: %v (stderr: %s)", err, stderr.String())
+	runProbe := func(directory string) string {
+		probe := exec.Command(executable)
+		probe.Dir = directory
+		var stdout, stderr bytes.Buffer
+		probe.Stdout = &stdout
+		probe.Stderr = &stderr
+		if err := probe.Run(); err != nil {
+			t.Fatalf("running the loadunit probe: %v (stderr: %s)", err, stderr.String())
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("the loadunit probe wrote to stderr: %s", stderr.String())
+		}
+		return stdout.String()
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("the loadunit probe wrote to stderr: %s", stderr.String())
-	}
-	if difference := unitDifference(stdout.String(), referenceText); difference != "" {
+	stdoutText := runProbe(probeDirectory)
+	if difference := unitDifference(stdoutText, referenceText); difference != "" {
 		t.Fatalf("tests/modules: the self-hosted unit differs: %s", difference)
+	}
+
+	// The same fixture through a relative root, with the probe's working
+	// directory at the repository root; the pointer file is cleaned up.
+	repositoryRoot := repoPath(t, "..", "..")
+	if err := os.WriteFile(filepath.Join(repositoryRoot, "input.txt"), []byte("tests/modules/main.ktn"), 0o644); err != nil {
+		t.Fatalf("writing the repository input.txt: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(repositoryRoot, "input.txt")) })
+	relativeText := runProbe(repositoryRoot)
+	if difference := unitDifference(relativeText, referenceText); difference != "" {
+		t.Fatalf("tests/modules (relative root): the self-hosted unit differs: %s", difference)
 	}
 
 	compiler, err := discoverCompiler()
@@ -562,7 +627,7 @@ func TestKittenLoaderFullPipeline(t *testing.T) {
 	}
 	compileFlags, linkFlags := gcBuildFlags()
 	programDirectory := t.TempDir()
-	result, err := buildAndRunProgram(t, compiler, compileFlags, linkFlags, programDirectory, stdout.String(), 0)
+	result, err := buildAndRunProgram(t, compiler, compileFlags, linkFlags, programDirectory, stdoutText, 0)
 	if err != nil {
 		t.Fatalf("tests/modules: %v", err)
 	}

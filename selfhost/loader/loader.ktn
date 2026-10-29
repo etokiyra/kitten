@@ -7,10 +7,13 @@
 // module. The parsed modules are the ones the Kitten-written checker and code
 // generator already consume.
 //
-// The root path must be absolute: the self-hosted runtime exposes no working
-// directory, so a relative root cannot be made absolute the way filepath.Abs
-// does. The reference loader also accepts relative roots; that difference is
-// documented in selfhost/loader/README.md and is not exercised here.
+// The root path may be relative, exactly as in the reference: resolve_root
+// reproduces the reference's canonicalPath, which is filepath.Abs and then
+// filepath.Clean. filepath.Abs resolves a relative path against the kernel's
+// current directory and never consults $PWD, which is what try_current_directory
+// returns, and an absolute path is cleaned without consulting the directory at
+// all. Imports are always joined onto the absolute directory of their file, so
+// only the root can be relative.
 //
 // A missing, unreadable, or directory path is reported from try_read_file as a
 // loader failure with the canonical path and no position, matching the reference's
@@ -72,6 +75,33 @@ union LoadStep {
 // lexical clean is the same result.
 public fn canonical_path(string path) -> string {
     return clean_path(path);
+}
+
+// RootPathResult is the resolved root path or the working-directory failure that
+// stops the load before it starts.
+public union RootPathResult {
+    Ok { string path; }
+    Failed { string message; }
+}
+
+// resolve_root reproduces the reference's canonicalPath for the root: a relative
+// path is resolved against the kernel's current directory — the Go runtime's
+// os.Getwd also ignores $PWD — and then Clean applies. An absolute path is
+// cleaned without consulting the directory, exactly as filepath.Abs does for
+// one. An empty path resolves to the cleaned current directory, which Abs also
+// does.
+public fn resolve_root(string path) -> RootPathResult {
+    if (length(path) > 0 && path[0] == path_separator()) {
+        return RootPathResult.Ok { path = clean_path(path) };
+    }
+    match (try_current_directory()) {
+        Failed(message) {
+            return RootPathResult.Failed { message = message };
+        }
+        Ok(current) {
+            return RootPathResult.Ok { path = clean_path(current + "/" + path) };
+        }
+    }
 }
 
 // new_loader_state returns empty loader state rooted at root_directory.
@@ -209,11 +239,24 @@ fn load_module(LoaderState state, string path, int id) -> LoadStep {
     }
 }
 
-// load_program loads the module at the absolute root path together with the
-// modules it imports. The returned modules have the root first, then imported
-// modules in depth-first import order, with each module's id equal to its index.
+// load_program loads the module at the root path together with the modules it
+// imports. A relative root is resolved against the current directory exactly as
+// filepath.Abs does; a current-directory failure becomes a loader failure
+// naming the unresolved path, matching the reference's canonicalPath error. The
+// returned modules have the root first, then imported modules in depth-first
+// import order, with each module's id equal to its index.
 public fn load_program(string root_path) -> LoadResult {
-    string root = canonical_path(root_path);
+    string root = "";
+    match (resolve_root(root_path)) {
+        Failed(message) {
+            return LoadResult.Failure {
+                error = load_error(root_path, 0, 0, message)
+            };
+        }
+        Ok(resolved) {
+            root = resolved;
+        }
+    }
     LoaderState state = new_loader_state(parent_directory(root));
 
     match (load_module(state, root, 0)) {

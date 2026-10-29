@@ -17,10 +17,11 @@
 // failure inside a source file carries a position; an import outside the root or
 // a read failure does not.
 //
-// The root path is absolute because the self-hosted runtime has no working
-// directory. The harness writes input.txt and selects the working directory, so
-// this driver needs no command-line arguments. Missing, unreadable, and directory
-// paths are reported as loader errors with no position.
+// The root path may be relative; the loader resolves it against the current
+// directory exactly as the reference's canonicalPath does with filepath.Abs. The
+// harness writes input.txt and selects the working directory, so this driver
+// needs no command-line arguments. Missing, unreadable, and directory paths are
+// reported as loader errors with no position.
 //
 // This is test infrastructure, not a compiler CLI: the output goes to standard
 // output and the driver writes no file.
