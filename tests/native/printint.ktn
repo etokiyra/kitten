@@ -1,0 +1,8 @@
+fn main() {
+    print(5);
+    print(0);
+    print(-7);
+    int m = 9223372036854775807;
+    m++;
+    print(m);
+}

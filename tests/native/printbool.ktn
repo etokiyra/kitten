@@ -1,0 +1,7 @@
+fn main() {
+    print(true);
+    print(false);
+    print(1 < 2);
+    print(!true);
+    print(3 == 3 && 4 < 10);
+}

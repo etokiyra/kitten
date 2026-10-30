@@ -8,18 +8,21 @@
 // scene into a static ELF64 executable and writes that file directly, with
 // no C compiler anywhere; `elf-arith` and `elf-divzero` do the same for the
 // Phase 10.3 scenes that exercise arithmetic, comparisons, control flow,
-// calls, and the guarded divide failure. Since Phase 10.4 the probe also
-// lowers real sources: `lower <path>` loads and checks a checked single-file
-// program with the Kitten-written loader and checker, reduces its scalar
-// subset with the Kitten-written lowering, and prints the scene's rendering,
-// with `lower <path> <output>` writing the program's static executable
-// instead.
+// calls, and the guarded divide failure, and `elf-oom` does it for the
+// Phase 10.6 allocation-failure scene, whose executable halts with the C
+// runtime's exact `purr: out of memory` text. Since Phase 10.4 the probe
+// also lowers real sources: `lower <path>` loads and checks a checked
+// single-file program with the Kitten-written loader and checker, reduces
+// its scalar subset with the Kitten-written lowering, and prints the scene's
+// rendering, with `lower <path> <output>` writing the program's static
+// executable instead.
 //
 //     native                     print the valid scene's rendering
 //     native <mode>              print one failure scene's check message
 //     native elf <path>          write the skeleton target's executable
 //     native elf-arith ...       write the arithmetic-and-control-flow executable
 //     native elf-divzero ...     write the divide-failure executable
+//     native elf-oom ...         write the allocation-failure executable
 //     native big                 render the growth corpus
 //     native arith               render the arithmetic-and-control-flow scene
 //     native lower <source>      render a real source's lowered scene
@@ -37,6 +40,7 @@ import "checker/state.ktn";
 import "native/ir.ktn";
 import "native/text.ktn";
 import "native/lower.ktn";
+import "native/runtime.ktn";
 import "native/floats.ktn";
 import "native/selector.ktn";
 import "native/elf.ktn";
@@ -55,49 +59,10 @@ fn one_int_parameter() -> NativeType[] {
     return shapes;
 }
 
-// add_print appends the runtime-shaped print routine to a scene: it reads
-// the string object's length and pointer and performs two write syscalls,
-// the payload and then the newline blob's payload. hello and arith share
-// it so their program shape stays identical.
+// add_print registers the shared "$print" routine from native/runtime.ktn
+// so every probe scene lowers it exactly like a lowered program does.
 fn add_print(NativeScene scene, int newline_blob) -> int {
-    int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
-    NativeFunction print_function = function_at(scene, print);
-
-    int length_binding = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawLoad64 { target = length_binding, address = 0, offset = 0 });
-    int data_binding = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.RawLoad64 { target = data_binding, address = 0, offset = 8 });
-
-    int one = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = one, value = 1 });
-    int write = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = write, value = 1 });
-    int[] write_arguments = new int[3];
-    write_arguments[0] = one;
-    write_arguments[1] = data_binding;
-    write_arguments[2] = length_binding;
-    int first = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawSyscall { target = first, number = write, arguments = write_arguments, argument_count = 3 });
-
-    int newline_ref = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = newline_blob });
-    // The payload pointer sits behind the object header, exactly as for
-    // print's own string; load it before the write.
-    int newline_data = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.RawLoad64 { target = newline_data, address = newline_ref, offset = 8 });
-    int one_again = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = one_again, value = 1 });
-    int count_one = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = count_one, value = 1 });
-    int[] newline_arguments = new int[3];
-    newline_arguments[0] = one_again;
-    newline_arguments[1] = newline_data;
-    newline_arguments[2] = count_one;
-    int second = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawSyscall { target = second, number = write, arguments = newline_arguments, argument_count = 3 });
-
-    push_instruction(print_function, Instruction.ReturnVoid);
-    return print;
+    return add_string_print(scene, newline_blob);
 }
 
 // build_hello is the skeleton target's scene per the 10.2 slice: static
@@ -297,6 +262,31 @@ fn build_divzero() -> NativeScene {
     return scene;
 }
 
+// build_oom is the allocation-failure program: a four-gigabyte request runs
+// past the 256 MiB heap limit, so $alloc takes its exhaustion branch and the
+// shared paragraph halts with the C runtime's exact `purr: out of memory`
+// text, standard error only, and status 1. It mirrors no other scene: the
+// runtime shells come from native/runtime.ktn exactly as a lowered program
+// receives them, and main makes one call the user side cannot yet make.
+fn build_oom() -> NativeScene {
+    NativeScene scene = new_scene();
+    AllocShell allocator = add_allocator(scene);
+
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int huge = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = huge, value = 4294967296 });
+    int[] call_arguments = new int[1];
+    call_arguments[0] = huge;
+    int result = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.Call { target = result, function = allocator.alloc, arguments = call_arguments, argument_count = 1 });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
+    return scene;
+}
+
 // build_simple pins the argument-array shape: one array, two writes, two
 // calls, so the render shows whether a later array write reaches an
 // instruction pushed earlier through the same array reference.
@@ -404,6 +394,42 @@ fn failure_scene(string mode) -> NativeScene {
         // branch asks for label 1, which is never defined.
         push_instruction(main_function, Instruction.Branch { condition = condition, label_true = 1, label_false = 0 });
         push_instruction(main_function, Instruction.Label { label = 0 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-static-blob") {
+        NativeScene scene = new_scene();
+        add_blob(scene, "one");
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        int slot = new_temporary(main_function, NativeType.Int);
+        push_instruction(main_function, Instruction.GetStatic { target = slot, blob = 9, offset = 24 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-static-offset") {
+        NativeScene scene = new_scene();
+        add_blob(scene, "one");
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        int slot = new_temporary(main_function, NativeType.Int);
+        push_instruction(main_function, Instruction.GetStatic { target = slot, blob = 0, offset = 60 });
+        push_instruction(main_function, Instruction.ReturnVoid);
+        scene.entry = main;
+        return scene;
+    }
+
+    if (mode == "bad-static-value") {
+        NativeScene scene = new_scene();
+        add_blob(scene, "one");
+        int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+        NativeFunction main_function = function_at(scene, main);
+        int not_an_int = new_temporary(main_function, NativeType.Bool);
+        push_instruction(main_function, Instruction.SetStatic { blob = 0, offset = 24, value = not_an_int });
         push_instruction(main_function, Instruction.ReturnVoid);
         scene.entry = main;
         return scene;
@@ -557,6 +583,8 @@ fn main() {
             run_elf(build_arith(), arguments[2]);
         } else if (arguments[1] == "elf-divzero") {
             run_elf(build_divzero(), arguments[2]);
+        } else if (arguments[1] == "elf-oom") {
+            run_elf(build_oom(), arguments[2]);
         } else if (arguments[1] == "lower") {
             lower_mode(arguments[2], "");
         } else if (arguments[1] == "float") {

@@ -1,0 +1,399 @@
+// runtime.ktn - the native backend's runtime shells.
+//
+// These are the Phase 10.6 runtime foundations, the first part of proposal
+// Section 6.2's runtime written in Kitten, exposed as scene functions the
+// lowering registers into every lowered program and that the probe's
+// hand-built scenes can reach through the same builders. Nothing here is
+// user-callable: every function name starts with "$", which no user
+// identifier can collide with.
+//
+// The allocator is a bump allocator over one anonymous mmap (proposal
+// Section 7.1's approved first GC reuses the same header ABI on heap
+// blocks): `$heap` is scene data whose payload holds the 64-bit cursor and
+// limit, `$map` maps the region once, and `$alloc` reads the cursor with
+// GetStatic, rounds the request to eight, advances it past the 8-byte object
+// header, writes the cursor back with SetStatic, and returns the object's
+// address. A negative size, a wrapped cursor, or a cursor past the limit all
+// reach a FailOOM instruction, which the selector lowers onto one shared
+// paragraph that writes the C runtime's exact `purr: out of memory` text and
+// exits with status 1. The heap stays a flat region in this slice; the
+// mark-sweep collector replaces the stepper in a later rung.
+//
+// The print helpers mirror the C runtime's print family byte for byte:
+// `$print` writes a string object's payload plus the newline blob's payload;
+// `$write1` writes one byte and `$print_newline` writes the newline blob
+// alone; `$print_int` renders decimal text digit by digit — `$digits`
+// recurses so the most significant digit prints first over a negative
+// magnitude, which makes INT64_MIN print exactly as `%lld` does — and
+// `$print_bool` writes "true" or "false". Every helper sits below the
+// selector's fourteen-local frame layout, so every routine is small.
+
+import "ir.ktn";
+
+// Heap geometry: `$heap`'s payload holds two 8-byte words, the cursor and the
+// limit. The object ABI puts a blob's payload 24 bytes into the blob, so
+// GetStatic and SetStatic address the words at these raw offsets.
+public fn heap_cursor_offset() -> int {
+    return 24;
+}
+
+public fn heap_limit_offset() -> int {
+    return 32;
+}
+
+// heap_size is the one mmap request: 256 MiB, the proposal Section 7.1's
+// first-shippable heap target. The kernel maps pages lazily, so an unused
+// program pays only the virtual reservation.
+public fn heap_size() -> int {
+    return 268435456;
+}
+
+// ones_bytes builds the all-ones payload a scene blob holds before its
+// first write. The uncommented facts it carries: `bytes_to_string` rejects
+// NUL bytes, and the allocator reads the cursor's unwritten state as the
+// all-ones pattern, the negative value -1, so "unmapped" and "never
+// allocated" are one test the integer comparison `cursor < 0` answers.
+fn ones_bytes(int count) -> string {
+    byte[] data = new byte[count];
+    int index = 0;
+    while (index < count) {
+        data[index] = byte_from_int(255);
+        index++;
+    }
+    return bytes_to_string(data);
+}
+
+// AllocShell carries the allocator's scene indices: `$heap`'s blob index and
+// the `$map` and `$alloc` function indexes.
+public struct AllocShell {
+    int alloc;
+    int map_shell;
+    int heap_blob;
+}
+
+// one_ref_parameter returns a shape list holding exactly one reference.
+fn one_ref_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Ref;
+    return shapes;
+}
+
+// one_int_parameter returns a shape list holding exactly one int.
+fn one_int_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Int;
+    return shapes;
+}
+
+// one_bool_parameter returns a shape list holding exactly one bool.
+fn one_bool_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Bool;
+    return shapes;
+}
+
+// add_allocator registers the allocator into a scene: the `$heap` blob, then
+// the `$map` and `$alloc` shells with their bodies, in that order. It returns
+// every index the lowering and the probe need.
+public fn add_allocator(NativeScene scene) -> AllocShell {
+    AllocShell shell = AllocShell { alloc = 0, map_shell = 0, heap_blob = 0 };
+
+    int heap_blob = add_blob(scene, ones_bytes(16));
+    int map_shell = add_function(scene, "$map", NativeType.Void, new NativeType[0], 0);
+    NativeFunction map_function = function_at(scene, map_shell);
+
+    // $map maps the heap region once and parks cursor and limit in $heap.
+    //   cursor = mapping; limit = mapping + heap_size
+    int zero = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = zero, value = 0 });
+    int number = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = number, value = 9 });
+    int address = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = address, value = 0 });
+    int size = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = size, value = heap_size() });
+    int protection = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = protection, value = 3 });
+    int flags = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = flags, value = 34 });
+    int mapping = new_temporary(map_function, NativeType.Int);
+    int[] map_arguments = new int[4];
+    map_arguments[0] = address;
+    map_arguments[1] = size;
+    map_arguments[2] = protection;
+    map_arguments[3] = flags;
+    push_instruction(map_function, Instruction.RawSyscall { target = mapping, number = number, arguments = map_arguments, argument_count = 4 });
+    int failed = new_temporary(map_function, NativeType.Bool);
+    push_instruction(map_function, Instruction.LessThan { target = failed, left = mapping, right = zero });
+    push_instruction(map_function, Instruction.Branch { condition = failed, label_true = 0, label_false = 1 });
+    push_instruction(map_function, Instruction.Label { label = 0 });
+    push_instruction(map_function, Instruction.FailOOM);
+    push_instruction(map_function, Instruction.Label { label = 1 });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = mapping });
+    int limit = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.Add { target = limit, left = mapping, right = size });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_limit_offset(), value = limit });
+    push_instruction(map_function, Instruction.ReturnVoid);
+
+    // $alloc rounds the request to eight, walks the cursor back past the
+    // object header the caller writes, and answers with the object address.
+    // A negative size, a wrapper past the limit, and a wrapped cursor all
+    // reach the same FailOOM.
+    int alloc = add_function(scene, "$alloc", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction alloc_function = function_at(scene, alloc);
+
+    int alloc_zero = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.ConstInt { target = alloc_zero, value = 0 });
+    int cursor = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
+    int flag = new_temporary(alloc_function, NativeType.Bool);
+    // The all-ones initial bytes read as the negative -1, so "unmapped" is
+    // plain "the cursor is negative".
+    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = cursor, right = alloc_zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 0, label_false = 1 });
+    push_instruction(alloc_function, Instruction.Label { label = 0 });
+    int[] no_arguments = new int[0];
+    push_instruction(alloc_function, Instruction.CallVoid { function = map_shell, arguments = no_arguments, argument_count = 0 });
+    push_instruction(alloc_function, Instruction.Label { label = 1 });
+    push_instruction(alloc_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
+    int alloc_limit = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.GetStatic { target = limit, blob = heap_blob, offset = heap_limit_offset() });
+    int seven = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.ConstInt { target = seven, value = 7 });
+    int eight = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.ConstInt { target = eight, value = 8 });
+    int padded = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.Add { target = padded, left = 0, right = seven });
+    int rounded = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.WholeDivide { target = rounded, left = padded, right = eight });
+    push_instruction(alloc_function, Instruction.Multiply { target = rounded, left = rounded, right = eight });
+    int advanced = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.Add { target = advanced, left = cursor, right = rounded });
+    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = 0, right = alloc_zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 2, label_false = 3 });
+    push_instruction(alloc_function, Instruction.Label { label = 3 });
+    int beyond = new_temporary(alloc_function, NativeType.Bool);
+    push_instruction(alloc_function, Instruction.LessThan { target = beyond, left = alloc_limit, right = advanced });
+    push_instruction(alloc_function, Instruction.Branch { condition = beyond, label_true = 2, label_false = 4 });
+    push_instruction(alloc_function, Instruction.Label { label = 4 });
+    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = advanced, right = alloc_zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 2, label_false = 5 });
+    push_instruction(alloc_function, Instruction.Label { label = 2 });
+    push_instruction(alloc_function, Instruction.FailOOM);
+    push_instruction(alloc_function, Instruction.Label { label = 5 });
+    push_instruction(alloc_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = advanced });
+    push_instruction(alloc_function, Instruction.Return { value = cursor });
+
+    shell.alloc = alloc;
+    shell.map_shell = map_shell;
+    shell.heap_blob = heap_blob;
+    return shell;
+}
+
+// add_string_print registers the "$print" routine: one reference parameter,
+// the object's length at raw offset 8 and payload pointer at raw offset 16,
+// one write syscall, then the newline blob's own byte through a second one.
+public fn add_string_print(NativeScene scene, int newline_blob) -> int {
+    int print = add_function(scene, "$print", NativeType.Void, one_ref_parameter(), 1);
+    NativeFunction print_function = function_at(scene, print);
+
+    int length = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawLoad64 { target = length, address = 0, offset = 8 });
+    int data = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = data, address = 0, offset = 16 });
+    int number = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = number, value = 1 });
+    int[] arguments = new int[3];
+    arguments[0] = number;
+    arguments[1] = data;
+    arguments[2] = length;
+    int written = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = written, number = number, arguments = arguments, argument_count = 3 });
+
+    int tail = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.ConstRefData { target = tail, blob = newline_blob });
+    int tail_data = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = tail_data, address = tail, offset = 16 });
+    int tail_number = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = tail_number, value = 1 });
+    int[] tail_arguments = new int[3];
+    tail_arguments[0] = tail_number;
+    tail_arguments[1] = tail_data;
+    tail_arguments[2] = tail_number;
+    int tail_written = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = tail_written, number = tail_number, arguments = tail_arguments, argument_count = 3 });
+    push_instruction(print_function, Instruction.ReturnVoid);
+    return print;
+}
+
+// add_write_one registers "$write1": one reference parameter whose object's
+// payload holds exactly one byte, written to standard output with one
+// syscall. The digit scratch, the minus sign, and the zero digit all share
+// the routine.
+public fn add_write_one(NativeScene scene) -> int {
+    int writer = add_function(scene, "$write1", NativeType.Void, one_ref_parameter(), 1);
+    NativeFunction writer_function = function_at(scene, writer);
+
+    int one = new_temporary(writer_function, NativeType.Int);
+    push_instruction(writer_function, Instruction.ConstInt { target = one, value = 1 });
+    int data = new_temporary(writer_function, NativeType.Ref);
+    push_instruction(writer_function, Instruction.RawLoad64 { target = data, address = 0, offset = 16 });
+    int[] arguments = new int[3];
+    arguments[0] = one;
+    arguments[1] = data;
+    arguments[2] = one;
+    int written = new_temporary(writer_function, NativeType.Int);
+    push_instruction(writer_function, Instruction.RawSyscall { target = written, number = one, arguments = arguments, argument_count = 3 });
+    push_instruction(writer_function, Instruction.ReturnVoid);
+    return writer;
+}
+
+// add_print_newline registers "$print_newline": the newline blob's byte and
+// nothing else, the tail every "$print_int" run shares.
+public fn add_print_newline(NativeScene scene, int newline_blob) -> int {
+    int tail = add_function(scene, "$print_newline", NativeType.Void, new NativeType[0], 0);
+    NativeFunction tail_function = function_at(scene, tail);
+
+    int reference = new_temporary(tail_function, NativeType.Ref);
+    push_instruction(tail_function, Instruction.ConstRefData { target = reference, blob = newline_blob });
+    int data = new_temporary(tail_function, NativeType.Ref);
+    push_instruction(tail_function, Instruction.RawLoad64 { target = data, address = reference, offset = 16 });
+    int one = new_temporary(tail_function, NativeType.Int);
+    push_instruction(tail_function, Instruction.ConstInt { target = one, value = 1 });
+    int[] arguments = new int[3];
+    arguments[0] = one;
+    arguments[1] = data;
+    arguments[2] = one;
+    int written = new_temporary(tail_function, NativeType.Int);
+    push_instruction(tail_function, Instruction.RawSyscall { target = written, number = one, arguments = arguments, argument_count = 3 });
+    push_instruction(tail_function, Instruction.ReturnVoid);
+    return tail;
+}
+
+// IntPrintShell carries the integer print helpers' index set: the
+// `$print_int` and `$digits` function indexes, and the blobs the helpers
+// share. The writer and tail inside the scene take no external wiring.
+public struct IntPrintShell {
+    int print_int;
+    int digits;
+    int dash_blob;
+    int zero_blob;
+    int scratch_blob;
+}
+
+// add_int_print registers the integer print helpers into a scene: the
+// minus-digit, zero-digit, and scratch blobs first, then "$write1",
+// "$print_newline", the recursive "$digits", and "$print_int". `$digits`
+// works on a negative magnitude — the zero case never reaches it — so the
+// truncated quotient and the negated remainder always produce the digit and
+// INT64_MIN digitizes without a case of its own.
+public fn add_int_print(NativeScene scene, int newline_blob) -> IntPrintShell {
+    IntPrintShell shell = IntPrintShell { print_int = 0, digits = 0, dash_blob = 0, zero_blob = 0, scratch_blob = 0 };
+
+    int dash_blob = add_blob(scene, "-");
+    int zero_blob = add_blob(scene, "0");
+    int scratch_blob = add_blob(scene, "0");
+    int writer = add_write_one(scene);
+    int tail = add_print_newline(scene, newline_blob);
+
+    int digits = add_function(scene, "$digits", NativeType.Void, one_int_parameter(), 1);
+    NativeFunction digits_function = function_at(scene, digits);
+    int ten = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.ConstInt { target = ten, value = 10 });
+    int remainder = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.WholeRemainder { target = remainder, left = 0, right = ten });
+    int stepped = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.WholeDivide { target = stepped, left = 0, right = ten });
+    int zero = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.ConstInt { target = zero, value = 0 });
+    int more = new_temporary(digits_function, NativeType.Bool);
+    push_instruction(digits_function, Instruction.Equal { target = more, left = stepped, right = zero });
+    push_instruction(digits_function, Instruction.Branch { condition = more, label_true = 1, label_false = 0 });
+    push_instruction(digits_function, Instruction.Label { label = 0 });
+    int[] again = new int[1];
+    again[0] = stepped;
+    push_instruction(digits_function, Instruction.CallVoid { function = digits, arguments = again, argument_count = 1 });
+    push_instruction(digits_function, Instruction.Label { label = 1 });
+    int digit = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.Negate { target = digit, value = remainder });
+    int base = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.ConstInt { target = base, value = 48 });
+    int code = new_temporary(digits_function, NativeType.Int);
+    push_instruction(digits_function, Instruction.Add { target = code, left = digit, right = base });
+    push_instruction(digits_function, Instruction.SetStatic { blob = scratch_blob, offset = 24, value = code });
+    int reference = new_temporary(digits_function, NativeType.Ref);
+    push_instruction(digits_function, Instruction.ConstRefData { target = reference, blob = scratch_blob });
+    int[] single = new int[1];
+    single[0] = reference;
+    push_instruction(digits_function, Instruction.CallVoid { function = writer, arguments = single, argument_count = 1 });
+    push_instruction(digits_function, Instruction.ReturnVoid);
+
+    int print_int = add_function(scene, "$print_int", NativeType.Void, one_int_parameter(), 1);
+    NativeFunction print_int_function = function_at(scene, print_int);
+    int zero0 = new_temporary(print_int_function, NativeType.Int);
+    push_instruction(print_int_function, Instruction.ConstInt { target = zero0, value = 0 });
+    int is_zero = new_temporary(print_int_function, NativeType.Bool);
+    push_instruction(print_int_function, Instruction.Equal { target = is_zero, left = 0, right = zero0 });
+    push_instruction(print_int_function, Instruction.Branch { condition = is_zero, label_true = 0, label_false = 1 });
+    push_instruction(print_int_function, Instruction.Label { label = 1 });
+    int is_negative = new_temporary(print_int_function, NativeType.Bool);
+    push_instruction(print_int_function, Instruction.LessThan { target = is_negative, left = 0, right = zero0 });
+    push_instruction(print_int_function, Instruction.Branch { condition = is_negative, label_true = 2, label_false = 3 });
+    push_instruction(print_int_function, Instruction.Label { label = 2 });
+    int dash = new_temporary(print_int_function, NativeType.Ref);
+    push_instruction(print_int_function, Instruction.ConstRefData { target = dash, blob = dash_blob });
+    int[] minus = new int[1];
+    minus[0] = dash;
+    push_instruction(print_int_function, Instruction.CallVoid { function = writer, arguments = minus, argument_count = 1 });
+    push_instruction(print_int_function, Instruction.Jump { label = 4 });
+    push_instruction(print_int_function, Instruction.Label { label = 3 });
+    push_instruction(print_int_function, Instruction.Negate { target = 0, value = 0 });
+    push_instruction(print_int_function, Instruction.Label { label = 4 });
+    int[] magnitude = new int[1];
+    magnitude[0] = 0;
+    push_instruction(print_int_function, Instruction.CallVoid { function = digits, arguments = magnitude, argument_count = 1 });
+    push_instruction(print_int_function, Instruction.Jump { label = 5 });
+    push_instruction(print_int_function, Instruction.Label { label = 0 });
+    int zero_digit = new_temporary(print_int_function, NativeType.Ref);
+    push_instruction(print_int_function, Instruction.ConstRefData { target = zero_digit, blob = zero_blob });
+    int[] zero_call = new int[1];
+    zero_call[0] = zero_digit;
+    push_instruction(print_int_function, Instruction.CallVoid { function = writer, arguments = zero_call, argument_count = 1 });
+    push_instruction(print_int_function, Instruction.Label { label = 5 });
+    int[] no_arguments = new int[0];
+    push_instruction(print_int_function, Instruction.CallVoid { function = tail, arguments = no_arguments, argument_count = 0 });
+    push_instruction(print_int_function, Instruction.ReturnVoid);
+
+    shell.print_int = print_int;
+    shell.digits = digits;
+    shell.dash_blob = dash_blob;
+    shell.zero_blob = zero_blob;
+    shell.scratch_blob = scratch_blob;
+    return shell;
+}
+
+// add_bool_print registers "$print_bool": one bool parameter written as
+// "true" or "false" plus newline, through the shared "$print" routine. The
+// bool reads as one byte, so the branch's condition is the parameter itself.
+public fn add_bool_print(NativeScene scene, int string_print) -> int {
+    int true_blob = add_blob(scene, "true");
+    int false_blob = add_blob(scene, "false");
+    int shell = add_function(scene, "$print_bool", NativeType.Void, one_bool_parameter(), 1);
+    NativeFunction bool_function = function_at(scene, shell);
+
+    push_instruction(bool_function, Instruction.Branch { condition = 0, label_true = 0, label_false = 1 });
+    push_instruction(bool_function, Instruction.Label { label = 0 });
+    int reference = new_temporary(bool_function, NativeType.Ref);
+    push_instruction(bool_function, Instruction.ConstRefData { target = reference, blob = true_blob });
+    int[] true_arguments = new int[1];
+    true_arguments[0] = reference;
+    push_instruction(bool_function, Instruction.CallVoid { function = string_print, arguments = true_arguments, argument_count = 1 });
+    push_instruction(bool_function, Instruction.ReturnVoid);
+    push_instruction(bool_function, Instruction.Label { label = 1 });
+    push_instruction(bool_function, Instruction.ConstRefData { target = reference, blob = false_blob });
+    int[] false_arguments = new int[1];
+    false_arguments[0] = reference;
+    push_instruction(bool_function, Instruction.CallVoid { function = string_print, arguments = false_arguments, argument_count = 1 });
+    push_instruction(bool_function, Instruction.ReturnVoid);
+    return shell;
+}

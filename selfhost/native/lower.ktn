@@ -17,7 +17,12 @@
 //   - assignment =, compound += and -=, and ++ and -- in both positions;
 //   - if/else, while, and for statements, and return in both forms;
 //   - calls to other user functions of the same module;
-//   - the built-ins print, for exactly one string argument, and exit.
+//   - the built-ins print, for exactly one argument of type string, int, or
+//     bool, and exit. Since the Phase 10.6 runtime foundations, the runtime
+//     shells live in selfhost/native/runtime.ktn: the lowering registers the
+//     bump allocator with `$heap`, `$map`, and `$alloc` into every program
+//     and one print helper per argument kind, whose integer rendering goes
+//     through the shared digit writer.
 //
 // Anything outside the subset fails with one deterministic message naming
 // the unsupported construct and its position, so a caller never receives a
@@ -38,6 +43,7 @@ import "../parser/parser.ktn";
 import "../checker/model.ktn";
 import "../checker/state.ktn";
 import "ir.ktn";
+import "runtime.ktn";
 import "floats.ktn";
 
 // LowerResult is the lowering's outcome. Ok carries the whole scene, with
@@ -56,15 +62,21 @@ struct ScopeFrame {
 }
 
 // Lowering is one lowering run's state: the scene being filled, the checked
-// module's annotations, the function and literal tables, the print helper's
-// slot, and the current function's body, scopes, labels, and first failure.
+// module's annotations, the function and literal tables, the runtime shells
+// the program needs, and the current function's body, scopes, labels, and
+// first failure. The allocator's shells are registered into every run; the
+// string, integer, and bool print helpers are registered by the print-kind
+// prescan, one per argument kind the program prints, with -1 as "absent".
 struct Lowering {
     NativeScene scene;
     ModuleModel module;
     string path;
     map[string]int functions;
     map[string]int literal_pool;
-    int print_helper;
+    AllocShell allocator;
+    int string_print;
+    int int_print;
+    int bool_print;
     int print_newline;
 
     NativeFunction body;
@@ -74,6 +86,34 @@ struct Lowering {
     int scope_capacity;
     int main_index;
     string failure;
+}
+
+// PrintNeeds collects the print argument kinds one prescan found: a walk's
+// result OR-merges into the run's needs through the three booleans, which
+// the language has no bitwise form for.
+struct PrintNeeds {
+    bool string_kind;
+    bool int_kind;
+    bool bool_kind;
+}
+
+// merge_print_needs OR-folds two walks' needs.
+fn merge_print_needs(PrintNeeds left, PrintNeeds right) -> PrintNeeds {
+    return PrintNeeds {
+        string_kind = left.string_kind || right.string_kind,
+        int_kind = left.int_kind || right.int_kind,
+        bool_kind = left.bool_kind || right.bool_kind
+    };
+}
+
+// print_needs_of_kind is the one-kind needs record a print call's argument
+// type denotes.
+fn print_needs_of_kind(string kind) -> PrintNeeds {
+    return PrintNeeds {
+        string_kind = kind == "string",
+        int_kind = kind == "int",
+        bool_kind = kind == "bool"
+    };
 }
 
 // lower_decimal renders a non-negative integer in decimal for messages.
@@ -118,7 +158,10 @@ fn new_lowering(SemanticModel model) -> Lowering {
         path = module.path,
         functions = new map[string]int,
         literal_pool = new map[string]int,
-        print_helper = -1,
+        allocator = AllocShell { alloc = 0, map_shell = 0, heap_blob = 0 },
+        string_print = -1,
+        int_print = -1,
+        bool_print = -1,
         print_newline = -1,
         body = new_function("", NativeType.Void),
         label_next = 0,
@@ -880,17 +923,26 @@ fn lower_user_call(Lowering lowering, Token name, Expr[] arguments, int argument
 }
 
 // lower_print_call lowers the print built-in: exactly one argument whose
-// type is string, which the checker rejects in every other form already.
-// The call becomes a void call to the scene's print helper, whose routine
-// writes the string object's payload and the newline blob to standard
-// output.
+// type is string, int, or bool — the checker rejects everything else
+// already. The call becomes a void call to the kind's print helper: the
+// string helper writes one object's payload plus the newline blob, the
+// integer helper renders the decimal digits with one byte per write and
+// shares the newline tail, and the bool helper writes "true" or "false".
 fn lower_print_call(Lowering lowering, Expr[] arguments, int argument_count, Position open_paren) -> int {
     if (argument_count != 1) {
         fail_at(lowering, open_paren, "print is supported with exactly one argument, but the call passes " + lower_decimal(argument_count));
         return -1;
     }
-    if (expr_type(lowering, arguments[0]).kind != TypeKind.String) {
-        fail_at(lowering, open_paren, "print is supported with exactly one string argument");
+    string kind = type_name_expr_kind(expr_type(lowering, arguments[0]));
+    int helper = -1;
+    if (kind == "string") {
+        helper = lowering.string_print;
+    } else if (kind == "int") {
+        helper = lowering.int_print;
+    } else if (kind == "bool") {
+        helper = lowering.bool_print;
+    } else {
+        fail_at(lowering, open_paren, "print is supported with a string, int, or bool argument");
         return -1;
     }
     int value = lower_expression(lowering, arguments[0]);
@@ -899,8 +951,30 @@ fn lower_print_call(Lowering lowering, Expr[] arguments, int argument_count, Pos
     }
     int[] print_arguments = new int[1];
     print_arguments[0] = value;
-    push_instruction(lowering.body, Instruction.CallVoid { function = lowering.print_helper, arguments = print_arguments, argument_count = 1 });
+    push_instruction(lowering.body, Instruction.CallVoid { function = helper, arguments = print_arguments, argument_count = 1 });
     return -1;
+}
+
+// type_name_expr_kind is the renderer's shape spelling for a checked type's
+// kind, the string the prescan keys its helper registration on. The kinds
+// the checker can attach to a printable argument are exactly the three the
+// lowering implements; anything else arrives here before its unsupport
+// message.
+fn type_name_expr_kind(Type type) -> string {
+    match (type.kind) {
+        Int { return "int"; }
+        Float { return "float64"; }
+        Bool { return "bool"; }
+        String { return "string"; }
+        Byte { return "byte"; }
+        Void { return "void"; }
+        Struct { return "struct"; }
+        Array { return "array"; }
+        Enum { return "enum"; }
+        Union { return "union"; }
+        Map { return "map"; }
+        None { return "invalid"; }
+    }
 }
 
 // lower_exit_call lowers the exit built-in: the status lowers first, and
@@ -1102,118 +1176,111 @@ fn lower_if(Lowering lowering, Expr condition, Stmt then_branch, OptionalStmt el
 
 // --- Program ---------------------------------------------------------------------
 
-// body_uses_print reports whether one statement subtree contains a call
-// whose callee resolved to the print built-in. The walk reads the same
-// annotations the lowering reads, so the print helper is registered when
+// body_print_needs reports which print argument kinds one statement subtree
+// contains a call for that resolves to the print built-in. The walk reads
+// the same annotations the lowering reads, so each helper is registered when
 // and only when resolution will ask for it: a user function named print
-// shadows the built-in, so such a program never registers the helper.
-fn body_uses_print(Lowering lowering, Stmt statement) -> bool {
+// shadows the built-in, so such a program never registers a helper.
+fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
     match (statement) {
         Block(open_brace, statements, statement_count) {
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
             int index = 0;
             while (index < statement_count) {
-                if (body_uses_print(lowering, statements[index])) {
-                    return true;
-                }
+                needs = merge_print_needs(needs, body_print_needs(lowering, statements[index]));
                 index++;
             }
-            return false;
+            return needs;
         }
         VarDecl(type_ref, name, initializer) {
             match (initializer) {
                 Present(expression) {
-                    return expression_uses_print(lowering, expression);
+                    return expression_print_needs(lowering, expression);
                 }
                 Absent {
-                    return false;
+                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
                 }
             }
         }
         Expression(expression) {
-            return expression_uses_print(lowering, expression);
+            return expression_print_needs(lowering, expression);
         }
         If(at, condition, then_branch, else_branch) {
-            if (expression_uses_print(lowering, condition) || body_uses_print(lowering, then_branch)) {
-                return true;
-            }
+            PrintNeeds needs = merge_print_needs(expression_print_needs(lowering, condition), body_print_needs(lowering, then_branch));
             match (else_branch) {
                 Present(statement) {
-                    return body_uses_print(lowering, statement);
+                    return merge_print_needs(needs, body_print_needs(lowering, statement));
                 }
                 Absent {
-                    return false;
+                    return needs;
                 }
             }
         }
         While(at, condition, body) {
-            return expression_uses_print(lowering, condition) || body_uses_print(lowering, body);
+            return merge_print_needs(expression_print_needs(lowering, condition), body_print_needs(lowering, body));
         }
         For(at, initializer, condition, increment, body) {
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
             match (initializer) {
                 Present(initial_statement) {
-                    if (body_uses_print(lowering, initial_statement)) {
-                        return true;
-                    }
+                    needs = merge_print_needs(needs, body_print_needs(lowering, initial_statement));
                 }
                 Absent {
                 }
             }
             match (condition) {
                 Present(condition_expression) {
-                    if (expression_uses_print(lowering, condition_expression)) {
-                        return true;
-                    }
+                    needs = merge_print_needs(needs, expression_print_needs(lowering, condition_expression));
                 }
                 Absent {
                 }
             }
             match (increment) {
                 Present(increment_expression) {
-                    if (expression_uses_print(lowering, increment_expression)) {
-                        return true;
-                    }
+                    needs = merge_print_needs(needs, expression_print_needs(lowering, increment_expression));
                 }
                 Absent {
                 }
             }
-            return body_uses_print(lowering, body);
+            return merge_print_needs(needs, body_print_needs(lowering, body));
         }
         Return(at, value) {
             match (value) {
                 Present(expression) {
-                    return expression_uses_print(lowering, expression);
+                    return expression_print_needs(lowering, expression);
                 }
                 Absent {
-                    return false;
+                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
                 }
             }
         }
         Match(at, scrutinee, arms, arm_count) {
-            return expression_uses_print(lowering, scrutinee);
+            return expression_print_needs(lowering, scrutinee);
         }
     }
 }
 
-// expression_uses_print is the expression half of the prescan. Only a call
-// whose callee resolved to the print built-in counts; nothing else in the
-// scalar subset holds a callee.
-fn expression_uses_print(Lowering lowering, Expr expression) -> bool {
+// expression_print_needs is the expression half of the prescan. Only a call
+// whose callee resolved to the print built-in adds its argument's kind;
+// everything else walks its own arguments.
+fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
     match (expression) {
-        Integer(node_id, token) { return false; }
-        Float(node_id, token) { return false; }
-        String(node_id, token) { return false; }
-        Boolean(node_id, token, value) { return false; }
-        Identifier(node_id, token) { return false; }
+        Integer(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
+        Float(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
+        String(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
+        Boolean(node_id, token, value) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
+        Identifier(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
         Unary(node_id, operator, operand, postfix) {
-            return expression_uses_print(lowering, operand);
+            return expression_print_needs(lowering, operand);
         }
         Binary(node_id, operator, left, right) {
-            return expression_uses_print(lowering, left) || expression_uses_print(lowering, right);
+            return merge_print_needs(expression_print_needs(lowering, left), expression_print_needs(lowering, right));
         }
         Assign(node_id, operator, target, value) {
-            return expression_uses_print(lowering, target) || expression_uses_print(lowering, value);
+            return merge_print_needs(expression_print_needs(lowering, target), expression_print_needs(lowering, value));
         }
         Call(node_id, open_paren, callee, arguments, argument_count) {
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
             match (callee) {
                 Identifier(callee_id, name) {
                     ExprInfo info = expression_info(lowering.module, callee_id);
@@ -1222,7 +1289,7 @@ fn expression_uses_print(Lowering lowering, Expr expression) -> bool {
                             match (symbol.function) {
                                 Present(function) {
                                     if (function.builtin == BuiltinKind.Print) {
-                                        return true;
+                                        needs = print_needs_of_kind(type_name_expr_kind(expr_type(lowering, arguments[0])));
                                     }
                                 }
                                 Absent {
@@ -1250,44 +1317,40 @@ fn expression_uses_print(Lowering lowering, Expr expression) -> bool {
             }
             int index = 0;
             while (index < argument_count) {
-                if (expression_uses_print(lowering, arguments[index])) {
-                    return true;
-                }
+                needs = merge_print_needs(needs, expression_print_needs(lowering, arguments[index]));
                 index++;
             }
-            return false;
+            return needs;
         }
         Member(node_id, dot, receiver, member) {
-            return expression_uses_print(lowering, receiver);
+            return expression_print_needs(lowering, receiver);
         }
         StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
             int index = 0;
             while (index < field_count) {
-                if (expression_uses_print(lowering, fields[index].value)) {
-                    return true;
-                }
+                needs = merge_print_needs(needs, expression_print_needs(lowering, fields[index].value));
                 index++;
             }
-            return false;
+            return needs;
         }
         VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
             int index = 0;
             while (index < field_count) {
-                if (expression_uses_print(lowering, fields[index].value)) {
-                    return true;
-                }
+                needs = merge_print_needs(needs, expression_print_needs(lowering, fields[index].value));
                 index++;
             }
-            return false;
+            return needs;
         }
         NewArray(node_id, at, element, length) {
-            return expression_uses_print(lowering, length);
+            return expression_print_needs(lowering, length);
         }
         NewMap(node_id, at, map_type) {
-            return false;
+            return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
         }
         Index(node_id, bracket, target, index) {
-            return expression_uses_print(lowering, target) || expression_uses_print(lowering, index);
+            return merge_print_needs(expression_print_needs(lowering, target), expression_print_needs(lowering, index));
         }
     }
 }
@@ -1409,59 +1472,13 @@ fn lower_bodies(Lowering lowering) {
     }
 }
 
-// lower_print_helper fills the scene's print helper with the runtime-shaped
-// routine: it reads the string object's length and payload pointer and
-// issues two write syscalls, the string's payload and then the newline
-// blob's payload. The routine is the same paragraph the 10.2 probe's
-// hand-built scenes carry, addressed through "$print" so no user function
-// can ever collide with it.
-fn lower_print_helper(Lowering lowering) {
-    NativeFunction print_function = function_at(lowering.scene, lowering.print_helper);
-    lowering.body = print_function;
-    lowering.label_next = 0;
-    lowering.scope_count = 0;
-    push_scope(lowering);
-
-    int length_binding = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawLoad64 { target = length_binding, address = 0, offset = 0 });
-    int data_binding = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.RawLoad64 { target = data_binding, address = 0, offset = 8 });
-
-    int one = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = one, value = 1 });
-    int write = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = write, value = 1 });
-    int[] write_arguments = new int[3];
-    write_arguments[0] = one;
-    write_arguments[1] = data_binding;
-    write_arguments[2] = length_binding;
-    int first = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawSyscall { target = first, number = write, arguments = write_arguments, argument_count = 3 });
-
-    int newline_ref = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = lowering.print_newline });
-    int newline_data = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.RawLoad64 { target = newline_data, address = newline_ref, offset = 8 });
-    int one_again = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = one_again, value = 1 });
-    int count_one = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.ConstInt { target = count_one, value = 1 });
-    int[] newline_arguments = new int[3];
-    newline_arguments[0] = one_again;
-    newline_arguments[1] = newline_data;
-    newline_arguments[2] = count_one;
-    int second = new_temporary(print_function, NativeType.Int);
-    push_instruction(print_function, Instruction.RawSyscall { target = second, number = write, arguments = newline_arguments, argument_count = 3 });
-
-    push_instruction(print_function, Instruction.ReturnVoid);
-}
-
 // lower_program lowers a successfully checked model into one scene. The
-// lowering covers exactly the scalar, allocation-free subset: it registers
-// one shell per function declaration, registers the print helper when some
-// resolution needs it, lowers every body, lowers the helper, and sets the
-// entry to main. Any unsupported construct fails the whole run with one
-// deterministic message; nothing is returned partially.
+// lowering covers exactly the scalar subset: it registers one shell per
+// function declaration, registers the runtime shells — the allocator into
+// every program, and one print helper per argument kind the prescan found —
+// lowers every body, and sets the entry to main. Any unsupported construct
+// fails the whole run with one deterministic message; nothing is returned
+// partially.
 public fn lower_program(SemanticModel model) -> LowerResult {
     if (model.module_count != 1) {
         return LowerResult.Failed {
@@ -1478,16 +1495,14 @@ public fn lower_program(SemanticModel model) -> LowerResult {
         return LowerResult.Failed { message = "the program has no main function" };
     }
 
-    bool needs_print = false;
+    PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
     Program program = lowering.module.program;
     int index = 0;
     while (index < program.declaration_count) {
         Decl declaration = program.declarations[index];
         match (declaration) {
             Function(at, visibility, name, parameters, parameter_count, return_type, body) {
-                if (body_uses_print(lowering, body)) {
-                    needs_print = true;
-                }
+                needs = merge_print_needs(needs, body_print_needs(lowering, body));
             }
             Import(keyword, path) { }
             Struct(at, visibility, name, fields, field_count) { }
@@ -1496,19 +1511,25 @@ public fn lower_program(SemanticModel model) -> LowerResult {
         }
         index++;
     }
+    lowering.allocator = add_allocator(lowering.scene);
+    bool needs_print = needs.string_kind || needs.int_kind || needs.bool_kind;
     if (needs_print) {
         lowering.print_newline = add_blob(lowering.scene, "\n");
-        NativeType[] one_reference = new NativeType[1];
-        one_reference[0] = NativeType.Ref;
-        lowering.print_helper = add_function(lowering.scene, "$print", NativeType.Void, one_reference, 1);
+    }
+    if (needs.string_kind || needs.bool_kind) {
+        lowering.string_print = add_string_print(lowering.scene, lowering.print_newline);
+    }
+    if (needs.bool_kind) {
+        lowering.bool_print = add_bool_print(lowering.scene, lowering.string_print);
+    }
+    if (needs.int_kind) {
+        IntPrintShell int_shell = add_int_print(lowering.scene, lowering.print_newline);
+        lowering.int_print = int_shell.print_int;
     }
 
     lower_bodies(lowering);
     if (failed(lowering)) {
         return LowerResult.Failed { message = lowering.failure };
-    }
-    if (lowering.print_helper >= 0) {
-        lower_print_helper(lowering);
     }
 
     lowering.scene.entry = lowering.main_index;

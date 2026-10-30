@@ -30,6 +30,13 @@
 // division by zero` and status 1, and a minus-one divisor's quotient and
 // remainder take the wrap path (INT64_MIN / -1 is INT64_MIN, % -1 is 0) so
 // idiv can never trap.
+//
+// Phase 10.6 landed the runtime foundations: GetStatic and SetStatic reach
+// a data blob's payload through one RIP-relative slot each, FailOOM jumps to
+// a shared out-of-memory paragraph, and every blob — including the private
+// failure messages — is laid out on the proposal Section 5.3 header ABI
+// (SPEC Section 19.10): an eight-byte header word carrying the whole size,
+// an eight-byte length, an eight-byte payload pointer, and the payload.
 
 import "ir.ktn";
 
@@ -191,17 +198,14 @@ struct CallFixup {
     int callee;
 }
 
-// DisplacementFixup is one RIP-relative data reference to patch.
+// DisplacementFixup is one RIP-relative data reference to patch: the blob's
+// index plus the reference's raw byte offset inside that blob's whole size,
+// so GetStatic and SetStatic can reach a blob's payload while a literal's lea
+// reaches the object's start.
 struct DisplacementFixup {
     int position;
     int blob;
-}
-
-// PointerFixup is one absolute 64-bit data slot to patch with a payload
-// address.
-struct PointerFixup {
-    int position;
-    int blob;
+    int offset;
 }
 
 // LabelJump is one forward jump to a label inside the function being
@@ -216,6 +220,12 @@ struct LabelJump {
 // FailJump is one conditional jump to the division-failure paragraph, whose
 // offset is known only after every function has been emitted.
 struct FailJump {
+    int position;
+}
+
+// OOMJump is one unconditional jump to the out-of-memory paragraph, whose
+// offset is known only after every function has been emitted.
+struct OOMJump {
     int position;
 }
 
@@ -239,9 +249,6 @@ struct Lowering {
     DisplacementFixup[] displacement_fixups;
     int displacement_count;
     int displacement_capacity;
-    PointerFixup[] pointer_fixups;
-    int pointer_count;
-    int pointer_capacity;
     int[] blob_offsets;
     LabelJump[] label_jumps;
     int label_jump_count;
@@ -252,6 +259,11 @@ struct Lowering {
     int[] label_positions;
     int fail_blob_offset;
     int fail_lea_position;
+    OOMJump[] oom_jumps;
+    int oom_jump_count;
+    int oom_jump_capacity;
+    int oom_blob_offset;
+    int oom_lea_position;
     NegateFloatMask[] negate_masks;
     int negate_count;
     int negate_capacity;
@@ -270,9 +282,6 @@ fn new_lowering(NativeScene scene) -> Lowering {
         displacement_fixups = new DisplacementFixup[16],
         displacement_count = 0,
         displacement_capacity = 16,
-        pointer_fixups = new PointerFixup[16],
-        pointer_count = 0,
-        pointer_capacity = 16,
         blob_offsets = new int[scene.blob_count],
         label_jumps = new LabelJump[16],
         label_jump_count = 0,
@@ -283,6 +292,11 @@ fn new_lowering(NativeScene scene) -> Lowering {
         label_positions = new int[0],
         fail_blob_offset = 0,
         fail_lea_position = 0,
+        oom_jumps = new OOMJump[4],
+        oom_jump_count = 0,
+        oom_jump_capacity = 4,
+        oom_blob_offset = 0,
+        oom_lea_position = 0,
         negate_masks = new NegateFloatMask[4],
         negate_count = 0,
         negate_capacity = 4
@@ -313,18 +327,6 @@ fn grow_displacements(Lowering lowering) {
     lowering.displacement_capacity = capacity;
 }
 
-fn grow_pointers(Lowering lowering) {
-    int capacity = lowering.pointer_capacity * 2;
-    PointerFixup[] grown = new PointerFixup[capacity];
-    int index = 0;
-    while (index < lowering.pointer_count) {
-        grown[index] = lowering.pointer_fixups[index];
-        index++;
-    }
-    lowering.pointer_fixups = grown;
-    lowering.pointer_capacity = capacity;
-}
-
 fn grow_label_jumps(Lowering lowering) {
     int capacity = lowering.label_jump_capacity * 2;
     LabelJump[] grown = new LabelJump[capacity];
@@ -347,6 +349,18 @@ fn grow_fail_jumps(Lowering lowering) {
     }
     lowering.fail_jumps = grown;
     lowering.fail_jump_capacity = capacity;
+}
+
+fn grow_oom_jumps(Lowering lowering) {
+    int capacity = lowering.oom_jump_capacity * 2;
+    OOMJump[] grown = new OOMJump[capacity];
+    int index = 0;
+    while (index < lowering.oom_jump_count) {
+        grown[index] = lowering.oom_jumps[index];
+        index++;
+    }
+    lowering.oom_jumps = grown;
+    lowering.oom_jump_capacity = capacity;
 }
 
 fn grow_negate_masks(Lowering lowering) {
@@ -392,29 +406,19 @@ fn add_call(Lowering lowering, int callee) {
 }
 
 // add_displacement records one RIP-relative slot: the blob's index and the
-// position of its four displacement bytes, three bytes into the lea.
-fn add_displacement(Lowering lowering, int blob) {
+// raw byte offset inside the blob, plus the position of the four displacement
+// bytes. A lea needs its displacement three bytes into the opcode; GetStatic
+// and SetStatic put it at the same depth under their mov opcodes.
+fn add_displacement(Lowering lowering, int blob, int offset) {
     if (lowering.displacement_count == lowering.displacement_capacity) {
         grow_displacements(lowering);
     }
     lowering.displacement_fixups[lowering.displacement_count] = DisplacementFixup {
         position = lowering.code.count + 3,
-        blob = blob
+        blob = blob,
+        offset = offset
     };
     lowering.displacement_count++;
-}
-
-// add_pointer records one absolute 64-bit data slot; the caller appends the
-// zero-filled slot immediately after the call.
-fn add_pointer(Lowering lowering, int blob) {
-    if (lowering.pointer_count == lowering.pointer_capacity) {
-        grow_pointers(lowering);
-    }
-    lowering.pointer_fixups[lowering.pointer_count] = PointerFixup {
-        position = lowering.data.count,
-        blob = blob
-    };
-    lowering.pointer_count++;
 }
 
 // add_label_jump records one forward jump's displacement slot: position is
@@ -443,11 +447,30 @@ fn add_fail_jump(Lowering lowering) {
     lowering.fail_jump_count++;
 }
 
+// add_oom_jump records one unconditional jump's displacement slot to the
+// out-of-memory paragraph.
+fn add_oom_jump(Lowering lowering) {
+    if (lowering.oom_jump_count == lowering.oom_jump_capacity) {
+        grow_oom_jumps(lowering);
+    }
+    lowering.oom_jumps[lowering.oom_jump_count] = OOMJump {
+        position = lowering.code.count + 1
+    };
+    lowering.oom_jump_count++;
+}
+
 // fail_message is the division-failure text, byte for byte the C runtime's
 // ktn_rt_fail("integer division by zero") output: the toolchain prefix, the
 // message, and the newline.
 fn fail_message() -> string {
     return "purr: integer division by zero\n";
+}
+
+// oom_message is the allocation-failure text, byte for byte the C runtime's
+// ktn_rt_fail("out of memory") output: the toolchain prefix, the message,
+// and the newline.
+fn oom_message() -> string {
+    return "purr: out of memory\n";
 }
 
 // frame_fits checks that a function's frame fits the slice's one-byte slot
@@ -496,7 +519,7 @@ fn mov_byte_slot(Bytes list, int displacement, int value) {
 
 // lea_rax_data emits lea rax, [rip+disp] with a zero-filled slot to patch.
 fn lea_rax_data(Lowering lowering, int blob) {
-    add_displacement(lowering, blob);
+    add_displacement(lowering, blob, 0);
     push_hex(lowering.code, "48 8d 05 00 00 00 00");
 }
 
@@ -504,6 +527,28 @@ fn lea_rax_data(Lowering lowering, int blob) {
 fn call_rel32(Lowering lowering, int callee) {
     add_call(lowering, callee);
     push_hex(lowering.code, "e8 00 00 00 00");
+}
+
+// emit_object_blob lays one runtime object into the data area and returns
+// its byte offset. The shape is the object-header ABI (SPEC Section 19.10):
+// an eight-byte header word carrying the object's whole size, the eight-byte
+// payload length, an eight-byte payload pointer, and the payload rounded up
+// to eight. The pointer needs no fixup list: the offset is known the moment
+// the blob started, so the slot stores its absolute address in place.
+fn emit_object_blob(Lowering lowering, string payload) -> int {
+    int offset = lowering.data.count;
+    int size = length(payload);
+    int size_up = 24 + size;
+    int pad = (8 - size_up % 8) % 8;
+    int total = size_up + pad;
+    push_int(lowering.data, total, 8);
+    push_int(lowering.data, size, 8);
+    int pointer_slot = lowering.data.count;
+    push_zeros(lowering.data, 8);
+    push_string(lowering.data, payload);
+    push_zeros(lowering.data, pad);
+    patch64(lowering.data, pointer_slot, data_base() + offset + 24);
+    return offset;
 }
 
 // Selection is the selector's output: the patched code, the patched data,
@@ -678,25 +723,32 @@ fn lower_equal_float(Lowering lowering, NativeFunction function, int target, int
     mov_slot_rax(lowering.code, slot_disp(function, target));
 }
 
-// lower_fail_paragraph emits the program's shared divide-failure halt:
-// write(2) the fatal message, then exit_group(1). The paragraph lands after
-// every function and is reached only by the guard jumps; the message
-// reference is one RIP-relative displacement into the selector's private
-// blob appended after the scene's own blobs. The lea's displacement begins
-// eight bytes into the paragraph: five stand before the lea opcode, three
-// more before the displacement — the fail-jump pass subtracts exactly those
-// eight from fail_lea_position to recover the paragraph's start.
-fn lower_fail_paragraph(Lowering lowering) {
+// lower_halt_paragraph emits one shared failure halt — write(2) the fatal
+// message through its object protocol, then exit_group(1) — and returns the
+// lea's recorded displacement position. Every paragraph is byte-identical
+// apart from the message blob, so the callers keep only positions.
+//
+//     bf 02 00 00 00        mov edi, 2                (stderr)
+//     48 8d 05 00000000     lea rax, [rip+...]        the message object
+//     48 8b 70 10           mov rsi, [rax+16]         the payload pointer
+//     48 8b 50 08           mov rdx, [rax+8]          the payload length
+//     b8 01 00 00 00        mov eax, 1
+//     0f 05                                            write
+//     bf 01 00 00 00        mov edi, 1
+//     b8 3c 00 00 00        mov eax, 60 (exit_group)
+//     0f 05                                            syscall
+fn lower_halt_paragraph(Lowering lowering) -> int {
     push_hex(lowering.code, "bf 02 00 00 00");
-    lowering.fail_lea_position = lowering.code.count + 3;
+    int lea_position = lowering.code.count + 3;
     push_hex(lowering.code, "48 8d 05 00 00 00 00");
-    push_hex(lowering.code, "48 8b 70 08");
-    push_hex(lowering.code, "48 8b 10");
+    push_hex(lowering.code, "48 8b 70 10");
+    push_hex(lowering.code, "48 8b 50 08");
     push_hex(lowering.code, "b8 01 00 00 00");
     push_hex(lowering.code, "0f 05");
     push_hex(lowering.code, "bf 01 00 00 00");
     push_hex(lowering.code, "b8 3c 00 00 00");
     push_hex(lowering.code, "0f 05");
+    return lea_position;
 }
 
 // lower_call pushes the argument slots in reverse declaration order, emits
@@ -796,6 +848,24 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
             mov_rax_slot(lowering.code, slot_disp(function, number));
             push_hex(lowering.code, "0f 05");
             mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        GetStatic(target, blob, offset) {
+            // mov rax, [rip+disp] reads eight bytes straight from the blob,
+            // then the usual slot store.
+            add_displacement(lowering, blob, offset);
+            push_hex(lowering.code, "48 8b 05 00 00 00 00");
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        SetStatic(blob, offset, value) {
+            // mov rax, [rbp+slot], then mov [rip+disp], rax.
+            mov_rax_slot(lowering.code, slot_disp(function, value));
+            add_displacement(lowering, blob, offset);
+            push_hex(lowering.code, "48 89 05 00 00 00 00");
+        }
+        FailOOM {
+            // One unconditional jump to the shared out-of-memory paragraph.
+            add_oom_jump(lowering);
+            push_hex(lowering.code, "e9 00 00 00 00");
         }
         Return(value) {
             if (type_name(function.result) == type_name(NativeType.Float)) {
@@ -925,6 +995,9 @@ fn ends_with_return(NativeFunction function) -> bool {
         Call(n, c, a, count) { return false; }
         CallVoid(c, a, count) { return false; }
         RawLoad64(n, a, o) { return false; }
+        GetStatic(n, b, o) { return false; }
+        SetStatic(b, o, v) { return false; }
+        FailOOM { return false; }
         RawSyscall(n, m, a, count) { return false; }
         Jump(l) { return false; }
         Branch(c, t, f) { return false; }
@@ -989,39 +1062,30 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
     // The divide-failure paragraph follows the functions and is reached
     // only by the guards, so it exists only when some guard was emitted.
     if (lowering.fail_jump_count > 0) {
-        lower_fail_paragraph(lowering);
+        lowering.fail_lea_position = lower_halt_paragraph(lowering);
     }
 
-    // Data layout: one string object per blob (length, payload pointer,
-    // payload, pad to eight), eight-aligned, with the pointer slot's fixup
-    // recorded before its zero-filled placeholder is appended.
-    int layout = 0;
+    // The out-of-memory paragraph reaches every FailOOM the shells emitted.
+    if (lowering.oom_jump_count > 0) {
+        lowering.oom_lea_position = lower_halt_paragraph(lowering);
+    }
+
+    // Data layout: one object per blob, eight-aligned, on the object-header
+    // ABI (SPEC Section 19.10): an eight-byte header word carrying the
+    // whole size, the payload length, the payload pointer, and the payload.
     int blob = 0;
     while (blob < scene.blob_count) {
-        lowering.blob_offsets[blob] = layout;
-        int size = length(scene.blobs[blob].bytes);
-        push_int(lowering.data, size, 8);
-        add_pointer(lowering, blob);
-        push_zeros(lowering.data, 8);
-        push_string(lowering.data, scene.blobs[blob].bytes);
-        int pad = (8 - size % 8) % 8;
-        push_zeros(lowering.data, pad);
-        layout += 16 + size + pad;
+        lowering.blob_offsets[blob] = emit_object_blob(lowering, scene.blobs[blob].bytes);
         blob++;
     }
 
-    // The selector's private fail-message blob, laid out exactly like a
-    // scene blob but addressed through fail_blob_offset alone.
+    // The selector's private failure-message objects, laid out exactly like
+    // a scene blob and addressed through their offsets alone.
     if (lowering.fail_jump_count > 0) {
-        lowering.fail_blob_offset = lowering.data.count;
-        int size = length(fail_message());
-        push_int(lowering.data, size, 8);
-        int pointer_slot = lowering.data.count;
-        push_zeros(lowering.data, 8);
-        push_string(lowering.data, fail_message());
-        int pad = (8 - size % 8) % 8;
-        push_zeros(lowering.data, pad);
-        patch64(lowering.data, pointer_slot, data_base() + lowering.fail_blob_offset + 16);
+        lowering.fail_blob_offset = emit_object_blob(lowering, fail_message());
+    }
+    if (lowering.oom_jump_count > 0) {
+        lowering.oom_blob_offset = emit_object_blob(lowering, oom_message());
     }
 
     int call_index = 0;
@@ -1036,18 +1100,10 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
     int displacement = 0;
     while (displacement < lowering.displacement_count) {
         DisplacementFixup fixup = lowering.displacement_fixups[displacement];
-        int target = data_base() + lowering.blob_offsets[fixup.blob];
+        int target = data_base() + lowering.blob_offsets[fixup.blob] + fixup.offset;
         int site = text_base() + header_size() + fixup.position + 4;
         patch32(lowering.code, fixup.position, target - site);
         displacement++;
-    }
-
-    int pointer = 0;
-    while (pointer < lowering.pointer_count) {
-        PointerFixup fixup = lowering.pointer_fixups[pointer];
-        int payload = data_base() + lowering.blob_offsets[fixup.blob] + 16;
-        patch64(lowering.data, fixup.position, payload);
-        pointer++;
     }
 
     // The fail paragraph's RIP-relative reference and the guards'
@@ -1063,6 +1119,21 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
             int jump_site = text_base() + header_size() + fixup.position + 4;
             patch32(lowering.code, fixup.position, paragraph - jump_site);
             fail_jump++;
+        }
+    }
+
+    // The out-of-memory paragraph's own reference and jumps.
+    if (lowering.oom_jump_count > 0) {
+        int target = data_base() + lowering.oom_blob_offset;
+        int site = text_base() + header_size() + lowering.oom_lea_position + 4;
+        patch32(lowering.code, lowering.oom_lea_position, target - site);
+        int oom_jump = 0;
+        while (oom_jump < lowering.oom_jump_count) {
+            OOMJump fixup = lowering.oom_jumps[oom_jump];
+            int paragraph = text_base() + header_size() + lowering.oom_lea_position - 8;
+            int jump_site = text_base() + header_size() + fixup.position + 4;
+            patch32(lowering.code, fixup.position, paragraph - jump_site);
+            oom_jump++;
         }
     }
 

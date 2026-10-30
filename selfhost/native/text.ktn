@@ -158,6 +158,15 @@ fn render_instruction(NativeFunction function, int index) -> string {
         RawLoad64(target, address, offset) {
             return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = raw_load64 " + binding(address) + " " + decimal(offset);
         }
+        GetStatic(target, blob, offset) {
+            return "  " + binding(target) + ": int = get_static $blob" + decimal(blob) + " " + decimal(offset);
+        }
+        SetStatic(blob, offset, value) {
+            return "  set_static $blob" + decimal(blob) + " " + decimal(offset) + " " + binding(value);
+        }
+        FailOOM {
+            return "  fail_oom";
+        }
         RawSyscall(target, number, arguments, argument_count) {
             return "  " + binding(target) + ": int = raw_syscall syscall " + binding(number) + render_arguments(arguments, argument_count);
         }

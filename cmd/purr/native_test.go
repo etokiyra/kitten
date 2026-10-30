@@ -52,28 +52,24 @@ const wantHelloScene = `scene
 data $blob0: 5 bytes 104 101 108 108 111
 data $blob1: 1 bytes 10
 entry 1 @main
-fn @print (p0: ref) -> void
+fn @$print (p0: ref) -> void
   b0: ref binding
   b1: int binding
   b2: ref binding
   b3: int binding
   b4: int binding
-  b5: int binding
+  b5: ref binding
   b6: ref binding
-  b7: ref binding
+  b7: int binding
   b8: int binding
-  b9: int binding
-  b10: int binding
-  b1: int = raw_load64 b0 0
-  b2: ref = raw_load64 b0 8
+  b1: int = raw_load64 b0 8
+  b2: ref = raw_load64 b0 16
   b3: int = const 1
-  b4: int = const 1
-  b5: int = raw_syscall syscall b4 b3 b2 b1
-  b6: ref = data $blob1
-  b7: ref = raw_load64 b6 8
-  b8: int = const 1
-  b9: int = const 1
-  b10: int = raw_syscall syscall b4 b8 b7 b9
+  b4: int = raw_syscall syscall b3 b3 b2 b1
+  b5: ref = data $blob1
+  b6: ref = raw_load64 b5 16
+  b7: int = const 1
+  b8: int = raw_syscall syscall b7 b7 b6 b7
   return
 fn @main () -> void
   b0: ref binding
@@ -93,28 +89,24 @@ data $blob1: 5 bytes 108 97 114 103 101
 data $blob2: 5 bytes 115 109 97 108 108
 data $blob3: 6 bytes 110 101 103 103 101 100
 entry 2 @main
-fn @print (p0: ref) -> void
+fn @$print (p0: ref) -> void
   b0: ref binding
   b1: int binding
   b2: ref binding
   b3: int binding
   b4: int binding
-  b5: int binding
+  b5: ref binding
   b6: ref binding
-  b7: ref binding
+  b7: int binding
   b8: int binding
-  b9: int binding
-  b10: int binding
-  b1: int = raw_load64 b0 0
-  b2: ref = raw_load64 b0 8
+  b1: int = raw_load64 b0 8
+  b2: ref = raw_load64 b0 16
   b3: int = const 1
-  b4: int = const 1
-  b5: int = raw_syscall syscall b4 b3 b2 b1
-  b6: ref = data $blob0
-  b7: ref = raw_load64 b6 8
-  b8: int = const 1
-  b9: int = const 1
-  b10: int = raw_syscall syscall b4 b8 b7 b9
+  b4: int = raw_syscall syscall b3 b3 b2 b1
+  b5: ref = data $blob0
+  b6: ref = raw_load64 b5 16
+  b7: int = const 1
+  b8: int = raw_syscall syscall b7 b7 b6 b7
   return
 fn @step (p0: int) -> int
   b0: int binding
@@ -249,6 +241,9 @@ func TestNativeProbeFailures(t *testing.T) {
 		{"bad-call-shape", "error function @main: instruction 0: argument 0 binding 0 has bool, expected ref\n"},
 		{"bad-entry", "error entry 5 is out of range (the scene has 1 functions)\n"},
 		{"undefined-label", "error function @main: instruction 1: true label 1 is out of range (the function defines 1 labels)\n"},
+		{"bad-static-blob", "error function @main: instruction 0: blob 9 is out of range (the scene has 1 blobs)\n"},
+		{"bad-static-offset", "error function @main: instruction 0: offset 60 does not fit blob $blob0's 32 bytes\n"},
+		{"bad-static-value", "error function @main: instruction 0: value binding 0 has bool, expected int\n"},
 		// An unknown mode falls through to the empty scene, whose entry
 		// reference is the first failure the checker reports.
 		{"wat", "error entry 0 is out of range (the scene has 0 functions)\n"},
@@ -490,9 +485,10 @@ func goPurrReference(t *testing.T) string {
 // helper's newline blob comes first, and the helper is named "$print" so no
 // user name can collide with it.
 const wantPoolScene = `scene
-data $blob0: 1 bytes 10
-data $blob1: 4 bytes 115 97 109 101
-data $blob2: 5 bytes 111 116 104 101 114
+data $blob0: 16 bytes 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255
+data $blob1: 1 bytes 10
+data $blob2: 4 bytes 115 97 109 101
+data $blob3: 5 bytes 111 116 104 101 114
 entry 0 @main
 fn @main () -> void
   b0: ref binding
@@ -501,37 +497,99 @@ fn @main () -> void
   b3: ref binding
   b4: ref binding
   b5: ref binding
-  b1: ref = data $blob1
+  b1: ref = data $blob2
   b0: ref = copy b1
-  b3: ref = data $blob1
+  b3: ref = data $blob2
   b2: ref = copy b3
-  b5: ref = data $blob2
+  b5: ref = data $blob3
   b4: ref = copy b5
-  call @1 b0
-  call @1 b2
-  call @1 b4
+  call @3 b0
+  call @3 b2
+  call @3 b4
+fn @$map () -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: bool binding
+  b8: int binding
+  b0: int = const 0
+  b1: int = const 9
+  b2: int = const 0
+  b3: int = const 268435456
+  b4: int = const 3
+  b5: int = const 34
+  b6: int = raw_syscall syscall b1 b2 b3 b4 b5
+  b7: bool = less_than b6 b0
+  branch b7 %0 %1
+  label %0
+  fail_oom
+  label %1
+  set_static $blob0 24 b6
+  b8: int = add b6 b3
+  set_static $blob0 32 b8
+  return
+fn @$alloc (p0: int) -> int
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: bool binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: int binding
+  b8: int binding
+  b9: int binding
+  b10: bool binding
+  b1: int = const 0
+  b2: int = get_static $blob0 24
+  b3: bool = less_than b2 b1
+  branch b3 %0 %1
+  label %0
+  call @1
+  label %1
+  b2: int = get_static $blob0 24
+  b8: int = get_static $blob0 32
+  b5: int = const 7
+  b6: int = const 8
+  b7: int = add b0 b5
+  b8: int = whole_divide b7 b6
+  b8: int = multiply b8 b6
+  b9: int = add b2 b8
+  b3: bool = less_than b0 b1
+  branch b3 %2 %3
+  label %3
+  b10: bool = less_than b4 b9
+  branch b10 %2 %4
+  label %4
+  b3: bool = less_than b9 b1
+  branch b3 %2 %5
+  label %2
+  fail_oom
+  label %5
+  set_static $blob0 24 b9
+  return b2
 fn @$print (p0: ref) -> void
   b0: ref binding
   b1: int binding
   b2: ref binding
   b3: int binding
   b4: int binding
-  b5: int binding
+  b5: ref binding
   b6: ref binding
-  b7: ref binding
+  b7: int binding
   b8: int binding
-  b9: int binding
-  b10: int binding
-  b1: int = raw_load64 b0 0
-  b2: ref = raw_load64 b0 8
+  b1: int = raw_load64 b0 8
+  b2: ref = raw_load64 b0 16
   b3: int = const 1
-  b4: int = const 1
-  b5: int = raw_syscall syscall b4 b3 b2 b1
-  b6: ref = data $blob0
-  b7: ref = raw_load64 b6 8
-  b8: int = const 1
-  b9: int = const 1
-  b10: int = raw_syscall syscall b4 b8 b7 b9
+  b4: int = raw_syscall syscall b3 b3 b2 b1
+  b5: ref = data $blob1
+  b6: ref = raw_load64 b5 16
+  b7: int = const 1
+  b8: int = raw_syscall syscall b7 b7 b6 b7
   return
 
 `
@@ -540,8 +598,9 @@ fn @$print (p0: ref) -> void
 // bit patterns as `constf`, the SSE2 forms carry the `f` suffix, and the
 // branch shapes stay identical to the scalar slices.
 const wantQuartersScene = `scene
-data $blob0: 1 bytes 10
-data $blob1: 8 bytes 113 117 97 114 116 101 114 115
+data $blob0: 16 bytes 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255
+data $blob1: 1 bytes 10
+data $blob2: 8 bytes 113 117 97 114 116 101 114 115
 entry 0 @main
 fn @main () -> void
   b0: float64 binding
@@ -557,31 +616,424 @@ fn @main () -> void
   b4: bool = equalf b2 b3
   branch b4 %0 %1
   label %0
-  b5: ref = data $blob1
-  call @1 b5
+  b5: ref = data $blob2
+  call @3 b5
   label %1
+fn @$map () -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: bool binding
+  b8: int binding
+  b0: int = const 0
+  b1: int = const 9
+  b2: int = const 0
+  b3: int = const 268435456
+  b4: int = const 3
+  b5: int = const 34
+  b6: int = raw_syscall syscall b1 b2 b3 b4 b5
+  b7: bool = less_than b6 b0
+  branch b7 %0 %1
+  label %0
+  fail_oom
+  label %1
+  set_static $blob0 24 b6
+  b8: int = add b6 b3
+  set_static $blob0 32 b8
+  return
+fn @$alloc (p0: int) -> int
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: bool binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: int binding
+  b8: int binding
+  b9: int binding
+  b10: bool binding
+  b1: int = const 0
+  b2: int = get_static $blob0 24
+  b3: bool = less_than b2 b1
+  branch b3 %0 %1
+  label %0
+  call @1
+  label %1
+  b2: int = get_static $blob0 24
+  b8: int = get_static $blob0 32
+  b5: int = const 7
+  b6: int = const 8
+  b7: int = add b0 b5
+  b8: int = whole_divide b7 b6
+  b8: int = multiply b8 b6
+  b9: int = add b2 b8
+  b3: bool = less_than b0 b1
+  branch b3 %2 %3
+  label %3
+  b10: bool = less_than b4 b9
+  branch b10 %2 %4
+  label %4
+  b3: bool = less_than b9 b1
+  branch b3 %2 %5
+  label %2
+  fail_oom
+  label %5
+  set_static $blob0 24 b9
+  return b2
 fn @$print (p0: ref) -> void
   b0: ref binding
   b1: int binding
   b2: ref binding
   b3: int binding
   b4: int binding
-  b5: int binding
+  b5: ref binding
   b6: ref binding
-  b7: ref binding
+  b7: int binding
+  b8: int binding
+  b1: int = raw_load64 b0 8
+  b2: ref = raw_load64 b0 16
+  b3: int = const 1
+  b4: int = raw_syscall syscall b3 b3 b2 b1
+  b5: ref = data $blob1
+  b6: ref = raw_load64 b5 16
+  b7: int = const 1
+  b8: int = raw_syscall syscall b7 b7 b6 b7
+  return
+
+`
+
+// The Phase 10.6 integer-print render, pinned: the allocator shells land
+// after the program’s own functions, the digit scratch stores one byte at a
+// raw offset, and each print call reaches `$print_int`.
+const wantPrintIntScene = `scene
+data $blob0: 16 bytes 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255
+data $blob1: 1 bytes 10
+data $blob2: 1 bytes 45
+data $blob3: 1 bytes 48
+data $blob4: 1 bytes 48
+entry 0 @main
+fn @main () -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: int binding
+  b8: int binding
+  b0: int = const 5
+  call @6 b0
+  b1: int = const 0
+  call @6 b1
+  b2: int = const 7
+  b3: int = negate b2
+  call @6 b3
+  b5: int = const 9223372036854775807
+  b4: int = copy b5
+  b6: int = const 1
+  b7: int = add b4 b6
+  b8: int = copy b4
+  b4: int = copy b7
+  call @6 b4
+fn @$map () -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: bool binding
+  b8: int binding
+  b0: int = const 0
+  b1: int = const 9
+  b2: int = const 0
+  b3: int = const 268435456
+  b4: int = const 3
+  b5: int = const 34
+  b6: int = raw_syscall syscall b1 b2 b3 b4 b5
+  b7: bool = less_than b6 b0
+  branch b7 %0 %1
+  label %0
+  fail_oom
+  label %1
+  set_static $blob0 24 b6
+  b8: int = add b6 b3
+  set_static $blob0 32 b8
+  return
+fn @$alloc (p0: int) -> int
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: bool binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: int binding
   b8: int binding
   b9: int binding
-  b10: int binding
-  b1: int = raw_load64 b0 0
-  b2: ref = raw_load64 b0 8
+  b10: bool binding
+  b1: int = const 0
+  b2: int = get_static $blob0 24
+  b3: bool = less_than b2 b1
+  branch b3 %0 %1
+  label %0
+  call @1
+  label %1
+  b2: int = get_static $blob0 24
+  b8: int = get_static $blob0 32
+  b5: int = const 7
+  b6: int = const 8
+  b7: int = add b0 b5
+  b8: int = whole_divide b7 b6
+  b8: int = multiply b8 b6
+  b9: int = add b2 b8
+  b3: bool = less_than b0 b1
+  branch b3 %2 %3
+  label %3
+  b10: bool = less_than b4 b9
+  branch b10 %2 %4
+  label %4
+  b3: bool = less_than b9 b1
+  branch b3 %2 %5
+  label %2
+  fail_oom
+  label %5
+  set_static $blob0 24 b9
+  return b2
+fn @$write1 (p0: ref) -> void
+  b0: ref binding
+  b1: int binding
+  b2: ref binding
+  b3: int binding
+  b1: int = const 1
+  b2: ref = raw_load64 b0 16
+  b3: int = raw_syscall syscall b1 b1 b2 b1
+  return
+fn @$print_newline () -> void
+  b0: ref binding
+  b1: ref binding
+  b2: int binding
+  b3: int binding
+  b0: ref = data $blob1
+  b1: ref = raw_load64 b0 16
+  b2: int = const 1
+  b3: int = raw_syscall syscall b2 b2 b1 b2
+  return
+fn @$digits (p0: int) -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: bool binding
+  b6: int binding
+  b7: int binding
+  b8: int binding
+  b9: ref binding
+  b1: int = const 10
+  b2: int = whole_remainder b0 b1
+  b3: int = whole_divide b0 b1
+  b4: int = const 0
+  b5: bool = equal b3 b4
+  branch b5 %1 %0
+  label %0
+  call @5 b3
+  label %1
+  b6: int = negate b2
+  b7: int = const 48
+  b8: int = add b6 b7
+  set_static $blob4 24 b8
+  b9: ref = data $blob4
+  call @3 b9
+  return
+fn @$print_int (p0: int) -> void
+  b0: int binding
+  b1: int binding
+  b2: bool binding
+  b3: bool binding
+  b4: ref binding
+  b5: ref binding
+  b1: int = const 0
+  b2: bool = equal b0 b1
+  branch b2 %0 %1
+  label %1
+  b3: bool = less_than b0 b1
+  branch b3 %2 %3
+  label %2
+  b4: ref = data $blob2
+  call @3 b4
+  jump %4
+  label %3
+  b0: int = negate b0
+  label %4
+  call @5 b0
+  jump %5
+  label %0
+  b5: ref = data $blob3
+  call @3 b5
+  label %5
+  call @4
+  return
+
+`
+
+// The Phase 10.6 bool-print render, pinned: the bool helper branches on the
+// one-byte condition and reaches the shared string "$print" routine.
+const wantPrintBoolScene = `scene
+data $blob0: 16 bytes 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255
+data $blob1: 1 bytes 10
+data $blob2: 4 bytes 116 114 117 101
+data $blob3: 5 bytes 102 97 108 115 101
+entry 0 @main
+fn @main () -> void
+  b0: bool binding
+  b1: bool binding
+  b2: int binding
+  b3: int binding
+  b4: bool binding
+  b5: bool binding
+  b6: bool binding
+  b7: int binding
+  b8: int binding
+  b9: bool binding
+  b10: bool binding
+  b11: int binding
+  b12: int binding
+  b13: bool binding
+  b0: bool = const true
+  call @4 b0
+  b1: bool = const false
+  call @4 b1
+  b2: int = const 1
+  b3: int = const 2
+  b4: bool = less_than b2 b3
+  call @4 b4
+  b5: bool = const true
+  branch b5 %0 %1
+  label %1
+  b6: bool = const true
+  jump %2
+  label %0
+  b6: bool = const false
+  label %2
+  call @4 b6
+  b7: int = const 3
+  b8: int = const 3
+  b9: bool = equal b7 b8
+  branch b9 %3 %4
+  label %4
+  b10: bool = const false
+  jump %5
+  label %3
+  b11: int = const 4
+  b12: int = const 10
+  b13: bool = less_than b11 b12
+  b10: bool = copy b13
+  label %5
+  call @4 b10
+fn @$map () -> void
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: bool binding
+  b8: int binding
+  b0: int = const 0
+  b1: int = const 9
+  b2: int = const 0
+  b3: int = const 268435456
+  b4: int = const 3
+  b5: int = const 34
+  b6: int = raw_syscall syscall b1 b2 b3 b4 b5
+  b7: bool = less_than b6 b0
+  branch b7 %0 %1
+  label %0
+  fail_oom
+  label %1
+  set_static $blob0 24 b6
+  b8: int = add b6 b3
+  set_static $blob0 32 b8
+  return
+fn @$alloc (p0: int) -> int
+  b0: int binding
+  b1: int binding
+  b2: int binding
+  b3: bool binding
+  b4: int binding
+  b5: int binding
+  b6: int binding
+  b7: int binding
+  b8: int binding
+  b9: int binding
+  b10: bool binding
+  b1: int = const 0
+  b2: int = get_static $blob0 24
+  b3: bool = less_than b2 b1
+  branch b3 %0 %1
+  label %0
+  call @1
+  label %1
+  b2: int = get_static $blob0 24
+  b8: int = get_static $blob0 32
+  b5: int = const 7
+  b6: int = const 8
+  b7: int = add b0 b5
+  b8: int = whole_divide b7 b6
+  b8: int = multiply b8 b6
+  b9: int = add b2 b8
+  b3: bool = less_than b0 b1
+  branch b3 %2 %3
+  label %3
+  b10: bool = less_than b4 b9
+  branch b10 %2 %4
+  label %4
+  b3: bool = less_than b9 b1
+  branch b3 %2 %5
+  label %2
+  fail_oom
+  label %5
+  set_static $blob0 24 b9
+  return b2
+fn @$print (p0: ref) -> void
+  b0: ref binding
+  b1: int binding
+  b2: ref binding
+  b3: int binding
+  b4: int binding
+  b5: ref binding
+  b6: ref binding
+  b7: int binding
+  b8: int binding
+  b1: int = raw_load64 b0 8
+  b2: ref = raw_load64 b0 16
   b3: int = const 1
-  b4: int = const 1
-  b5: int = raw_syscall syscall b4 b3 b2 b1
-  b6: ref = data $blob0
-  b7: ref = raw_load64 b6 8
-  b8: int = const 1
-  b9: int = const 1
-  b10: int = raw_syscall syscall b4 b8 b7 b9
+  b4: int = raw_syscall syscall b3 b3 b2 b1
+  b5: ref = data $blob1
+  b6: ref = raw_load64 b5 16
+  b7: int = const 1
+  b8: int = raw_syscall syscall b7 b7 b6 b7
+  return
+fn @$print_bool (p0: bool) -> void
+  b0: bool binding
+  b1: ref binding
+  branch b0 %0 %1
+  label %0
+  b1: ref = data $blob2
+  call @3 b1
+  return
+  label %1
+  b1: ref = data $blob3
+  call @3 b1
   return
 
 `
@@ -771,6 +1223,77 @@ func TestNativeProbeLowerFloatRender(t *testing.T) {
 	}
 }
 
+// TestNativeProbeLowerIntRender pins the integer-print scene's rendering,
+// byte for byte: the allocator shells trail the program's functions, the
+// digit scratch stores one byte at a raw offset, and every print(int) call
+// reaches "$print_int".
+func TestNativeProbeLowerIntRender(t *testing.T) {
+	executable := buildNativeProbe(t)
+	source := repoPath(t, "..", "..", "tests", "native", "printint.ktn")
+	result := runExternal(t, executable, []string{"lower", source}, t.TempDir(), nil)
+	if result.status != 0 || result.stderr != "" {
+		t.Fatalf("printint render: status %d, stderr %q", result.status, result.stderr)
+	}
+	if result.stdout != wantPrintIntScene {
+		t.Fatalf("printint render differs:\n--- got ---\n%s--- want ---\n%s", result.stdout, wantPrintIntScene)
+	}
+}
+
+// TestNativeProbeLowerBoolRender pins the bool-print scene's rendering,
+// byte for byte: the bool helper branches on the one-byte condition and
+// reaches the shared string "$print" routine.
+func TestNativeProbeLowerBoolRender(t *testing.T) {
+	executable := buildNativeProbe(t)
+	source := repoPath(t, "..", "..", "tests", "native", "printbool.ktn")
+	result := runExternal(t, executable, []string{"lower", source}, t.TempDir(), nil)
+	if result.status != 0 || result.stderr != "" {
+		t.Fatalf("printbool render: status %d, stderr %q", result.status, result.stderr)
+	}
+	if result.stdout != wantPrintBoolScene {
+		t.Fatalf("printbool render differs:\n--- got ---\n%s--- want ---\n%s", result.stdout, wantPrintBoolScene)
+	}
+}
+
+// TestNativeProbeOOM writes the allocation-failure executable with no C
+// compiler, runs it with an empty PATH, and demands the C runtime's exact
+// ktn_rt_fail spelling for the out-of-memory text: standard error only,
+// status 1. A repeated production is byte-identical.
+func TestNativeProbeOOM(t *testing.T) {
+	requireToolchain(t)
+	executable := buildNativeProbe(t)
+	directory := t.TempDir()
+
+	native := filepath.Join(directory, "oom-native")
+	written := runExternal(t, executable, []string{"elf-oom", native}, directory, nil)
+	if written.status != 0 || written.stderr != "" || written.stdout != "built "+native+"\n" {
+		t.Fatalf("oom write: status %d, stdout %q, stderr %q", written.status, written.stdout, written.stderr)
+	}
+	if err := os.Chmod(native, 0o755); err != nil {
+		t.Fatalf("chmod native: %v", err)
+	}
+
+	run := runExternal(t, native, nil, directory, []string{"PATH=/nonexistent"})
+	if run.status != 1 || run.stderr != "purr: out of memory\n" || run.stdout != "" {
+		t.Fatalf("native oom run: status %d, stdout %q, stderr %q", run.status, run.stdout, run.stderr)
+	}
+
+	again := filepath.Join(directory, "oom-native-again")
+	if written := runExternal(t, executable, []string{"elf-oom", again}, directory, nil); written.status != 0 {
+		t.Fatalf("second write status %d", written.status)
+	}
+	first, err := os.ReadFile(native)
+	if err != nil {
+		t.Fatalf("reading the first ELF: %v", err)
+	}
+	secondFile, err := os.ReadFile(again)
+	if err != nil {
+		t.Fatalf("reading the second ELF: %v", err)
+	}
+	if string(first) != string(secondFile) {
+		t.Fatalf("two oom productions differ in %d bytes", len(first))
+	}
+}
+
 // lowerFailureCase is one unsupported-construct source with its expected
 // message tail. A positionless case omits the position; the loader's
 // read-failure spelling (path with no position) is the pathOnly kind.
@@ -791,7 +1314,7 @@ func lowerFailureCases(badDirectory string) []lowerFailureCase {
 		{file: "enum.ktn", line: "1", col: "1", message: "enum declarations are not supported yet"},
 		{file: "eprint.ktn", line: "2", col: "5", message: `built-in "eprint" is not supported yet`},
 		{file: "float.ktn", line: "2", col: "21", message: "float literals with more than 17 significant digits are not supported yet"},
-		{file: "printfloat.ktn", line: "2", col: "10", message: "print is supported with exactly one string argument"},
+		{file: "printfloat.ktn", line: "2", col: "10", message: "print is supported with a string, int, or bool argument"},
 		{file: "imported.ktn", kind: "pathless", message: "the program has no main function"},
 		{file: "import.ktn", kind: "pathless", message: "the native lowering supports a single-module program, but the program has 2 modules"},
 		{file: "index.ktn", line: "2", col: "10", message: "indexing is not supported yet"},
@@ -800,7 +1323,6 @@ func lowerFailureCases(badDirectory string) []lowerFailureCase {
 		{file: "map.ktn", line: "2", col: "5", message: "map values are not supported yet"},
 		{file: "missing.ktn", kind: "readerror", message: "cannot read source file: open " + filepath.Join(badDirectory, "not_here.ktn") + ": no such file or directory"},
 		{file: "parse.ktn", line: "2", col: "17", message: `expected an expression, found Semicolon ";"`},
-		{file: "printint.ktn", line: "2", col: "10", message: "print is supported with exactly one string argument"},
 		{file: "printmany.ktn", line: "2", col: "10", message: "print is supported with exactly one argument, but the call passes 2"},
 		{file: "streq.ktn", line: "2", col: "23", message: "string equality is not supported yet"},
 		{file: "struct.ktn", line: "1", col: "1", message: "struct declarations are not supported yet"},
@@ -911,6 +1433,9 @@ func TestNativeProbeKittenPipeline(t *testing.T) {
 		{"bad-entry", "error entry 5 is out of range (the scene has 1 functions)\n"},
 		{"undefined-label", "error function @main: instruction 1: true label 1 is out of range (the function defines 1 labels)\n"},
 		{"wat", "error entry 0 is out of range (the scene has 0 functions)\n"},
+		{"bad-static-blob", "error function @main: instruction 0: blob 9 is out of range (the scene has 1 blobs)\n"},
+		{"bad-static-offset", "error function @main: instruction 0: offset 60 does not fit blob $blob0's 32 bytes\n"},
+		{"bad-static-value", "error function @main: instruction 0: value binding 0 has bool, expected int\n"},
 	}
 	for _, testCase := range cases {
 		arguments := []string{}
@@ -959,6 +1484,7 @@ func TestNativeProbeKittenPipelineSkeleton(t *testing.T) {
 		{"elf", "hello"},
 		{"elf-arith", "arith"},
 		{"elf-divzero", "divzero"},
+		{"elf-oom", "oom"},
 	}
 	for _, kind := range sceneKinds {
 		goNative := filepath.Join(directory, kind.name+"-go")

@@ -1,0 +1,7 @@
+fn main() {
+    string label = "mix";
+    print(label);
+    print(6 * 7);
+    print(80 - 20);
+    print(true && 1 < 2);
+}

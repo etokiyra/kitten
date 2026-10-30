@@ -68,6 +68,18 @@ public fn type_alignment(NativeType value) -> int {
     }
 }
 
+// blob_total is a blob's whole mapped byte size under the object-header ABI
+// the proposal's Section 5.3 fixes and SPEC Section 19.10 records: every data
+// blob is one runtime object with an 8-byte header, an 8-byte length, an
+// 8-byte payload pointer, and the payload, all rounded up to eight. The
+// header word holds this whole size, so GetStatic and SetStatic bound their
+// offsets against it and the selector fills it while laying out the file.
+public fn blob_total(NativeScene scene, int blob) -> int {
+    int size = 24 + length(scene.blobs[blob].bytes);
+    int pad = (8 - size % 8) % 8;
+    return size + pad;
+}
+
 // Instruction is one three-address instruction.
 //
 // Binding indices point into the enclosing function's binding table. Label
@@ -86,6 +98,14 @@ public fn type_alignment(NativeType value) -> int {
 // not police who may use them; the checker-level runtime-module gate remains
 // the user-facing boundary, and no selector lowers a user program through
 // raw instructions.
+//
+// The Phase 10.6 runtime-foundation forms complete the runtime layer:
+// GetStatic reads one 8-byte slot from a data blob's payload at a raw,
+// scene-relative byte offset and SetStatic writes one, which is how the
+// lowering's allocator keeps its heap cursor in mutable scene data — the
+// language has no globals, so the cursor is backend-owned static memory —
+// and FailOOM jumps to the selector's out-of-memory paragraph, whose halt is
+// the C runtime's `purr: out of memory` text at status 1.
 public union Instruction {
     ConstInt { int target; int value; }
     ConstBool { int target; bool value; }
@@ -111,6 +131,9 @@ public union Instruction {
     Call { int target; int function; int[] arguments; int argument_count; }
     CallVoid { int function; int[] arguments; int argument_count; }
     RawLoad64 { int target; int address; int offset; }
+    GetStatic { int target; int blob; int offset; }
+    SetStatic { int blob; int offset; int value; }
+    FailOOM { }
     RawSyscall { int target; int number; int[] arguments; int argument_count; }
     Jump { int label; }
     Branch { int condition; int label_true; int label_false; }
@@ -290,6 +313,9 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         CallVoid(c, a, count) {}
         RawLoad64(n, a, o) {}
         RawSyscall(n, m, a, count) {}
+        GetStatic(n, b, o) {}
+        SetStatic(b, o, v) {}
+        FailOOM {}
         Jump(l) {}
         Branch(c, t, f) {}
         Return(v) {}
@@ -332,6 +358,9 @@ fn snapshot_arguments(Instruction instruction) -> Instruction {
         GreaterFloat(n, l, r) { return instruction; }
         LessOrEqualFloat(n, l, r) { return instruction; }
         RawLoad64(n, a, o) { return instruction; }
+        GetStatic(n, b, o) { return instruction; }
+        SetStatic(b, o, v) { return instruction; }
+        FailOOM { return instruction; }
         Jump(l) { return instruction; }
         Branch(c, t, f) { return instruction; }
         Label(l) { return instruction; }
@@ -636,6 +665,21 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
                 failure = position + "offset " + decimal(offset) + " is outside the selector's constant-offset range 0..255";
             }
         }
+        GetStatic(target, blob, offset) {
+            failure = check_static_slot(scene, blob, offset, position);
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+        }
+        SetStatic(blob, offset, value) {
+            failure = check_static_slot(scene, blob, offset, position);
+            if (length(failure) == 0) {
+                failure = require_binding(function, value, NativeType.Int, position + "value");
+            }
+        }
+        FailOOM {
+            failure = "";
+        }
         RawSyscall(target, number, arguments, argument_count) {
             failure = require_binding(function, number, NativeType.Int, position + "number");
             if (length(failure) == 0) {
@@ -773,6 +817,21 @@ fn check_call(NativeScene scene, NativeFunction caller, int callee, int[] argume
     return "";
 }
 
+// check_static_slot is the GetStatic/SetStatic gate: the blob index and the
+// raw offset must name eight bytes inside the blob's whole mapped size, which
+// blob_total fixes and the selector's layout fills. SetStatic checks its
+// value shape through require_binding after the slot itself checks.
+fn check_static_slot(NativeScene scene, int blob, int offset, string position) -> string {
+    if (blob < 0 || blob >= scene.blob_count) {
+        return position + "blob " + decimal(blob) + " is out of range (the scene has " + decimal(scene.blob_count) + " blobs)";
+    }
+    int total = blob_total(scene, blob);
+    if (offset < 0 || offset + 8 > total) {
+        return position + "offset " + decimal(offset) + " does not fit blob $blob" + decimal(blob) + "'s " + decimal(total) + " bytes";
+    }
+    return "";
+}
+
 // label_defined reports whether a Label instruction defines the label.
 fn label_defined(NativeFunction function, int label) -> bool {
     int index = 0;
@@ -808,6 +867,9 @@ fn label_defined(NativeFunction function, int label) -> bool {
             CallVoid(c, a, count) {}
             RawLoad64(n, a, o) {}
             RawSyscall(n, m, a, count) {}
+            GetStatic(n, b, o) {}
+            SetStatic(b, o, v) {}
+            FailOOM {}
             Jump(l) {}
             Branch(c, t, f) {}
             Return(v) {}
