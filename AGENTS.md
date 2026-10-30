@@ -533,11 +533,15 @@ end. The scene grew `RawStore64`, `RawLoad8`, `RawStore8`, and
 `StackPointer`, and the string runtime — concat (`+`, `+=`), content
 equality (`==`, `!=`), and the `length` built-in — is the first
 user-reachable `$alloc` client. The probe gained `elf-gc`: six hundred
-one-megabyte allocations through the collector, exit 0. `%g` float
-printing and the composite subset (arrays, maps, structs, unions, field
-access, bounds checks, tag switches) plus stack-alignment refinement,
-register allocation, and multi-module lowering remain staged for later
-slices.
+one-megabyte allocations through the collector, exit 0. Phase 10.8 then
+landed exact `%g` float printing in the native backend: a FloatBits scene
+form, a 16-bit-limb bigint substrate, sign/exponent/mantissa decomposition,
+a six-digit significand with round-half-even, and fixed/scientific
+formatting, so `print(float)` now byte-matches the C pipeline for the
+supported value set. The composite subset (arrays, maps, structs, unions,
+field access, bounds checks, tag switches) plus stack-alignment
+refinement, register allocation, and multi-module lowering remain staged
+for later slices.
 
 ## Roadmap
 
