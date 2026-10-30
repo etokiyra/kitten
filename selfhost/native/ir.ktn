@@ -240,11 +240,15 @@ fn grow_instructions(NativeFunction function) {
 
 // append_instruction adds one instruction in program order; the label count
 // updates at the same time so jump and label validation stays index-exact.
+// Call instructions carry their argument arrays by reference, so the stored
+// instruction holds its own copy: a builder that reuses one argument array
+// across several calls must not have a later write reach an instruction
+// pushed before it.
 fn append_instruction(NativeFunction function, Instruction instruction) {
     if (function.instruction_count == function.instruction_capacity) {
         grow_instructions(function);
     }
-    function.instructions[function.instruction_count] = instruction;
+    function.instructions[function.instruction_count] = snapshot_arguments(instruction);
     function.instruction_count++;
     match (instruction) {
         Label(ignored) {
@@ -271,6 +275,51 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         Return(v) {}
         ReturnVoid {}
     }
+}
+
+// snapshot_arguments replaces a pushed instruction with one whose argument
+// array is its own copy, so the scene stays an immutable snapshot.
+fn snapshot_arguments(Instruction instruction) -> Instruction {
+    match (instruction) {
+        Call(target, callee, arguments, argument_count) {
+            return Instruction.Call { target = target, function = callee, arguments = copy_arguments(arguments, argument_count), argument_count = argument_count };
+        }
+        CallVoid(callee, arguments, argument_count) {
+            return Instruction.CallVoid { function = callee, arguments = copy_arguments(arguments, argument_count), argument_count = argument_count };
+        }
+        RawSyscall(target, number, arguments, argument_count) {
+            return Instruction.RawSyscall { target = target, number = number, arguments = copy_arguments(arguments, argument_count), argument_count = argument_count };
+        }
+        ConstInt(n, v) { return instruction; }
+        ConstBool(n, v) { return instruction; }
+        ConstRefData(n, b) { return instruction; }
+        Copy(n, s) { return instruction; }
+        Add(n, l, r) { return instruction; }
+        Subtract(n, l, r) { return instruction; }
+        Multiply(n, l, r) { return instruction; }
+        WholeDivide(n, l, r) { return instruction; }
+        WholeRemainder(n, l, r) { return instruction; }
+        Negate(n, v) { return instruction; }
+        Equal(n, l, r) { return instruction; }
+        LessThan(n, l, r) { return instruction; }
+        RawLoad64(n, a, o) { return instruction; }
+        Jump(l) { return instruction; }
+        Branch(c, t, f) { return instruction; }
+        Label(l) { return instruction; }
+        Return(v) { return instruction; }
+        ReturnVoid { return instruction; }
+    }
+}
+
+// copy_arguments duplicates one argument array exactly.
+fn copy_arguments(int[] source, int count) -> int[] {
+    int[] copy = new int[count];
+    int index = 0;
+    while (index < count) {
+        copy[index] = source[index];
+        index++;
+    }
+    return copy;
 }
 
 // push_instruction is the public append; its name documents that callers push

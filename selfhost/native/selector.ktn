@@ -1,15 +1,19 @@
-// selector.ktn - lower the slice's scene subset to x86-64 machine code.
+// selector.ktn - lower the scene to x86-64 machine code.
 //
 // Phase 10.2's skeleton slice, from
 // proposals/zero-dependency-toolchain.md Section 9 step 1: static ELF, the
 // write and exit syscalls, and string-literal printing, with no GC and no C.
+// Phase 10.3 added the scalar arithmetic, comparisons, and control flow of
+// step 2: add, subtract, multiply, guarded divide and remainder, negate,
+// equal, less_than, jump, branch, and label, still with no allocation.
 // The selector walks a scene that passed check_scene and emits machine code
 // plus a data section into raw byte arrays, recording every address that is
 // not known until layout: call targets patch as relative displacements, data
-// references patch as RIP-relative displacements, and data-section pointer
-// slots patch as absolute 64-bit values. Byte arrays are mutable, so patches
-// write their four or eight displacement bytes in place and every earlier
-// fixup keeps its position.
+// references patch as RIP-relative displacements, data-section pointer
+// slots patch as absolute 64-bit values, and branch and jump targets patch
+// as relative displacements once their labels' offsets are known. Byte
+// arrays are mutable, so patches write their four or eight displacement
+// bytes in place and every earlier fixup keeps its position.
 //
 // The emitted calling convention is the proposal's first internal one
 // (Section 5.2): every argument is one caller-allocated 8-byte stack slot,
@@ -18,9 +22,14 @@
 // Locals live at rbp-8 and downwards inside the frame, carving sub rsp out
 // of the prologue, so the slice's one-byte displacement form bounds both
 // tables; the selector fails with a deterministic message when a frame
-// would not fit. Any instruction the slice cannot encode yet also fails
-// with a deterministic message; the full instruction set, stack-alignment
-// refinement, and register allocation are later slices.
+// would not fit. Stack-alignment refinement and register allocation remain
+// later slices.
+//
+// Division follows SPEC's defined arithmetic rules (Phase 8.1): a zero
+// divisor halts with the C runtime's exact fatal text `purr: integer
+// division by zero` and status 1, and a minus-one divisor's quotient and
+// remainder take the wrap path (INT64_MIN / -1 is INT64_MIN, % -1 is 0) so
+// idiv can never trap.
 
 import "ir.ktn";
 
@@ -195,6 +204,21 @@ struct PointerFixup {
     int blob;
 }
 
+// LabelJump is one forward jump to a label inside the function being
+// emitted: position is the first displacement byte, kind is the opcode's
+// byte length (one for e9, two for 0f 85), and the slot patches once the
+// label's offset is known.
+struct LabelJump {
+    int position;
+    int label;
+}
+
+// FailJump is one conditional jump to the division-failure paragraph, whose
+// offset is known only after every function has been emitted.
+struct FailJump {
+    int position;
+}
+
 // Lowering accumulates one select_scene run.
 struct Lowering {
     Bytes code;
@@ -210,6 +234,15 @@ struct Lowering {
     int pointer_count;
     int pointer_capacity;
     int[] blob_offsets;
+    LabelJump[] label_jumps;
+    int label_jump_count;
+    int label_jump_capacity;
+    FailJump[] fail_jumps;
+    int fail_jump_count;
+    int fail_jump_capacity;
+    int[] label_positions;
+    int fail_blob_offset;
+    int fail_lea_position;
 }
 
 // Function offsets are indexed by scene function index; the table is exactly
@@ -228,7 +261,16 @@ fn new_lowering(NativeScene scene) -> Lowering {
         pointer_fixups = new PointerFixup[16],
         pointer_count = 0,
         pointer_capacity = 16,
-        blob_offsets = new int[scene.blob_count]
+        blob_offsets = new int[scene.blob_count],
+        label_jumps = new LabelJump[16],
+        label_jump_count = 0,
+        label_jump_capacity = 16,
+        fail_jumps = new FailJump[4],
+        fail_jump_count = 0,
+        fail_jump_capacity = 4,
+        label_positions = new int[0],
+        fail_blob_offset = 0,
+        fail_lea_position = 0
     };
 }
 
@@ -266,6 +308,30 @@ fn grow_pointers(Lowering lowering) {
     }
     lowering.pointer_fixups = grown;
     lowering.pointer_capacity = capacity;
+}
+
+fn grow_label_jumps(Lowering lowering) {
+    int capacity = lowering.label_jump_capacity * 2;
+    LabelJump[] grown = new LabelJump[capacity];
+    int index = 0;
+    while (index < lowering.label_jump_count) {
+        grown[index] = lowering.label_jumps[index];
+        index++;
+    }
+    lowering.label_jumps = grown;
+    lowering.label_jump_capacity = capacity;
+}
+
+fn grow_fail_jumps(Lowering lowering) {
+    int capacity = lowering.fail_jump_capacity * 2;
+    FailJump[] grown = new FailJump[capacity];
+    int index = 0;
+    while (index < lowering.fail_jump_count) {
+        grown[index] = lowering.fail_jumps[index];
+        index++;
+    }
+    lowering.fail_jumps = grown;
+    lowering.fail_jump_capacity = capacity;
 }
 
 // add_function_offset records one function's code offset.
@@ -310,6 +376,39 @@ fn add_pointer(Lowering lowering, int blob) {
         blob = blob
     };
     lowering.pointer_count++;
+}
+
+// add_label_jump records one forward jump's displacement slot: position is
+// the first displacement byte and kind is the opcode's byte length, one for
+// a plain e9 jmp and two for a 0f 85 conditional jump.
+fn add_label_jump(Lowering lowering, int kind, int label) {
+    if (lowering.label_jump_count == lowering.label_jump_capacity) {
+        grow_label_jumps(lowering);
+    }
+    lowering.label_jumps[lowering.label_jump_count] = LabelJump {
+        position = lowering.code.count + kind,
+        label = label
+    };
+    lowering.label_jump_count++;
+}
+
+// add_fail_jump records one conditional jump's displacement slot to the
+// division-failure paragraph.
+fn add_fail_jump(Lowering lowering) {
+    if (lowering.fail_jump_count == lowering.fail_jump_capacity) {
+        grow_fail_jumps(lowering);
+    }
+    lowering.fail_jumps[lowering.fail_jump_count] = FailJump {
+        position = lowering.code.count + 2
+    };
+    lowering.fail_jump_count++;
+}
+
+// fail_message is the division-failure text, byte for byte the C runtime's
+// ktn_rt_fail("integer division by zero") output: the toolchain prefix, the
+// message, and the newline.
+fn fail_message() -> string {
+    return "purr: integer division by zero\n";
 }
 
 // frame_fits checks that a function's frame fits the slice's one-byte slot
@@ -397,6 +496,113 @@ fn frame_epilogue(Bytes list, NativeFunction function) {
     push_hex(list, "5d c3");
 }
 
+// lower_binary emits one binary integer operation: load the left slot into
+// rax, combine with the right slot, and store the full 64-bit result. The
+// ops' byte patterns ride through op_hex; reading happens strictly before
+// the store, so a target aliasing an operand stays correct.
+fn lower_binary(Lowering lowering, NativeFunction function, int target, int left, int right, string op_hex) {
+    mov_rax_slot(lowering.code, slot_disp(function, left));
+    push_hex(lowering.code, op_hex);
+    push_int(lowering.code, slot_disp(function, right), 1);
+    mov_slot_rax(lowering.code, slot_disp(function, target));
+}
+
+// lower_compare emits Equal or LessThan: load the left slot, compare against
+// the right slot, materialize the one-bit result through a setCC, zero-extend
+// it to the full 64-bit pattern, and store. The bool slot therefore always
+// holds a normalized zero or one in all eight bytes.
+fn lower_compare(Lowering lowering, NativeFunction function, int target, int left, int right, string set_hex) {
+    mov_rax_slot(lowering.code, slot_disp(function, left));
+    push_hex(lowering.code, "48 3b 45");
+    push_int(lowering.code, slot_disp(function, right), 1);
+    push_hex(lowering.code, set_hex);
+    push_hex(lowering.code, "0f b6 c0");
+    mov_slot_rax(lowering.code, slot_disp(function, target));
+}
+
+// lower_divide emits WholeDivide and WholeRemainder on SPEC's defined
+// arithmetic rules, so idiv can never trap:
+//
+//     mov rax, [rbp+left]
+//     cmp qword [rbp+right], 0       ; zero divisor
+//     je   -> the fail paragraph
+//     cmp qword [rbp+right], -1      ; divisor minus one
+//     jne  slow
+//     quotient:  neg rax             ; the wrap keeps INT64_MIN intact
+//     remainder: xor edx, edx        ; a minus-one remainder is zero
+//     jmp  done
+//   slow:
+//     cqo
+//     idiv qword [rbp+right]         ; cannot trap: 0 and MIN/-1 ruled out
+//   done:
+//     target slot <- rax (quotient) or rdx (remainder)
+fn lower_divide(Lowering lowering, NativeFunction function, int target, int left, int right, bool quotient) {
+    mov_rax_slot(lowering.code, slot_disp(function, left));
+    push_hex(lowering.code, "48 83 7d");
+    push_int(lowering.code, slot_disp(function, right), 1);
+    push_hex(lowering.code, "00");
+    add_fail_jump(lowering);
+    push_hex(lowering.code, "0f 84 00 00 00 00");
+    push_hex(lowering.code, "48 83 7d");
+    push_int(lowering.code, slot_disp(function, right), 1);
+    push_hex(lowering.code, "ff");
+    int slow_site = lowering.code.count + 2;
+    push_hex(lowering.code, "0f 85 00 00 00 00");
+    if (quotient) {
+        push_hex(lowering.code, "48 f7 d8");
+    } else {
+        push_hex(lowering.code, "31 d2");
+    }
+    int done_site = lowering.code.count + 1;
+    push_hex(lowering.code, "e9 00 00 00 00");
+    patch32(lowering.code, slow_site, lowering.code.count - slow_site - 4);
+    push_hex(lowering.code, "48 99");
+    push_hex(lowering.code, "48 f7 7d");
+    push_int(lowering.code, slot_disp(function, right), 1);
+    patch32(lowering.code, done_site, lowering.code.count - done_site - 4);
+    if (quotient) {
+        mov_slot_rax(lowering.code, slot_disp(function, target));
+    } else {
+        push_hex(lowering.code, "48 89 55");
+        push_int(lowering.code, slot_disp(function, target), 1);
+    }
+}
+
+// lower_branch emits one decision: compare the condition's byte against
+// zero, jump conditionally to the true label, and fall through a plain jump
+// to the false label. Bool slots read as one byte, so garbage upper bytes
+// in a ConstBool slot can never steer a branch.
+fn lower_branch(Lowering lowering, NativeFunction function, int condition, int label_true, int label_false) {
+    push_hex(lowering.code, "80 7d");
+    push_int(lowering.code, slot_disp(function, condition), 1);
+    push_hex(lowering.code, "00");
+    add_label_jump(lowering, 2, label_true);
+    push_hex(lowering.code, "0f 85 00 00 00 00");
+    add_label_jump(lowering, 1, label_false);
+    push_hex(lowering.code, "e9 00 00 00 00");
+}
+
+// lower_fail_paragraph emits the program's shared divide-failure halt:
+// write(2) the fatal message, then exit_group(1). The paragraph lands after
+// every function and is reached only by the guard jumps; the message
+// reference is one RIP-relative displacement into the selector's private
+// blob appended after the scene's own blobs. The lea's displacement begins
+// eight bytes into the paragraph: five stand before the lea opcode, three
+// more before the displacement — the fail-jump pass subtracts exactly those
+// eight from fail_lea_position to recover the paragraph's start.
+fn lower_fail_paragraph(Lowering lowering) {
+    push_hex(lowering.code, "bf 02 00 00 00");
+    lowering.fail_lea_position = lowering.code.count + 3;
+    push_hex(lowering.code, "48 8d 05 00 00 00 00");
+    push_hex(lowering.code, "48 8b 70 08");
+    push_hex(lowering.code, "48 8b 10");
+    push_hex(lowering.code, "b8 01 00 00 00");
+    push_hex(lowering.code, "0f 05");
+    push_hex(lowering.code, "bf 01 00 00 00");
+    push_hex(lowering.code, "b8 3c 00 00 00");
+    push_hex(lowering.code, "0f 05");
+}
+
 // lower_call pushes the argument slots in reverse declaration order, emits
 // the call, and pops the caller-allocated slots.
 fn lower_call(Lowering lowering, NativeFunction function, int callee, int[] arguments, int argument_count) {
@@ -441,80 +647,9 @@ fn lower_start(Lowering lowering, int entry) {
     push_hex(lowering.code, "0f 05");
 }
 
-// supported checks whether the skeleton slice encodes a form; unsupported
-// forms fail the selection with a deterministic message rather than
-// inventing bytes.
-fn supported(NativeFunction function, Instruction instruction, int index) -> string {
-    string prefix = "function @" + function.name + ": instruction " + decimal(index) + ": ";
-    match (instruction) {
-        ConstInt(target, value) {
-            return "";
-        }
-        ConstBool(target, value) {
-            return "";
-        }
-        ConstRefData(target, blob) {
-            return "";
-        }
-        Copy(target, source) {
-            return "";
-        }
-        Call(target, callee, arguments, argument_count) {
-            return "";
-        }
-        CallVoid(callee, arguments, argument_count) {
-            return "";
-        }
-        RawLoad64(target, address, offset) {
-            return "";
-        }
-        RawSyscall(target, number, arguments, argument_count) {
-            return "";
-        }
-        Return(value) {
-            return "";
-        }
-        ReturnVoid {
-            return "";
-        }
-        Add(target, left, right) {
-            return prefix + "add is not in the skeleton slice yet";
-        }
-        Subtract(target, left, right) {
-            return prefix + "subtract is not in the skeleton slice yet";
-        }
-        Multiply(target, left, right) {
-            return prefix + "multiply is not in the skeleton slice yet";
-        }
-        WholeDivide(target, left, right) {
-            return prefix + "whole_divide is not in the skeleton slice yet";
-        }
-        WholeRemainder(target, left, right) {
-            return prefix + "whole_remainder is not in the skeleton slice yet";
-        }
-        Negate(target, value) {
-            return prefix + "negate is not in the skeleton slice yet";
-        }
-        Equal(target, left, right) {
-            return prefix + "equal is not in the skeleton slice yet";
-        }
-        LessThan(target, left, right) {
-            return prefix + "less_than is not in the skeleton slice yet";
-        }
-        Jump(label) {
-            return prefix + "jump is not in the skeleton slice yet";
-        }
-        Branch(condition, label_true, label_false) {
-            return prefix + "branch is not in the skeleton slice yet";
-        }
-        Label(label) {
-            return prefix + "label is not in the skeleton slice yet";
-        }
-    }
-    return "";
-}
-
-// lower_instruction emits one supported instruction.
+// lower_instruction emits one instruction. Every form the scene union
+// carries is encoded; adding a later instruction kind grows this match with
+// its lowering.
 fn lower_instruction(Lowering lowering, NativeFunction function, Instruction instruction) {
     match (instruction) {
         ConstInt(target, value) {
@@ -570,26 +705,42 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
             frame_epilogue(lowering.code, function);
         }
         Add(target, left, right) {
+            lower_binary(lowering, function, target, left, right, "48 03 45");
         }
         Subtract(target, left, right) {
+            lower_binary(lowering, function, target, left, right, "48 2b 45");
         }
         Multiply(target, left, right) {
+            lower_binary(lowering, function, target, left, right, "48 0f af 45");
         }
         WholeDivide(target, left, right) {
+            lower_divide(lowering, function, target, left, right, true);
         }
         WholeRemainder(target, left, right) {
+            lower_divide(lowering, function, target, left, right, false);
         }
         Negate(target, value) {
+            mov_rax_slot(lowering.code, slot_disp(function, value));
+            push_hex(lowering.code, "48 f7 d8");
+            mov_slot_rax(lowering.code, slot_disp(function, target));
         }
         Equal(target, left, right) {
+            lower_compare(lowering, function, target, left, right, "0f 94 c0");
         }
         LessThan(target, left, right) {
+            lower_compare(lowering, function, target, left, right, "0f 9c c0");
         }
         Jump(label) {
+            add_label_jump(lowering, 1, label);
+            push_hex(lowering.code, "e9 00 00 00 00");
         }
         Branch(condition, label_true, label_false) {
+            lower_branch(lowering, function, condition, label_true, label_false);
         }
         Label(label) {
+            // A label carries no bytes; its offset is what the patch pass
+            // needs, and the label-position table holds it.
+            lowering.label_positions[label] = lowering.code.count;
         }
     }
 }
@@ -658,20 +809,36 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
             push_int(lowering.code, 8 * locals, 1);
         }
 
+        lowering.label_positions = new int[handle.label_count];
         int instruction_index = 0;
         while (instruction_index < handle.instruction_count) {
             Instruction instruction = handle.instructions[instruction_index];
-            string unsupported = supported(handle, instruction, instruction_index);
-            if (length(unsupported) != 0) {
-                return selector_fail(unsupported);
-            }
             lower_instruction(lowering, handle, instruction);
             instruction_index++;
         }
         if (!ends_with_return(handle)) {
             frame_epilogue(lowering.code, handle);
         }
+
+        // The function's labels are all defined; patch its forward jumps.
+        // Label positions are absolute code-buffer indices, so the target
+        // needs no function offset.
+        int jump = 0;
+        while (jump < lowering.label_jump_count) {
+            LabelJump fixup = lowering.label_jumps[jump];
+            int target = text_base() + header_size() + lowering.label_positions[fixup.label];
+            int site = text_base() + header_size() + fixup.position + 4;
+            patch32(lowering.code, fixup.position, target - site);
+            jump++;
+        }
+        lowering.label_jump_count = 0;
         function++;
+    }
+
+    // The divide-failure paragraph follows the functions and is reached
+    // only by the guards, so it exists only when some guard was emitted.
+    if (lowering.fail_jump_count > 0) {
+        lower_fail_paragraph(lowering);
     }
 
     // Data layout: one string object per blob (length, payload pointer,
@@ -690,6 +857,20 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
         push_zeros(lowering.data, pad);
         layout += 16 + size + pad;
         blob++;
+    }
+
+    // The selector's private fail-message blob, laid out exactly like a
+    // scene blob but addressed through fail_blob_offset alone.
+    if (lowering.fail_jump_count > 0) {
+        lowering.fail_blob_offset = lowering.data.count;
+        int size = length(fail_message());
+        push_int(lowering.data, size, 8);
+        int pointer_slot = lowering.data.count;
+        push_zeros(lowering.data, 8);
+        push_string(lowering.data, fail_message());
+        int pad = (8 - size % 8) % 8;
+        push_zeros(lowering.data, pad);
+        patch64(lowering.data, pointer_slot, data_base() + lowering.fail_blob_offset + 16);
     }
 
     int call_index = 0;
@@ -716,6 +897,22 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
         int payload = data_base() + lowering.blob_offsets[fixup.blob] + 16;
         patch64(lowering.data, fixup.position, payload);
         pointer++;
+    }
+
+    // The fail paragraph's RIP-relative reference and the guards'
+    // conditional jumps, whose target paragraph offset is now known.
+    if (lowering.fail_jump_count > 0) {
+        int target = data_base() + lowering.fail_blob_offset;
+        int site = text_base() + header_size() + lowering.fail_lea_position + 4;
+        patch32(lowering.code, lowering.fail_lea_position, target - site);
+        int fail_jump = 0;
+        while (fail_jump < lowering.fail_jump_count) {
+            FailJump fixup = lowering.fail_jumps[fail_jump];
+            int paragraph = text_base() + header_size() + lowering.fail_lea_position - 8;
+            int jump_site = text_base() + header_size() + fixup.position + 4;
+            patch32(lowering.code, fixup.position, paragraph - jump_site);
+            fail_jump++;
+        }
     }
 
     return SelectionResult.Ok {

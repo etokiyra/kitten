@@ -6,12 +6,17 @@
 // and prints check_scene's message, so the tests can pin the validation
 // texts. With `elf <path>`, it lowers and assembles the skeleton target's
 // scene into a static ELF64 executable and writes that file directly, with
-// no C compiler anywhere.
+// no C compiler anywhere; `elf-arith` and `elf-divzero` do the same for the
+// Phase 10.3 scenes that exercise arithmetic, comparisons, control flow,
+// calls, and the guarded divide failure.
 //
 //     native                  print the valid scene's rendering
 //     native <mode>           print one failure scene's check message
 //     native elf <path>       write the skeleton target's executable
+//     native elf-arith ...    write the arithmetic-and-control-flow executable
+//     native elf-divzero ...  write the divide-failure executable
 //     native big              render the growth corpus
+//     native arith            render the arithmetic-and-control-flow scene
 //
 // Modes: no-label, bad-binding, bad-call-count, bad-call-shape, bad-entry,
 // undefined-label. This is test infrastructure: the rendering and error
@@ -30,15 +35,18 @@ fn one_ref_parameter() -> NativeType[] {
     return shapes;
 }
 
-// build_hello is the skeleton target's scene per the 10.2 slice: static
-// blobs for a string literal and the newline, a runtime-shaped print that
-// reads the string object's length and pointer and performs two write
-// syscalls, and an entry that binds the literal and calls print.
-fn build_hello() -> NativeScene {
-    NativeScene scene = new_scene();
-    int hello = add_blob(scene, "hello");
-    int newline = add_blob(scene, "\n");
+// one_int_parameter is a parameter-shape list holding exactly one int.
+fn one_int_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Int;
+    return shapes;
+}
 
+// add_print appends the runtime-shaped print routine to a scene: it reads
+// the string object's length and pointer and performs two write syscalls,
+// the payload and then the newline blob's payload. hello and arith share
+// it so their program shape stays identical.
+fn add_print(NativeScene scene, int newline_blob) -> int {
     int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
     NativeFunction print_function = function_at(scene, print);
 
@@ -59,7 +67,7 @@ fn build_hello() -> NativeScene {
     push_instruction(print_function, Instruction.RawSyscall { target = first, number = write, arguments = write_arguments, argument_count = 3 });
 
     int newline_ref = new_temporary(print_function, NativeType.Ref);
-    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = newline });
+    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = newline_blob });
     // The payload pointer sits behind the object header, exactly as for
     // print's own string; load it before the write.
     int newline_data = new_temporary(print_function, NativeType.Ref);
@@ -76,6 +84,18 @@ fn build_hello() -> NativeScene {
     push_instruction(print_function, Instruction.RawSyscall { target = second, number = write, arguments = newline_arguments, argument_count = 3 });
 
     push_instruction(print_function, Instruction.ReturnVoid);
+    return print;
+}
+
+// build_hello is the skeleton target's scene per the 10.2 slice: static
+// blobs for a string literal and the newline, the shared print routine, and
+// an entry that binds the literal and calls print.
+fn build_hello() -> NativeScene {
+    NativeScene scene = new_scene();
+    int hello = add_blob(scene, "hello");
+    int newline = add_blob(scene, "\n");
+
+    int print = add_print(scene, newline);
 
     int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
     NativeFunction main_function = function_at(scene, main);
@@ -119,6 +139,176 @@ fn build_big() -> NativeScene {
         index++;
     }
     scene.entry = 0;
+    return scene;
+}
+
+// build_arith mirrors a non-allocating control-flow program: a loop that
+// calls a helper and folds it through defined divide, remainder, and add,
+// then two comparisons that print one of three strings. Every Phase 10.3
+// instruction form — multiply, subtract, divide, remainder, add, negate,
+// equal, less_than, branch, jump, label — and the skeleton's call and
+// constant forms appear in its lowering. It mirrors this Kitten program:
+//
+//     fn step(value int) -> int {
+//         return value * 3 - 1;
+//     }
+//     fn main() {
+//         int total = 47;
+//         int round = 0;
+//         while (round < 5) {
+//             total = step(total) / 5 + total % 5;
+//             round = round + 1;
+//         }
+//         if (total > 19) {
+//             print("large");
+//         } else {
+//             print("small");
+//         }
+//         int under = -1;
+//         int flipped = total / under;
+//         int remains = total % under;
+//         if (flipped < remains) {
+//             print("negged");
+//         }
+//     }
+fn build_arith() -> NativeScene {
+    NativeScene scene = new_scene();
+    int newline = add_blob(scene, "\n");
+    int large = add_blob(scene, "large");
+    int small = add_blob(scene, "small");
+    int negged = add_blob(scene, "negged");
+
+    int print = add_print(scene, newline);
+
+    int step = add_function(scene, "step", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction step_function = function_at(scene, step);
+    int three = new_temporary(step_function, NativeType.Int);
+    push_instruction(step_function, Instruction.ConstInt { target = three, value = 3 });
+    int tripled = new_temporary(step_function, NativeType.Int);
+    push_instruction(step_function, Instruction.Multiply { target = tripled, left = 0, right = three });
+    int minus_one = new_temporary(step_function, NativeType.Int);
+    push_instruction(step_function, Instruction.ConstInt { target = minus_one, value = 1 });
+    int stepped = new_temporary(step_function, NativeType.Int);
+    push_instruction(step_function, Instruction.Subtract { target = stepped, left = tripled, right = minus_one });
+    push_instruction(step_function, Instruction.Return { value = stepped });
+
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int total = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = total, value = 47 });
+    int round = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = round, value = 0 });
+    int five = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = five, value = 5 });
+    int one = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = one, value = 1 });
+    push_instruction(main_function, Instruction.Label { label = 0 });
+    int cond = new_temporary(main_function, NativeType.Bool);
+    push_instruction(main_function, Instruction.LessThan { target = cond, left = round, right = five });
+    push_instruction(main_function, Instruction.Branch { condition = cond, label_true = 1, label_false = 2 });
+    push_instruction(main_function, Instruction.Label { label = 1 });
+    int stepped_call = new_temporary(main_function, NativeType.Int);
+    int[] step_arguments = new int[1];
+    step_arguments[0] = total;
+    push_instruction(main_function, Instruction.Call { target = stepped_call, function = step, arguments = step_arguments, argument_count = 1 });
+    int quotient = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.WholeDivide { target = quotient, left = stepped_call, right = five });
+    int remainder = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.WholeRemainder { target = remainder, left = total, right = five });
+    push_instruction(main_function, Instruction.Add { target = total, left = quotient, right = remainder });
+    push_instruction(main_function, Instruction.Add { target = round, left = round, right = one });
+    push_instruction(main_function, Instruction.Jump { label = 0 });
+    push_instruction(main_function, Instruction.Label { label = 2 });
+    int nineteen = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = nineteen, value = 19 });
+    int over = new_temporary(main_function, NativeType.Bool);
+    push_instruction(main_function, Instruction.LessThan { target = over, left = nineteen, right = total });
+    push_instruction(main_function, Instruction.Branch { condition = over, label_true = 3, label_false = 4 });
+    push_instruction(main_function, Instruction.Label { label = 3 });
+    int large_text = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = large_text, blob = large });
+    int[] one_argument = new int[1];
+    one_argument[0] = large_text;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = one_argument, argument_count = 1 });
+    push_instruction(main_function, Instruction.Jump { label = 5 });
+    push_instruction(main_function, Instruction.Label { label = 4 });
+    int small_text = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = small_text, blob = small });
+    one_argument[0] = small_text;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = one_argument, argument_count = 1 });
+    push_instruction(main_function, Instruction.Label { label = 5 });
+    // A minus-one divisor: the selector's wrap path covers every dividend,
+    // so both lowering paths are exercised on non-extreme values too. The
+    // loop's dead bindings are reused for the folded values: stepped_call
+    // takes the quotient, quotient the remainder, nineteen the divisor, and
+    // over the new condition.
+    push_instruction(main_function, Instruction.Negate { target = nineteen, value = one });
+    push_instruction(main_function, Instruction.WholeDivide { target = stepped_call, left = total, right = nineteen });
+    push_instruction(main_function, Instruction.WholeRemainder { target = quotient, left = total, right = nineteen });
+    push_instruction(main_function, Instruction.LessThan { target = over, left = stepped_call, right = quotient });
+    push_instruction(main_function, Instruction.Branch { condition = over, label_true = 6, label_false = 7 });
+    push_instruction(main_function, Instruction.Label { label = 6 });
+    push_instruction(main_function, Instruction.ConstRefData { target = large_text, blob = negged });
+    one_argument[0] = large_text;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = one_argument, argument_count = 1 });
+    push_instruction(main_function, Instruction.Label { label = 7 });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
+    return scene;
+}
+
+// build_divzero is the guard program: a constant divisor gives the spec's
+// fatal divide, so the executable must fail with the C runtime's exact
+// text, standard error only, and status 1. It mirrors:
+//
+//     fn main() {
+//         int zero = 0;
+//         print(5 / zero);
+//     }
+fn build_divzero() -> NativeScene {
+    NativeScene scene = new_scene();
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int five = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = five, value = 5 });
+    int zero = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = zero, value = 0 });
+    int quotient = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.WholeDivide { target = quotient, left = five, right = zero });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
+    return scene;
+}
+
+// build_simple pins the argument-array shape: one array, two writes, two
+// calls, so the render shows whether a later array write reaches an
+// instruction pushed earlier through the same array reference.
+fn build_simple() -> NativeScene {
+    NativeScene scene = new_scene();
+    int newline = add_blob(scene, "\n");
+    int one = add_blob(scene, "one");
+    int two = add_blob(scene, "two");
+    int print = add_print(scene, newline);
+
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int first = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = first, blob = one });
+    int[] shared = new int[1];
+    shared[0] = first;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = shared, argument_count = 1 });
+    int second = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = second, blob = two });
+    shared[0] = second;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = shared, argument_count = 1 });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
     return scene;
 }
 
@@ -210,11 +400,9 @@ fn failure_scene(string mode) -> NativeScene {
     return empty;
 }
 
-// run_elf lowers the skeleton target, assembles its ELF, and writes the
-// file with no C compiler involved anywhere.
-fn run_elf(string path) {
-    NativeScene scene = build_hello();
-
+// run_elf lowers the given scene, assembles its ELF, and writes the file
+// with no C compiler involved anywhere.
+fn run_elf(NativeScene scene, string path) {
     match (check_scene(scene)) {
         Failed(message) {
             eprint("native: " + message);
@@ -263,7 +451,11 @@ fn main() {
 
     if (length(arguments) == 3) {
         if (arguments[1] == "elf") {
-            run_elf(arguments[2]);
+            run_elf(build_hello(), arguments[2]);
+        } else if (arguments[1] == "elf-arith") {
+            run_elf(build_arith(), arguments[2]);
+        } else if (arguments[1] == "elf-divzero") {
+            run_elf(build_divzero(), arguments[2]);
         } else {
             eprint("native: unknown mode " + arguments[1]);
             exit(2);
@@ -275,6 +467,10 @@ fn main() {
     if (length(arguments) == 2) {
         if (arguments[1] == "big") {
             scene = build_big();
+        } else if (arguments[1] == "arith") {
+            scene = build_arith();
+        } else if (arguments[1] == "simple") {
+            scene = build_simple();
         } else {
             failure_mode = true;
             scene = failure_scene(arguments[1]);
