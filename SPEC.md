@@ -3583,3 +3583,55 @@ instruction union stays open and the renderer's pinned text protects the
 scene's shape while the next slices land. The gate pass and its failure texts,
 the renderer's spellings, and the both-pipeline probe agreement are recorded in
 `selfhost/native/README.md`.
+
+### 30.3 The skeleton slice (Phase 10.2)
+
+`selfhost/native/selector.ktn` and `selfhost/native/elf.ktn` lower the scene
+subset the skeleton needs, so a scene has a native executable without any C
+compiler, libc, or libgc:
+
+- **The raw instructions.** The scene grows two backend-internal forms:
+  `RawLoad64` reads one 8-byte slot at a reference-or-int address plus a
+  small constant offset, and `RawSyscall` makes one raw Linux syscall with
+  up to six register arguments. The scene does not police who may produce
+  them — the producer is the backend itself — and the checker's
+  runtime-module gate remains the only user-facing boundary: language source
+  can never directly call raw forms, and no user program's lowering reaches
+  them.
+- **The frame and the convention.** Prologue is `push rbp; mov rbp, rsp;
+  sub rsp, 8·locals`; parameter k is read in the caller's argument area at
+  `rbp+16+8k`; locals sit at `rbp-8` downward; results return in rax; calls
+  push argument slots in reverse declaration order, then call, then pop.
+  This is exactly the proposal's first internal stack convention. Frames
+  must fit the slice's one-byte displacement form — fourteen parameters and
+  fourteen locals; a larger frame fails `select_scene` with a deterministic
+  message.
+- **The program's opening paragraph.** The entry label calls the scene's
+  entry function and exits with status 0 through the `exit_group` syscall.
+  argv is not read in this slice.
+- **The data section.** One string object per blob: an 8-byte length, an
+  8-byte pointer, the payload bytes, and padding to eight, all 8-aligned.
+  Patching happens in place inside mutable byte buffers: every call's e8
+  displacement, every RIP-relative data reference, and every payload pointer
+  slot is one in-place write; previously recorded fixups keep their
+  positions.
+- **The ELF layout.** A static ELF64 `ET_EXEC` with exactly the two program
+  headers: read-and-executable text covering the ELF header bytes, the
+  program headers, and the code at `0x400000`, and read-and-writable data
+  page-aligned at `0xf00000`; the entry point is the program's opening
+  paragraph. There are no section headers, no dynamic section, no
+  interpreter, and no relocations after layout.
+- **The not-yet gate.** Every instruction the selector cannot encode yet —
+  the arithmetic, comparisons, branches, labels, and everything else the
+  later slices own — fails `select_scene` with one deterministic message
+  naming the function and the instruction. The message texts are scene
+  position texts the failure corpus pins.
+
+The acceptance rung for this slice, per the proposal's Section 8, is the
+skeleton's execution test: write the ELF with no C compiler, execute it with
+an empty `PATH`, read back no interpreter and no dynamic section from
+`readelf -ld`, confirm the output and status match the C pipeline's program
+with the same source, and confirm repeated productions and both pipelines'
+productions are byte-identical. The scene stayed truthful about the gap: the
+probe builds the scene by hand, and no language source lowers into it yet,
+which is the next slices' work.

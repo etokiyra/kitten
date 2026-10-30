@@ -445,9 +445,18 @@ representation: the typed-IR scene under `selfhost/native` — shapes, binding
 tables, labels, calls, blob data — with the whole-scene `check_scene` gate,
 its deterministic validation messages, and a text renderer pinned through
 `selfhost/native.ktn` and `cmd/purr/native_test.go` in both pipelines
-(Go and Kitten). There is no lowering, selector, or ELF emission yet; the
-next step in the proposal's order is the skeleton slice: static ELF plus
-write/exit syscalls plus string-literal printing with no GC.
+(Go and Kitten). Phase 10.2 then landed the skeleton slice: the x86-64
+selector and the static ELF64 writer, with the proposal's internal stack
+convention, two backend-internal raw instructions (a raw 64-bit load and a
+raw syscall), in-place patching of every recorded fixup, and the program's
+opening paragraph calling the entry and exiting through `exit_group`. The
+skeleton's execution rung passed: `native elf <path>` writes a static ELF
+with no C compiler, it runs with an empty `PATH`, `readelf -ld` shows two
+program headers and no interpreter or dynamic section, the output and status
+match the C pipeline's program, and both pipelines produce byte-identical
+ELFs. The full instruction set — no lowering from language source yet — and
+a standard library remain designed but unimplemented; relative work per the
+proposal order continues.
 
 ## Roadmap
 

@@ -136,10 +136,13 @@ Phase 10.0 approved its decisions — the typed-IR/stack-first/direct-ELF backen
 `<runtime>`-only unsafe operations, non-moving conservative mark-sweep as the
 first shippable GC, and an exact `%g` in the native runtime — so the staged
 implementation is in progress: Phase 10.1 landed the typed-IR scene in Kitten
-with its validation gate and pinned renderer, and the skeleton slice (static
-ELF, write/exit syscalls, string-literal printing, no GC) is next. After native
-parity the Go source is removed entirely, an accepted loss of the independent
-cross-check oracle.
+with its validation gate and pinned renderer, and Phase 10.2 landed the
+skeleton slice, an x86-64 selector and a static-ELF64 writer whose target
+program prints a string literal with no C compiler involved. The skeleton's
+acceptance rung passed: the ELF is static, it runs with an empty `PATH`, its
+output and status match the C pipeline, and both pipelines produce
+byte-identical ELFs. After native parity the Go source is removed entirely, an
+accepted loss of the independent cross-check oracle.
 
 ### 3. Independent ecosystem
 
