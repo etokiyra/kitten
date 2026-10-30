@@ -3757,3 +3757,79 @@ What remains unimplemented from earlier sections is unchanged: no float
 operations, no field access, allocation, bounds checks, or tag switches, no
 bitwise and shift operators, no stack-alignment refinement, and no register
 allocation. The production sidecar still does not depend on this module.
+
+### 30.6 The float slice (Phase 10.5)
+
+Ladder rung 2's remaining form family is in: float values lower, select,
+and run, with no new host-language decisions beyond what the C pipelines
+already fix (IEEE 754 binary64, with every double's operator behavior
+carried by the C toolchain).
+
+- **The encoder.** `selfhost/native/floats.ktn` does what the C pipeline's
+  C compiler does: a literal's decimal text becomes the exact binary64 bit
+  pattern. It runs in pure integer Kitten — 16-bit limbs (every product
+  stays inside the signed 64-bit range, so the defined arithmetic carries
+  no undefined behavior), exact x10 scaling, exact bit shifts, and exactly
+  one rounding: the significand keeps 53 bits against a guard bit and a
+  sticky, round-to-nearest-even, with the exponent field walking the
+  subnormal edge downward and saturating to infinity upward, exactly as
+  the C toolchain's text conversion does. For E >= 0 the exact value is an
+  integer whose top bits are read directly; for E < 0 the value is a
+  division whose ratio is steered into [1, 2) with exact doublings, then
+  52 shift-compare-subtract steps draw the fractional bits, one more step
+  the guard, and the leftover remainder the sticky. The precision bound:
+  literals with more than seventeen significant digits fail
+  deterministically ("float literals with more than 17 significant digits
+  are not supported yet") — seventeen covers every double's round-trip
+  precision, and longer runs upgrade with the runtime.
+- **The forms.** Nine instruction forms: `ConstFloat` carries the bit
+  pattern; `AddFloat SubtractFloat MultiplyFloat DivideFloat` hold the
+  IEEE arithmetic (division deliberately unguarded — a zero divisor
+  produces infinity or NaN exactly as the C pipelines' generated division
+  of doubles does); `EqualFloat GreaterFloat LessOrEqualFloat` hold the
+  ordered-equality set from which the lowering derives `!= > <= >=`
+  correctly under unordered values (unordered comparisons answer false for
+  every ordered form, and `!=` derives through the bool negation so
+  unordered yields true, both matching the generated C); `NegateFloat` is
+  the sign flip. The selector encodes them through xmm0 — movsd through
+  divsd with the load-fold-store shape, `equalf` pairing `sete` with
+  `setnp` and ANDing (an unordered compare also sets ZF, so the parity
+  flag carries the ordered test), `greaterf` and `less_or_equalf` on
+  `seta` and `setae` whose carry reading makes unordered values false on
+  their own, and the sign flip's mask loaded with `movsd` rather than an
+  aligned `xorpd` memory operand. Float results return in xmm0 and float
+  call targets read it back; everything else in the convention is
+  unchanged.
+- **The lowering.** Float literals encode through the encoder; `constf`
+  constants carry it. Arithmetic and comparison operators dispatch by the
+  left operand's shape (the checker guarantees one operand type), the
+  derived comparisons map exactly as the scalar ones do apart from their
+  unordered rules, `+=`, `-=`, and both `++` positions fold through float
+  forms (postfix keeps the previous value exactly as the int forms do),
+  and unary minus lowers to `NegateFloat`. `print` of a float still fails
+  deterministically — float printing belongs to the runtime slice, which
+  owns the `%g` implementation. The binder's shapes carry `float64`
+  end to end, and the checker's validation gates each form (all-float
+  operands with a float target; comparisons against bool targets).
+- **The acceptance rung.** The encoder's differential drives ~1,240 cases
+  — fixed edges covering exact dyadic halves, halfway ties at powers of
+  two (including the tie the round-to-even rule keeps low), thirds and the
+  decimal classics, the round-trip edge, the smallest subnormal, the
+  maximal normal boundary, and the saturations — plus a seeded random
+  corpus, against the `strconv` oracle through the probe's `float` mode,
+  with zero disagreement. The corpus grows `tests/native/floats.ktn` and
+  `tests/native/floatfns.ktn` — arithmetic through functions, recursion
+  via calls, NaN's unordered behavior (including `-(0.0)`, infinity, and
+  the smallest-subnormal division that rounds to zero), both increment
+  positions, compound assignment, and the tie's rounding — and both match
+  the C pipeline's output, status, and standard error byte for byte with
+  an empty `PATH`. The float scene's `constf`/SSE2 rendering is pinned
+  byte for byte, the failure corpus gained the precision-bound and
+  float-print messages, and both pipelines' productions stay byte
+  identical.
+
+What remains unimplemented is unchanged from Section 30.5: no float or
+int conversions, no float printing, no field access, allocation, bounds
+checks, or tag switches, no bitwise and shift operators, no
+stack-alignment refinement, and no register allocation. The production
+sidecar still does not depend on this module.

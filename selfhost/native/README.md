@@ -17,7 +17,17 @@ allocation-free subset, with one deterministic message per unsupported
 construct, and the probe's `lower` mode runs real `.ktn` sources from disk
 through loader, checker, lowering, selector, and ELF writer. Every corpus
 program's executable matches the C pipeline's behavior; no part of the
-production sidecar depends on this module yet.
+production sidecar depends on this module yet. Phase 10.5 then added the
+float slice: `native/floats.ktn` encodes decimal literal text into exact
+IEEE 754 binary64 bit patterns in pure integer Kitten (one 53-bit rounding,
+deterministic failure past seventeen significant digits, saturation and
+underflow as the C toolchain does), the scene grew its SSE2 forms
+(`constf`, four arithmetic forms, three comparison forms, `negatef`) with
+the exact NaN-handling sequences the C generators emit, float results
+return in `xmm0`, and the corpus exercises the edges — ties, NaN, infinity,
+the subnormal rounding-to-zero edge, both increment positions — against
+the C pipeline byte for byte. Printing floats and value conversions stay
+with the runtime slice.
 
 ## Files
 
@@ -25,9 +35,13 @@ production sidecar depends on this module yet.
   the whole-scene well-formedness pass; `push_instruction` snapshots call
   argument arrays so the scene stays an immutable snapshot.
 - `selfhost/native/lower.ktn` — the lowering from a checked program's
-  semantic model to one scene, covering the scalar, allocation-free subset,
-  with one deterministic message for every unsupported construct (top of the
+  semantic model to one scene, covering the scalar subset, with one
+  deterministic message for every unsupported construct (top of the
   file lists the subset).
+- `selfhost/native/floats.ktn` — the float literal encoder: decimal text to
+  an exact IEEE 754 binary64 bit pattern in pure integer Kitten, with one
+  deterministic failure for anything past the seventeen-digit precision
+  bound.
 - `selfhost/native/text.ktn` — the deterministic text renderer whose pinned
   output protects the scene's shape as the backend grows around it.
 - `selfhost/native/selector.ktn` — the raw byte buffer, the frame layout, the
@@ -67,10 +81,28 @@ operand evaluates only when the first did not decide, matching the C
 pipeline's generated `&&`/`||`. The `print` built-in lowers with exactly one
 string argument to a scene-internal helper named `"$print"`, which no user
 name can collide with, and `exit` lowers to the backend's own raw
-`exit_group` syscall. The slice's frame is still the selector's: at most
-fourteen locals per function, so corpus functions stay small; the C
-generator's known self-shadowing-initializer quirk is why the corpus avoids
-a `local` whose initializer names a same-scoped outer local.
+`exit_group` syscall. Since Phase 10.5, float values lower through the
+scene's SSE2 forms — literals become `constf` constants with the encoder's
+bit patterns, arithmetic and comparisons take their derived forms with
+IEEE semantics, and `exit` stays the raw syscall. The slice's frame is still
+the selector's: at most fourteen locals per function, so corpus functions
+stay small; the C generator's known self-shadowing-initializer quirk is why
+the corpus avoids a `local` whose initializer names a same-scoped outer
+local.
+
+## The float encoder
+
+`selfhost/native/floats.ktn` is the piece the C pipeline delegated to its C
+compiler: a float literal's decimal text turns into the exact IEEE 754
+binary64 bit pattern through pure integer Kitten — 16-bit limbs, exact x10
+multiplications and bit shifts, one 53-bit rounding against guard and
+sticky, subnormal and saturating assembly. The precision bound: literals
+longer than seventeen significant digits fail deterministically —
+seventeen covers every double's round-trip precision, and longer runs
+upgrade with the runtime. Saturation to infinity and underflow to zero
+match the C toolchain's text conversion. The probe's `float <text>` mode
+prints the pattern, and the Go test drives every corpus case against Go's
+`strconv` oracle plus a seeded random corpus.
 
 ## Scene contract
 
@@ -123,8 +155,10 @@ The renderer output is deterministic and pinned:
 - one instruction line per instruction, with its fixed spelling
   (`= const`, `= data`, `= copy`, `= add`, `= subtract`, `= multiply`,
   `= whole_divide`, `= whole_remainder`, `= negate`, `= equal`,
-  `= less_than`, `= call @<index>`, `call`, `jump`, `branch`, `label`,
-  `return`).
+  `= less_than`, `= constf`, `= addf`, `= subtractf`, `= multiplyf`,
+  `= dividef`, `= negatef`, `= equalf`, `= greaterf`, `= less_or_equalf`,
+  `= call @<index>`, `call`, `jump`, `branch`, `label`, `return`; the float
+  bit patterns render as their signed decimal reading).
 
 The probe's render ends with the extra newline `print` adds; the pinned text
 expects it.
@@ -134,8 +168,9 @@ expects it.
 - Field access, allocation, bounds checks, and tag switches: strings lower
   as static literal blobs alone; concatenation, string equality, and every
   composite type fail with their message.
-- Float arithmetic and conversions: no float forms exist in the instruction
-  union yet; they land with the selector's SSE2 work.
+- Printing floats and any int-to-float or float-to-int conversion: the
+  rendering work belongs to the runtime slice (`%g` exactly), and the
+  conversions have no lowering yet.
 - Bitwise and shift operators, byte values, imports, and `match`: the
   scalar subset is single-module, and each fails with its message.
 - Stack-alignment refinement, a System V interop convention, register
@@ -166,19 +201,35 @@ expects it.
    the function's labels are all defined — label positions are absolute
    code-buffer indices. `branch` reads its condition as one byte, so a
    `ConstBool` slot's unused upper bytes can never steer it.
-5. Lower `whole_divide` and `whole_remainder` on SPEC's defined rules: a zero
+5. Lower the float instructions through xmm0: `constf` moves the bit
+   pattern through rax (`movq xmm0, rax`); `addf` through `dividef` are
+   `movsd` / `addsd` / `subsd` / `mulsd` / `divsd` with the same
+   load-fold-store shape as the integer forms — division kept unguarded,
+   so a zero divisor yields infinity or NaN exactly as the C pipeline's
+   generated division of doubles does; `equalf` pairs `sete` with `setnp`
+   (an unordered compare also sets ZF, so the parity flag carries the
+   ordered test) and ANDs the two flags; `greaterf` and
+   `less_or_equalf` are `seta` and `setae`, whose carry-flag reading makes
+   unordered values false on their own; `negatef` flips the double's sign
+   bit through a `movsd`-loaded mask, which avoids every SSE2 alignment
+   requirement. Float results return in xmm0 and float call targets read
+   it back, per the proposal's convention.
+6. Lower `whole_divide` and `whole_remainder` on SPEC's defined rules: a zero
    divisor jumps to the shared failure paragraph — write(2) the C runtime's
    exact `purr: integer division by zero` text to standard error, then
    `exit_group(1)` — and a minus-one divisor takes the wrap path (`neg rax`
    for the quotient, `xor edx,edx` for the remainder) so `idiv` can never
    trap. The paragraph and its private message blob are emitted only when
    some guard exists.
-6. Lay out one string object per data blob (length, payload pointer, payload,
-   padding to eight); the object's pointer field is one recorded fixup.
-7. Patch all recorded fixups in place: call displacements, RIP-relative data
+7. Lay out one string object per data blob (length, payload pointer, payload,
+   padding to eight); the object's pointer field is one recorded fixup. The
+   float sign mask, when a `negatef` exists, appends to the selector's
+   private data with one RIP-relative fixup of its own.
+8. Patch all recorded fixups in place: call displacements, RIP-relative data
    references, absolute payload pointers, forward branch and jump
-   displacements, the failure paragraph's own reference and guard jumps.
-   Every earlier position survives patching inside mutable byte buffers.
+   displacements, the failure paragraph's own reference and guard jumps,
+   and the sign-mask references. Every earlier position survives patching
+   inside mutable byte buffers.
 
 ## The ELF layout
 
@@ -202,6 +253,8 @@ purr build selfhost/native.ktn -o /tmp/native-probe
 /tmp/native-probe elf-divzero /tmp/dv && /tmp/dv             # write and run the divide-failure executable
 /tmp/native-probe lower tests/native/pool.ktn                # render a real source's lowered scene
 /tmp/native-probe lower tests/native/arith.ktn /tmp/a        # write and run a real source's executable
+/tmp/native-probe lower tests/native/floats.ktn /tmp/f && /tmp/f   # float corpus, no C anywhere
+/tmp/native-probe float 0.300000000000000044                 # the precision bound's message
 ```
 
 ## Verification
@@ -225,6 +278,12 @@ purr build selfhost/native.ktn -o /tmp/native-probe
   the same source, deterministically per source; the pooled-literal scene's
   rendering is pinned byte for byte; and one message per unsupported
   construct and per load/lex/parse/check failure is pinned.
+- The Phase 10.5 float slice: the encoder's corpus of fixed edges plus a
+  seeded random corpus matches the `strconv` oracle's bit patterns with no
+  disagreement; the float corpus programs (arithmetic through recursion,
+  NaN and infinity behavior, the subnormal edge, both increment positions,
+  tie rounding) match the C pipeline byte for byte with an empty PATH; and
+  the float scene's rendering is pinned.
 - Both pipelines produce byte-identical ELFs for all three scene kinds and
   for every corpus program, and their `lower`-mode renderings and failure
   messages agree byte for byte: the Kitten-written `purr-kt` sidecar builds

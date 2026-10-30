@@ -495,9 +495,22 @@ loader, checker, lowering, selector, and ELF writer; the corpus under
 `tests/native` (15 programs plus one-pinned-message-per-failure sources in
 `bad/`) matches the C pipeline's output, status, and stderr exactly, all
 pipelines produce byte-identical ELFs and agreeing renders and messages, and
-a pooled-literal render is pinned. Floats, field access, allocation, bounds
-checks, tag switches, stack-alignment refinement, register allocation, and
-the composite subset's lowering remain staged for later slices.
+a pooled-literal render is pinned. Phase 10.5 then added the float slice:
+`selfhost/native/floats.ktn` encodes decimal literal text into exact IEEE 754
+binary64 bit patterns in pure integer Kitten (16-bit limbs, one 53-bit
+rounding against guard and sticky, deterministic failure past seventeen
+significant digits, saturation and underflow exactly as the C toolchain's
+text conversion), the scene grew nine SSE2 forms (constf, four float
+arithmetic ops, three comparison ops, negatef) whose setCC/parity sequences
+carry the C generators' exact NaN behavior, float results return in xmm0,
+the probe gained a `float` mode differential-driven against Go's strconv
+oracle, and the corpus covers the edges — tie rounding, NaN unorderedness,
+infinity, the subnormal-to-zero edge, both increment positions — with
+byte-identical C-pipeline parity and a pinned float render. Float printing
+and value conversions stay with the runtime/GC slice. Field access,
+allocation, bounds checks, tag switches, stack-alignment refinement,
+register allocation, and the composite subset's lowering remain staged for
+later slices.
 
 ## Roadmap
 
@@ -562,8 +575,9 @@ the composite subset's lowering remain staged for later slices.
    the typed-IR scene; Phase 10.2 the static-ELF skeleton; Phase 10.3 scalar
    arithmetic and control flow in the selector; Phase 10.4 the lowering of
    checked programs into scenes and corpus executable parity with the C
-   pipeline. GC and basic runtime (proposal step 3) is next; the full
-   instruction set and a standard library remain designed but unimplemented.
+   pipeline; Phase 10.5 floats end to end (encoder to SSE2). GC and basic
+   runtime (proposal step 3) is next; the full instruction set and a standard
+   library remain designed but unimplemented.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
    then GUI, servers, and games. This is independence from other languages'
    ecosystems, and it includes the whole `purr` toolchain: one-command install of
