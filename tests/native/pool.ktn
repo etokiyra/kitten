@@ -1,0 +1,8 @@
+fn main() {
+    string a = "same";
+    string b = "same";
+    string c = "other";
+    print(a);
+    print(b);
+    print(c);
+}

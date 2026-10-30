@@ -1,0 +1,32 @@
+fn fold() {
+    int value = 5;
+    value += 3;
+    value -= 5;
+    if (value == 3) {
+        print("folded");
+    }
+}
+fn steps_post() {
+    int value = 0;
+    int suffix = value++;
+    if (suffix == 0) {
+        print("post");
+    }
+}
+fn steps_pre() {
+    int value = 5;
+    int prefix = ++value;
+    if (prefix == 6) {
+        print("pre");
+    }
+}
+fn main() {
+    fold();
+    steps_post();
+    steps_pre();
+    int value = 8;
+    --value;
+    if (value == 7) {
+        print("stepped");
+    }
+}

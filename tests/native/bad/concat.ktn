@@ -1,0 +1,6 @@
+fn main() {
+    string one = "one";
+    string two = "two";
+    string joined = one + two;
+    print(joined);
+}

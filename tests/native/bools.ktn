@@ -1,0 +1,23 @@
+fn bound(int value) -> bool {
+    return value >= 10;
+}
+fn pick(bool flag) {
+    if (flag) {
+        print("yes");
+    } else {
+        print("no");
+    }
+}
+fn main() {
+    int value = 7;
+    bool small = !bound(value);
+    bool high = bound(15);
+    if (small && high) {
+        print("mixed");
+    }
+    if (small || high) {
+        print("either");
+    }
+    pick(false);
+    pick(true);
+}

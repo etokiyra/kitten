@@ -1,0 +1,6 @@
+fn main() {
+    string grouped = "a \"quoted\" word\tand\ttabs\nand a newline after";
+    print(grouped);
+    print("");
+    print("second");
+}

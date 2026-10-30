@@ -1,0 +1,9 @@
+fn main() {
+    int total = 0;
+    for (int index = 0; index < 5; index++) {
+        total += index;
+    }
+    if (total == 10) {
+        print("ten");
+    }
+}

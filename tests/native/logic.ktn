@@ -1,0 +1,32 @@
+fn decided() {
+    int a = 4;
+    int b = 6;
+    bool equal = a == b;
+    bool neither = !(a >= b);
+    if (equal || !neither) {
+        print("decide");
+    }
+}
+fn ordered() {
+    int a = 4;
+    int b = 6;
+    if (b > a) {
+        if (a <= 4) {
+            print("ordered");
+        }
+    }
+}
+fn refused() {
+    int a = 4;
+    int b = 6;
+    if (a != 5) {
+        if (!(b <= 5)) {
+            print("guards");
+        }
+    }
+}
+fn main() {
+    decided();
+    ordered();
+    refused();
+}

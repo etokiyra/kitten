@@ -1,0 +1,15 @@
+fn fact(int n) -> int {
+    if (n < 2) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+fn main() {
+    int value = fact(6);
+    if (value == 720) {
+        print("six");
+    }
+    if (fact(1) == 1) {
+        print("one");
+    }
+}

@@ -1,0 +1,1392 @@
+// lower.ktn - reduce a checked program into a NativeScene.
+//
+// This is the native backend's lowering, the step proposals/zero-dependency-
+// toolchain.md Section 9 step 2 needs: it walks a checked program's semantic
+// model and fills one scene of functions, bindings, instructions, and data
+// blobs, which check_scene, the selector, and the ELF writer then consume.
+// The lowering covers the slice's scalar, allocation-free subset:
+//
+//   - functions with int, bool, and string parameters returning int, bool,
+//     or void, with string carrying a reference to a static literal object;
+//   - int, bool, and string literals and local variables of those types;
+//   - the arithmetic operators + - * / %, unary -, and the wrap, wrap
+//     remainder, and guard rules the scene already defines for division;
+//   - the comparisons == and < (with != > <= >= lowered through them), and
+//     the boolean operators ! && ||, with && and || short-circuiting exactly
+//     as the C pipeline's generated C does;
+//   - assignment =, compound += and -=, and ++ and -- in both positions;
+//   - if/else, while, and for statements, and return in both forms;
+//   - calls to other user functions of the same module;
+//   - the built-ins print, for exactly one string argument, and exit.
+//
+// Anything outside the subset fails with one deterministic message naming
+// the unsupported construct and its position, so a caller never receives a
+// partially lowered scene.
+//
+// Binding order is the walk order: a function's parameters first, then its
+// locals and temporaries in the order the lowering creates them. String
+// literals pool into data blobs exactly as the C generator pools its
+// literals, so equal literals share one blob. The boolean operators and the
+// derived comparisons lower into the branch forms the scene already
+// carries: `!`, `!=`, `<=`, and `>=` materialize a bool through a branch on
+// their flipped condition, and `&&` and `||` evaluate the right operand
+// only when the first one did not decide.
+
+import "../lexer/tokens.ktn";
+import "../parser/ast.ktn";
+import "../parser/parser.ktn";
+import "../checker/model.ktn";
+import "../checker/state.ktn";
+import "ir.ktn";
+
+// LowerResult is the lowering's outcome. Ok carries the whole scene, with
+// the entry index already set; Failed carries one message naming the
+// unsupported construct at its position, in the language's diagnostic
+// spelling `<path>:<line>:<column>: <message>`.
+public union LowerResult {
+    Ok { NativeScene scene; }
+    Failed { string message; }
+}
+
+// ScopeFrame is one lexical scope: the local names declared inside it,
+// mapped to their binding indices in the enclosing function's table.
+struct ScopeFrame {
+    map[string]int names;
+}
+
+// Lowering is one lowering run's state: the scene being filled, the checked
+// module's annotations, the function and literal tables, the print helper's
+// slot, and the current function's body, scopes, labels, and first failure.
+struct Lowering {
+    NativeScene scene;
+    ModuleModel module;
+    string path;
+    map[string]int functions;
+    map[string]int literal_pool;
+    int print_helper;
+    int print_newline;
+
+    NativeFunction body;
+    int label_next;
+    ScopeFrame[] scopes;
+    int scope_count;
+    int scope_capacity;
+    int main_index;
+    string failure;
+}
+
+// lower_decimal renders a non-negative integer in decimal for messages.
+fn lower_decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+// fail records the run's first failure; later failures leave it untouched,
+// so the reported message is the first unsupported construct the walk hits.
+fn fail(Lowering lowering, string message) {
+    if (length(lowering.failure) == 0) {
+        lowering.failure = message;
+    }
+}
+
+// fail_at records a failure at a source position, with the module path for
+// the exact spelling a diagnostic elsewhere in the toolchain uses.
+fn fail_at(Lowering lowering, Position at, string message) {
+    fail(lowering, lowering.path + ":" + lower_decimal(at.line) + ":" + lower_decimal(at.column) + ": " + message);
+}
+
+// failed reports whether the run has already failed.
+fn failed(Lowering lowering) -> bool {
+    return length(lowering.failure) != 0;
+}
+
+// new_lowering opens one lowering run for a successfully checked model.
+fn new_lowering(SemanticModel model) -> Lowering {
+    ModuleModel module = module_model(model, 0);
+    return Lowering {
+        scene = new_scene(),
+        module = module,
+        path = module.path,
+        functions = new map[string]int,
+        literal_pool = new map[string]int,
+        print_helper = -1,
+        print_newline = -1,
+        body = new_function("", NativeType.Void),
+        label_next = 0,
+        scopes = new ScopeFrame[4],
+        scope_count = 0,
+        scope_capacity = 4,
+        main_index = -1,
+        failure = ""
+    };
+}
+
+// --- Scopes -------------------------------------------------------------------
+
+// grow_scopes doubles the scope stack.
+fn grow_scopes(Lowering lowering) {
+    int capacity = lowering.scope_capacity * 2;
+    ScopeFrame[] grown = new ScopeFrame[capacity];
+    int index = 0;
+    while (index < lowering.scope_count) {
+        grown[index] = lowering.scopes[index];
+        index++;
+    }
+    lowering.scopes = grown;
+    lowering.scope_capacity = capacity;
+}
+
+// push_scope opens one lexical scope.
+fn push_scope(Lowering lowering) {
+    if (lowering.scope_count == lowering.scope_capacity) {
+        grow_scopes(lowering);
+    }
+    lowering.scopes[lowering.scope_count] = ScopeFrame { names = new map[string]int };
+    lowering.scope_count++;
+}
+
+// pop_scope closes the innermost scope.
+fn pop_scope(Lowering lowering) {
+    lowering.scope_count--;
+}
+
+// declare binds one name in the innermost scope to a binding index.
+fn declare(Lowering lowering, string name, int binding) {
+    lowering.scopes[lowering.scope_count - 1].names[name] = binding;
+}
+
+// lookup walks the scope stack outward and returns the binding one name
+// denotes, or -1 when no scope holds it. The checker resolved every name
+// before the lowering ran, so the miss case is unreachable for a checked
+// program; it stays reported so a lowering bug cannot pass silently.
+fn lookup(Lowering lowering, string name, Position at) -> int {
+    int index = lowering.scope_count - 1;
+    while (index >= 0) {
+        if (has(lowering.scopes[index].names, name)) {
+            return lowering.scopes[index].names[name];
+        }
+        index--;
+    }
+    fail_at(lowering, at, "identifier " + quoted(name) + " is not in scope");
+    return -1;
+}
+
+// --- Values -------------------------------------------------------------------
+
+// value_shape maps a checked type onto the scene's shapes. Int, bool, and
+// string lower; string is a reference to a static literal object. Every
+// other kind fails with its unsupported-construct message.
+fn value_shape(Lowering lowering, Type type, Position at) -> NativeType {
+    match (type.kind) {
+        Int { return NativeType.Int; }
+        Bool { return NativeType.Bool; }
+        String { return NativeType.Ref; }
+        Float { fail_at(lowering, at, "float values are not supported yet"); return NativeType.Void; }
+        Byte { fail_at(lowering, at, "byte values are not supported yet"); return NativeType.Void; }
+        Struct { fail_at(lowering, at, "struct values are not supported yet"); return NativeType.Void; }
+        Array { fail_at(lowering, at, "array values are not supported yet"); return NativeType.Void; }
+        Enum { fail_at(lowering, at, "enum values are not supported yet"); return NativeType.Void; }
+        Union { fail_at(lowering, at, "union values are not supported yet"); return NativeType.Void; }
+        Map { fail_at(lowering, at, "map values are not supported yet"); return NativeType.Void; }
+        None { fail_at(lowering, at, "invalid values cannot be lowered"); return NativeType.Void; }
+        Void { fail_at(lowering, at, "void values cannot be lowered"); return NativeType.Void; }
+    }
+}
+
+// type_ref_shape resolves one declared type reference to a scene shape.
+// Declarations already resolved their references, so the absent case is
+// unreachable; it stays reported.
+fn type_ref_shape(Lowering lowering, TypeRef reference) -> NativeType {
+    OptionalResolvedType resolved = type_ref_type(lowering.module, type_ref_node_id(reference));
+    match (resolved) {
+        Present(type) {
+            return value_shape(lowering, type, type_position(reference));
+        }
+        Absent {
+            fail_at(lowering, type_position(reference), "a type reference is not resolved");
+            return NativeType.Void;
+        }
+    }
+}
+
+// expr_type returns an expression's resolved type, or the absent type when
+// the checker did not annotate the node. A call's callee is exactly such a
+// node: it resolves to a function, not to a value.
+fn expr_type(Lowering lowering, Expr expression) -> Type {
+    ExprInfo info = expression_info(lowering.module, expr_node_id(expression));
+    match (info.type) {
+        Present(type) { return type; }
+        Absent { return none_type(); }
+    }
+}
+
+// literal_blob returns the blob index an encoded string literal denotes,
+// pooling equal literals into one blob exactly as the C generator pools its
+// literals.
+fn literal_blob(Lowering lowering, string bytes) -> int {
+    if (!has(lowering.literal_pool, bytes)) {
+        lowering.literal_pool[bytes] = add_blob(lowering.scene, bytes);
+    }
+    return lowering.literal_pool[bytes];
+}
+
+// parse_int_literal reads an integer literal's bit pattern. The checker
+// bounded decimal literals to int64 and already accepted the base prefixes,
+// so the walk only needs the 64-bit wrap the machine arithmetic gives it.
+fn parse_int_literal(string text) -> int {
+    int size = length(text);
+    int base = 10;
+    int start = 0;
+    if (size > 2 && text[0] == 48 && text[1] == 120) {
+        base = 16;
+        start = 2;
+    } else if (size > 2 && text[0] == 48 && text[1] == 98) {
+        base = 2;
+        start = 2;
+    }
+    int value = 0;
+    int index = start;
+    while (index < size) {
+        int character = text[index];
+        int digit = -1;
+        if (character >= 48 && character <= 57) {
+            digit = character - 48;
+        } else if (character >= 97 && character <= 102) {
+            digit = character - 87;
+        } else if (character >= 65 && character <= 70) {
+            digit = character - 55;
+        }
+        if (digit >= 0 && digit < base) {
+            value = value * base + digit;
+        }
+        index++;
+    }
+    return value;
+}
+
+// new_label allocates the next label index of the current function.
+fn new_label(Lowering lowering) -> int {
+    int label = lowering.label_next;
+    lowering.label_next++;
+    return label;
+}
+
+// define_label appends one Label instruction, which defines the index.
+fn define_label(Lowering lowering, int label) {
+    push_instruction(lowering.body, Instruction.Label { label = label });
+}
+
+// negate_binding materializes the boolean negation of one condition through
+// the branch forms the scene carries: the condition's true label stores a
+// false constant and its false label stores a true one, so the binding
+// holds the flipped value after the pattern merges.
+fn negate_binding(Lowering lowering, int condition) -> int {
+    int target = new_temporary(lowering.body, NativeType.Bool);
+    int when_true = new_label(lowering);
+    int when_false = new_label(lowering);
+    int merge = new_label(lowering);
+    push_instruction(lowering.body, Instruction.Branch { condition = condition, label_true = when_true, label_false = when_false });
+    define_label(lowering, when_false);
+    push_instruction(lowering.body, Instruction.ConstBool { target = target, value = true });
+    push_instruction(lowering.body, Instruction.Jump { label = merge });
+    define_label(lowering, when_true);
+    push_instruction(lowering.body, Instruction.ConstBool { target = target, value = false });
+    define_label(lowering, merge);
+    return target;
+}
+
+// shortcircuit_materialize lowers one side-effecting boolean operator: the
+// first operand is evaluated once and decides whether the second operand is
+// evaluated at all; the result is the second operand's value when the first
+// did not decide, and the constant the first decided otherwise.
+// evaluate_left_true reports whether a true first operand leaves the
+// decision to the second operand, which is `&&`; for `||` a false first
+// operand does.
+fn shortcircuit_materialize(Lowering lowering, Expr left, Expr right, bool evaluate_left_true) -> int {
+    int first = lower_expression(lowering, left);
+    if (failed(lowering)) {
+        return -1;
+    }
+    int target = new_temporary(lowering.body, NativeType.Bool);
+    int evaluate = new_label(lowering);
+    int decided = new_label(lowering);
+    int merge = new_label(lowering);
+    if (evaluate_left_true) {
+        push_instruction(lowering.body, Instruction.Branch { condition = first, label_true = evaluate, label_false = decided });
+    } else {
+        push_instruction(lowering.body, Instruction.Branch { condition = first, label_true = decided, label_false = evaluate });
+    }
+    define_label(lowering, decided);
+    push_instruction(lowering.body, Instruction.ConstBool { target = target, value = !evaluate_left_true });
+    push_instruction(lowering.body, Instruction.Jump { label = merge });
+    define_label(lowering, evaluate);
+    int second = lower_expression(lowering, right);
+    if (failed(lowering)) {
+        return -1;
+    }
+    push_instruction(lowering.body, Instruction.Copy { target = target, source = second });
+    define_label(lowering, merge);
+    return target;
+}
+
+// --- Expressions ----------------------------------------------------------------
+
+// lower_expression lowers one expression into a binding that holds its
+// value, creating temporaries in walk order, and returns the binding's
+// index, or -1 once the run has failed.
+fn lower_expression(Lowering lowering, Expr expression) -> int {
+    match (expression) {
+        Integer(node_id, token) {
+            int target = new_temporary(lowering.body, NativeType.Int);
+            push_instruction(lowering.body, Instruction.ConstInt { target = target, value = parse_int_literal(token.text) });
+            return target;
+        }
+        Boolean(node_id, token, value) {
+            int target = new_temporary(lowering.body, NativeType.Bool);
+            push_instruction(lowering.body, Instruction.ConstBool { target = target, value = value });
+            return target;
+        }
+        String(node_id, token) {
+            int target = new_temporary(lowering.body, NativeType.Ref);
+            push_instruction(lowering.body, Instruction.ConstRefData { target = target, blob = literal_blob(lowering, decode_string(token.text)) });
+            return target;
+        }
+        Identifier(node_id, token) {
+            return lookup(lowering, token.text, position_of_token(token));
+        }
+        Float(node_id, token) {
+            fail_at(lowering, position_of_token(token), "float values are not supported yet");
+            return -1;
+        }
+        Unary(node_id, operator, operand, postfix) {
+            return lower_unary(lowering, operator, operand, postfix);
+        }
+        Binary(node_id, operator, left, right) {
+            return lower_binary(lowering, operator, left, right);
+        }
+        Assign(node_id, operator, target, value) {
+            return lower_assign(lowering, operator, target, value);
+        }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            return lower_call(lowering, callee, arguments, argument_count, position_of_token(open_paren));
+        }
+        Member(node_id, dot, receiver, member) {
+            fail_at(lowering, position_of_token(dot), "field access is not supported yet");
+            return -1;
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            fail_at(lowering, type_position(type_ref), "struct literals are not supported yet");
+            return -1;
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            fail_at(lowering, position_of_token(variant), "variant literals are not supported yet");
+            return -1;
+        }
+        NewArray(node_id, at, element, length) {
+            fail_at(lowering, position_of_token(at), "array creation is not supported yet");
+            return -1;
+        }
+        NewMap(node_id, at, map_type) {
+            fail_at(lowering, position_of_token(at), "map creation is not supported yet");
+            return -1;
+        }
+        Index(node_id, bracket, target, index) {
+            fail_at(lowering, position_of_token(bracket), "indexing is not supported yet");
+            return -1;
+        }
+    }
+}
+
+// lower_unary lowers one unary expression. `!` materializes through the
+// flipped-branch pattern; `-` negates; `++` and `--` read and update their
+// target variable, with a postfix position yielding the previous value and
+// a prefix one the new value; every bitwise form fails.
+fn lower_unary(Lowering lowering, Token operator, Expr operand, bool postfix) -> int {
+    if (operator.text == "++" || operator.text == "--") {
+        return lower_increment(lowering, operator, operand, postfix);
+    }
+    if (operator.text == "-") {
+        int value = lower_expression(lowering, operand);
+        if (failed(lowering)) {
+            return -1;
+        }
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.Negate { target = target, value = value });
+        return target;
+    }
+    if (operator.text == "!") {
+        int condition = lower_expression(lowering, operand);
+        if (failed(lowering)) {
+            return -1;
+        }
+        return negate_binding(lowering, condition);
+    }
+    fail_at(lowering, position_of_token(operator), "bitwise operators are not supported yet");
+    return -1;
+}
+
+// lower_increment lowers prefix or postfix ++ and --. The target must be a
+// local variable or parameter of type int; the step reads, folds, and
+// stores the new value, and a postfix position additionally copies the
+// previous value out first. Every non-identifier operand fails: the
+// subset's assignable l-values are variables alone.
+fn lower_increment(Lowering lowering, Token operator, Expr operand, bool postfix) -> int {
+    match (operand) {
+        Identifier(node_id, token) {
+            int target = lookup(lowering, token.text, position_of_token(token));
+            if (failed(lowering)) {
+                return -1;
+            }
+            if (type_name(lowering.body.binding_types[target]) != type_name(NativeType.Int)) {
+                fail_at(lowering, position_of_token(operator), "++ and -- are supported on int values only");
+                return -1;
+            }
+            int value = new_temporary(lowering.body, NativeType.Int);
+            push_instruction(lowering.body, Instruction.ConstInt { target = value, value = 1 });
+            int updated = new_temporary(lowering.body, NativeType.Int);
+            if (operator.text == "++") {
+                push_instruction(lowering.body, Instruction.Add { target = updated, left = target, right = value });
+            } else {
+                push_instruction(lowering.body, Instruction.Subtract { target = updated, left = target, right = value });
+            }
+            if (postfix) {
+                int previous = new_temporary(lowering.body, NativeType.Int);
+                push_instruction(lowering.body, Instruction.Copy { target = previous, source = target });
+                push_instruction(lowering.body, Instruction.Copy { target = target, source = updated });
+                return previous;
+            }
+            push_instruction(lowering.body, Instruction.Copy { target = target, source = updated });
+            return updated;
+        }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        String(node_id, token) { }
+        Boolean(node_id, token, value) { }
+        Unary(node_id, inner_operator, inner_operand, inner_postfix) { }
+        Binary(node_id, inner_operator, left, right) { }
+        Assign(node_id, inner_operator, target, value) { }
+        Call(node_id, open_paren, callee, arguments, argument_count) { }
+        Member(node_id, dot, receiver, member) { }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { }
+        NewArray(node_id, at, element, length) { }
+        NewMap(node_id, at, map_type) { }
+        Index(node_id, bracket, target, index) { }
+    }
+    fail_at(lowering, position_of_token(operator), "++ and -- are supported on local variables only");
+    return -1;
+}
+
+// lower_binary lowers one binary expression. Short-circuit boolean forms
+// lower before any operand evaluation so their decision controls the right
+// operand; every other form evaluates left, then right, then folds. The
+// derived comparisons and boolean operators materialize through the branch
+// patterns the scene already carries.
+fn lower_binary(Lowering lowering, Token operator, Expr left, Expr right) -> int {
+    string op = operator.text;
+    Position at = position_of_token(operator);
+
+    if (op == "&&") {
+        return shortcircuit_materialize(lowering, left, right, true);
+    }
+    if (op == "||") {
+        return shortcircuit_materialize(lowering, left, right, false);
+    }
+
+    int left_value = lower_expression(lowering, left);
+    if (failed(lowering)) {
+        return -1;
+    }
+    int right_value = lower_expression(lowering, right);
+    if (failed(lowering)) {
+        return -1;
+    }
+
+    if (op == "==" || op == "!=") {
+        if (expr_type(lowering, left).kind == TypeKind.String) {
+            fail_at(lowering, at, "string equality is not supported yet");
+            return -1;
+        }
+        if (expr_type(lowering, left).kind == TypeKind.Bool) {
+            fail_at(lowering, at, "comparing bool values is not supported yet");
+            return -1;
+        }
+    }
+
+    if (op == "+") {
+        if (expr_type(lowering, left).kind == TypeKind.String) {
+            fail_at(lowering, at, "string concatenation is not supported yet");
+            return -1;
+        }
+    }
+    if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
+        op == "<" || op == ">" || op == "<=" || op == ">=") {
+        if (!int_operand(lowering, left_value, at) || !int_operand(lowering, right_value, at)) {
+            return -1;
+        }
+    }
+
+    if (op == "+") {
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.Add { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == "-") {
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.Subtract { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == "*") {
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.Multiply { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == "/") {
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.WholeDivide { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == "%") {
+        int target = new_temporary(lowering.body, NativeType.Int);
+        push_instruction(lowering.body, Instruction.WholeRemainder { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == "==" || op == "!=") {
+        int target = new_temporary(lowering.body, NativeType.Bool);
+        push_instruction(lowering.body, Instruction.Equal { target = target, left = left_value, right = right_value });
+        if (op == "!=") {
+            return negate_binding(lowering, target);
+        }
+        return target;
+    }
+    if (op == "<") {
+        int target = new_temporary(lowering.body, NativeType.Bool);
+        push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
+        return target;
+    }
+    if (op == ">") {
+        int target = new_temporary(lowering.body, NativeType.Bool);
+        push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
+        return target;
+    }
+    if (op == "<=") {
+        int target = new_temporary(lowering.body, NativeType.Bool);
+        push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
+        return negate_binding(lowering, target);
+    }
+    if (op == ">=") {
+        int target = new_temporary(lowering.body, NativeType.Bool);
+        push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
+        return negate_binding(lowering, target);
+    }
+    fail_at(lowering, at, "bitwise operators are not supported yet");
+    return -1;
+}
+fn int_operand(Lowering lowering, int binding, Position at) -> bool {
+    if (type_name(lowering.body.binding_types[binding]) != type_name(NativeType.Int)) {
+        fail_at(lowering, at, "arithmetic and comparisons are supported on int values only");
+        return false;
+    }
+    return true;
+}
+
+// lower_assign lowers one assignment expression: the target must be a local
+// variable or parameter, the value lowers first, and plain assignment then
+// copies it into the target while the compound forms fold through an int
+// temporary. Every assignment expression yields the value that was assigned
+// or folded, exactly as the C generator's assignment expressions do.
+fn lower_assign(Lowering lowering, Token operator, Expr target, Expr value) -> int {
+    string op = operator.text;
+    Position at = position_of_token(operator);
+
+    int slot = -1;
+    match (target) {
+        Identifier(node_id, token) {
+            slot = lookup(lowering, token.text, position_of_token(token));
+        }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        String(node_id, token) { }
+        Boolean(node_id, token, boolean) { }
+        Unary(node_id, inner_operator, inner_operand, inner_postfix) { }
+        Binary(node_id, inner_operator, left, right) { }
+        Assign(node_id, inner_operator, inner_target, inner_value) { }
+        Call(node_id, open_paren, callee, arguments, argument_count) { }
+        Member(node_id, dot, receiver, member) { }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { }
+        NewArray(node_id, at, element, length) { }
+        NewMap(node_id, at, map_type) { }
+        Index(node_id, bracket, target_expr, index) { }
+    }
+    if (slot < 0) {
+        if (!failed(lowering)) {
+            fail_at(lowering, at, "assignment is supported on local variables only");
+        }
+        return -1;
+    }
+    if (failed(lowering)) {
+        return -1;
+    }
+
+    if (op == "=") {
+        int assigned = lower_expression(lowering, value);
+        if (failed(lowering)) {
+            return -1;
+        }
+        push_instruction(lowering.body, Instruction.Copy { target = slot, source = assigned });
+        return assigned;
+    }
+    if (op == "+=" || op == "-=") {
+        if (!int_operand(lowering, slot, at)) {
+            return -1;
+        }
+        int assigned = lower_expression(lowering, value);
+        if (failed(lowering)) {
+            return -1;
+        }
+        if (!int_operand(lowering, assigned, at)) {
+            return -1;
+        }
+        int folded = new_temporary(lowering.body, NativeType.Int);
+        if (op == "+=") {
+            push_instruction(lowering.body, Instruction.Add { target = folded, left = slot, right = assigned });
+        } else {
+            push_instruction(lowering.body, Instruction.Subtract { target = folded, left = slot, right = assigned });
+        }
+        push_instruction(lowering.body, Instruction.Copy { target = slot, source = folded });
+        return folded;
+    }
+    fail_at(lowering, at, "the assignment operator " + quoted(op) + " is not supported yet");
+    return -1;
+}
+
+// lower_call lowers one call expression. The callee is a plain name: a
+// user function of the module, the print built-in lowered into the scene's
+// print helper, or the exit built-in lowered into a raw exit_group syscall.
+// Every argument lowers in order before the call. A void callee contributes
+// no value, which the caller sees as a -1 binding with no failure recorded.
+fn lower_call(Lowering lowering, Expr callee, Expr[] arguments, int argument_count, Position open_paren) -> int {
+    match (callee) {
+        Identifier(node_id, token) {
+            ExprInfo info = expression_info(lowering.module, node_id);
+            match (info.symbol) {
+                Present(symbol) {
+                    match (symbol.function) {
+                        Present(function) {
+                            if (function.builtin == BuiltinKind.Print) {
+                                return lower_print_call(lowering, arguments, argument_count, open_paren);
+                            }
+                            if (function.builtin == BuiltinKind.Exit) {
+                                return lower_exit_call(lowering, arguments, argument_count, open_paren);
+                            }
+                            if (function.builtin != BuiltinKind.NotBuiltin) {
+                                fail_at(lowering, position_of_token(token), "built-in " + quoted(token.text) + " is not supported yet");
+                                return -1;
+                            }
+                            return lower_user_call(lowering, token, arguments, argument_count, function);
+                        }
+                        Absent { }
+                    }
+                }
+                Absent { }
+            }
+        }
+        Integer(node_id, token) { }
+        Float(node_id, token) { }
+        String(node_id, token) { }
+        Boolean(node_id, token, value) { }
+        Unary(node_id, inner_operator, inner_operand, inner_postfix) { }
+        Binary(node_id, inner_operator, left, right) { }
+        Assign(node_id, inner_operator, inner_target, inner_value) { }
+        Call(node_id, open_paren, inner_callee, arguments, argument_count) { }
+        Member(node_id, dot, receiver, member) { }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) { }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) { }
+        NewArray(node_id, at, element, length) { }
+        NewMap(node_id, at, map_type) { }
+        Index(node_id, bracket, target_expr, index) { }
+    }
+    if (!failed(lowering)) {
+        fail_at(lowering, open_paren, "calls are supported on named functions only");
+    }
+    return -1;
+}
+
+// lower_user_call lowers one call to a module function. The checker already
+// checked the argument count and the argument types, so the lowering only
+// resolves the callee and lowers every argument in order.
+fn lower_user_call(Lowering lowering, Token name, Expr[] arguments, int argument_count, Function function) -> int {
+    if (!has(lowering.functions, name.text)) {
+        fail_at(lowering, position_of_token(name), "function " + quoted(name.text) + " is not a lowered function");
+        return -1;
+    }
+    int callee = lowering.functions[name.text];
+
+    int[] arguments_lowered = new int[argument_count];
+    int index = 0;
+    while (index < argument_count) {
+        int binding = lower_expression(lowering, arguments[index]);
+        if (failed(lowering)) {
+            return -1;
+        }
+        arguments_lowered[index] = binding;
+        index++;
+    }
+
+    if (is_void(function.return_type)) {
+        push_instruction(lowering.body, Instruction.CallVoid { function = callee, arguments = arguments_lowered, argument_count = argument_count });
+        return -1;
+    }
+    NativeType result = value_shape(lowering, function.return_type, position_of_token(name));
+    if (failed(lowering)) {
+        return -1;
+    }
+    int target = new_temporary(lowering.body, result);
+    push_instruction(lowering.body, Instruction.Call { target = target, function = callee, arguments = arguments_lowered, argument_count = argument_count });
+    return target;
+}
+
+// lower_print_call lowers the print built-in: exactly one argument whose
+// type is string, which the checker rejects in every other form already.
+// The call becomes a void call to the scene's print helper, whose routine
+// writes the string object's payload and the newline blob to standard
+// output.
+fn lower_print_call(Lowering lowering, Expr[] arguments, int argument_count, Position open_paren) -> int {
+    if (argument_count != 1) {
+        fail_at(lowering, open_paren, "print is supported with exactly one argument, but the call passes " + lower_decimal(argument_count));
+        return -1;
+    }
+    if (expr_type(lowering, arguments[0]).kind != TypeKind.String) {
+        fail_at(lowering, open_paren, "print is supported with exactly one string argument");
+        return -1;
+    }
+    int value = lower_expression(lowering, arguments[0]);
+    if (failed(lowering)) {
+        return -1;
+    }
+    int[] print_arguments = new int[1];
+    print_arguments[0] = value;
+    push_instruction(lowering.body, Instruction.CallVoid { function = lowering.print_helper, arguments = print_arguments, argument_count = 1 });
+    return -1;
+}
+
+// lower_exit_call lowers the exit built-in: the status lowers first, and
+// the call becomes the backend's own raw exit_group syscall with the status
+// as its one register argument, which never returns.
+fn lower_exit_call(Lowering lowering, Expr[] arguments, int argument_count, Position open_paren) -> int {
+    if (argument_count != 1) {
+        fail_at(lowering, open_paren, "exit is supported with exactly one argument");
+        return -1;
+    }
+    int status = lower_expression(lowering, arguments[0]);
+    if (failed(lowering)) {
+        return -1;
+    }
+    if (!int_operand(lowering, status, open_paren)) {
+        return -1;
+    }
+    int number = new_temporary(lowering.body, NativeType.Int);
+    push_instruction(lowering.body, Instruction.ConstInt { target = number, value = 60 });
+    int[] syscall_arguments = new int[1];
+    syscall_arguments[0] = status;
+    int target = new_temporary(lowering.body, NativeType.Int);
+    push_instruction(lowering.body, Instruction.RawSyscall { target = target, number = number, arguments = syscall_arguments, argument_count = 1 });
+    return -1;
+}
+
+// --- Statements ------------------------------------------------------------------
+
+// lower_stmt lowers one statement. Blocks open and close a scope; variable
+// declarations allocate their binding in the current scope, initialize it
+// when an initializer is present, and leave an uninitialized binding to
+// hold whatever the slot already holds, exactly as the C generator's plain
+// declarations do; the control-flow statements lay out labels in a fixed
+// shape; and everything outside the subset fails.
+fn lower_stmt(Lowering lowering, Stmt statement) {
+    if (failed(lowering)) {
+        return;
+    }
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            push_scope(lowering);
+            int index = 0;
+            while (index < statement_count) {
+                lower_stmt(lowering, statements[index]);
+                if (failed(lowering)) {
+                    return;
+                }
+                index++;
+            }
+            pop_scope(lowering);
+        }
+        VarDecl(type_ref, name, initializer) {
+            NativeType shape = type_ref_shape(lowering, type_ref);
+            if (failed(lowering)) {
+                return;
+            }
+            int binding = new_temporary(lowering.body, shape);
+            declare(lowering, name.text, binding);
+            match (initializer) {
+                Present(expression) {
+                    int value = lower_expression(lowering, expression);
+                    if (failed(lowering)) {
+                        return;
+                    }
+                    push_instruction(lowering.body, Instruction.Copy { target = binding, source = value });
+                }
+                Absent {
+                }
+            }
+        }
+        Expression(expression) {
+            lower_expression(lowering, expression);
+        }
+        If(at, condition, then_branch, else_branch) {
+            lower_if(lowering, condition, then_branch, else_branch);
+        }
+        While(at, condition, body) {
+            int top = new_label(lowering);
+            int body_label = new_label(lowering);
+            int end = new_label(lowering);
+            define_label(lowering, top);
+            int condition_value = lower_expression(lowering, condition);
+            if (failed(lowering)) {
+                return;
+            }
+            push_instruction(lowering.body, Instruction.Branch { condition = condition_value, label_true = body_label, label_false = end });
+            define_label(lowering, body_label);
+            lower_stmt(lowering, body);
+            if (failed(lowering)) {
+                return;
+            }
+            push_instruction(lowering.body, Instruction.Jump { label = top });
+            define_label(lowering, end);
+        }
+        For(at, initializer, condition, increment, body) {
+            push_scope(lowering);
+            match (initializer) {
+                Present(initial_statement) {
+                    lower_stmt(lowering, initial_statement);
+                }
+                Absent {
+                }
+            }
+            if (failed(lowering)) {
+                return;
+            }
+            int top = new_label(lowering);
+            int body_label = new_label(lowering);
+            int end = new_label(lowering);
+            define_label(lowering, top);
+            match (condition) {
+                Present(condition_expression) {
+                    int condition_value = lower_expression(lowering, condition_expression);
+                    if (failed(lowering)) {
+                        return;
+                    }
+                    push_instruction(lowering.body, Instruction.Branch { condition = condition_value, label_true = body_label, label_false = end });
+                }
+                Absent {
+                    push_instruction(lowering.body, Instruction.Jump { label = body_label });
+                }
+            }
+            define_label(lowering, body_label);
+            lower_stmt(lowering, body);
+            if (failed(lowering)) {
+                return;
+            }
+            match (increment) {
+                Present(increment_expression) {
+                    lower_expression(lowering, increment_expression);
+                    if (failed(lowering)) {
+                        return;
+                    }
+                }
+                Absent {
+                }
+            }
+            push_instruction(lowering.body, Instruction.Jump { label = top });
+            define_label(lowering, end);
+            pop_scope(lowering);
+        }
+        Return(at, value) {
+            match (value) {
+                Present(expression) {
+                    int result = lower_expression(lowering, expression);
+                    if (failed(lowering)) {
+                        return;
+                    }
+                    push_instruction(lowering.body, Instruction.Return { value = result });
+                }
+                Absent {
+                    push_instruction(lowering.body, Instruction.ReturnVoid);
+                }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            fail_at(lowering, position_of_token(at), "match statements are not supported yet");
+        }
+    }
+}
+
+// lower_if lowers one if statement, with the else branch laid out between
+// the then branch and the merge label. An else-if chain is one else branch
+// holding an if statement, so the recursion handles it.
+fn lower_if(Lowering lowering, Expr condition, Stmt then_branch, OptionalStmt else_branch) {
+    int condition_value = lower_expression(lowering, condition);
+    if (failed(lowering)) {
+        return;
+    }
+    int then_label = new_label(lowering);
+    int end_label = new_label(lowering);
+    match (else_branch) {
+        Present(else_statement) {
+            int else_label = new_label(lowering);
+            push_instruction(lowering.body, Instruction.Branch { condition = condition_value, label_true = then_label, label_false = else_label });
+            define_label(lowering, then_label);
+            lower_stmt(lowering, then_branch);
+            if (failed(lowering)) {
+                return;
+            }
+            push_instruction(lowering.body, Instruction.Jump { label = end_label });
+            define_label(lowering, else_label);
+            lower_stmt(lowering, else_statement);
+            if (failed(lowering)) {
+                return;
+            }
+        }
+        Absent {
+            push_instruction(lowering.body, Instruction.Branch { condition = condition_value, label_true = then_label, label_false = end_label });
+            define_label(lowering, then_label);
+            lower_stmt(lowering, then_branch);
+            if (failed(lowering)) {
+                return;
+            }
+        }
+    }
+    define_label(lowering, end_label);
+}
+
+// --- Program ---------------------------------------------------------------------
+
+// body_uses_print reports whether one statement subtree contains a call
+// whose callee resolved to the print built-in. The walk reads the same
+// annotations the lowering reads, so the print helper is registered when
+// and only when resolution will ask for it: a user function named print
+// shadows the built-in, so such a program never registers the helper.
+fn body_uses_print(Lowering lowering, Stmt statement) -> bool {
+    match (statement) {
+        Block(open_brace, statements, statement_count) {
+            int index = 0;
+            while (index < statement_count) {
+                if (body_uses_print(lowering, statements[index])) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        VarDecl(type_ref, name, initializer) {
+            match (initializer) {
+                Present(expression) {
+                    return expression_uses_print(lowering, expression);
+                }
+                Absent {
+                    return false;
+                }
+            }
+        }
+        Expression(expression) {
+            return expression_uses_print(lowering, expression);
+        }
+        If(at, condition, then_branch, else_branch) {
+            if (expression_uses_print(lowering, condition) || body_uses_print(lowering, then_branch)) {
+                return true;
+            }
+            match (else_branch) {
+                Present(statement) {
+                    return body_uses_print(lowering, statement);
+                }
+                Absent {
+                    return false;
+                }
+            }
+        }
+        While(at, condition, body) {
+            return expression_uses_print(lowering, condition) || body_uses_print(lowering, body);
+        }
+        For(at, initializer, condition, increment, body) {
+            match (initializer) {
+                Present(initial_statement) {
+                    if (body_uses_print(lowering, initial_statement)) {
+                        return true;
+                    }
+                }
+                Absent {
+                }
+            }
+            match (condition) {
+                Present(condition_expression) {
+                    if (expression_uses_print(lowering, condition_expression)) {
+                        return true;
+                    }
+                }
+                Absent {
+                }
+            }
+            match (increment) {
+                Present(increment_expression) {
+                    if (expression_uses_print(lowering, increment_expression)) {
+                        return true;
+                    }
+                }
+                Absent {
+                }
+            }
+            return body_uses_print(lowering, body);
+        }
+        Return(at, value) {
+            match (value) {
+                Present(expression) {
+                    return expression_uses_print(lowering, expression);
+                }
+                Absent {
+                    return false;
+                }
+            }
+        }
+        Match(at, scrutinee, arms, arm_count) {
+            return expression_uses_print(lowering, scrutinee);
+        }
+    }
+}
+
+// expression_uses_print is the expression half of the prescan. Only a call
+// whose callee resolved to the print built-in counts; nothing else in the
+// scalar subset holds a callee.
+fn expression_uses_print(Lowering lowering, Expr expression) -> bool {
+    match (expression) {
+        Integer(node_id, token) { return false; }
+        Float(node_id, token) { return false; }
+        String(node_id, token) { return false; }
+        Boolean(node_id, token, value) { return false; }
+        Identifier(node_id, token) { return false; }
+        Unary(node_id, operator, operand, postfix) {
+            return expression_uses_print(lowering, operand);
+        }
+        Binary(node_id, operator, left, right) {
+            return expression_uses_print(lowering, left) || expression_uses_print(lowering, right);
+        }
+        Assign(node_id, operator, target, value) {
+            return expression_uses_print(lowering, target) || expression_uses_print(lowering, value);
+        }
+        Call(node_id, open_paren, callee, arguments, argument_count) {
+            match (callee) {
+                Identifier(callee_id, name) {
+                    ExprInfo info = expression_info(lowering.module, callee_id);
+                    match (info.symbol) {
+                        Present(symbol) {
+                            match (symbol.function) {
+                                Present(function) {
+                                    if (function.builtin == BuiltinKind.Print) {
+                                        return true;
+                                    }
+                                }
+                                Absent {
+                                }
+                            }
+                        }
+                        Absent {
+                        }
+                    }
+                }
+                Integer(callee_id, callee_token) { }
+                Float(callee_id, callee_token) { }
+                String(callee_id, callee_token) { }
+                Boolean(callee_id, callee_token, callee_value) { }
+                Unary(callee_id, callee_operator, callee_operand, callee_postfix) { }
+                Binary(callee_id, callee_operator, callee_left, callee_right) { }
+                Assign(callee_id, callee_operator, callee_target, callee_value) { }
+                Call(callee_id, inner_open_paren, inner_callee, inner_arguments, inner_argument_count) { }
+                Member(callee_id, callee_dot, callee_receiver, callee_member) { }
+                StructLiteral(callee_id, callee_type, callee_brace, callee_fields, callee_field_count) { }
+                VariantLiteral(callee_id, callee_type, callee_variant, callee_brace, callee_fields, callee_field_count) { }
+                NewArray(callee_id, callee_at, callee_element, callee_length) { }
+                NewMap(callee_id, callee_at, callee_type) { }
+                Index(callee_id, callee_bracket, callee_target, callee_index) { }
+            }
+            int index = 0;
+            while (index < argument_count) {
+                if (expression_uses_print(lowering, arguments[index])) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        Member(node_id, dot, receiver, member) {
+            return expression_uses_print(lowering, receiver);
+        }
+        StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                if (expression_uses_print(lowering, fields[index].value)) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
+            int index = 0;
+            while (index < field_count) {
+                if (expression_uses_print(lowering, fields[index].value)) {
+                    return true;
+                }
+                index++;
+            }
+            return false;
+        }
+        NewArray(node_id, at, element, length) {
+            return expression_uses_print(lowering, length);
+        }
+        NewMap(node_id, at, map_type) {
+            return false;
+        }
+        Index(node_id, bracket, target, index) {
+            return expression_uses_print(lowering, target) || expression_uses_print(lowering, index);
+        }
+    }
+}
+
+// register_shells walks the module's declarations in order: it fails on
+// every non-function declaration, maps every function's parameter and
+// return types onto the scene's shapes, appends one empty function per
+// declaration, records the table, and applies the entry-rule checks the
+// C generator applies to main.
+fn register_shells(Lowering lowering) {
+    Program program = lowering.module.program;
+    int index = 0;
+    while (index < program.declaration_count) {
+        Decl declaration = program.declarations[index];
+        match (declaration) {
+            Import(keyword, path) {
+                fail_at(lowering, position_of_token(keyword), "imports are not supported yet");
+                return;
+            }
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                OptionalFunction resolved = declaration_function(lowering.module, name.text);
+                match (resolved) {
+                    Present(function) {
+                        NativeType[] shapes = new NativeType[parameter_count];
+                        int parameter = 0;
+                        while (parameter < parameter_count) {
+                            shapes[parameter] = type_ref_shape(lowering, parameters[parameter].type);
+                            if (failed(lowering)) {
+                                return;
+                            }
+                            parameter++;
+                        }
+                        NativeType result = NativeType.Void;
+                        match (return_type) {
+                            Present(reference) {
+                                result = type_ref_shape(lowering, reference);
+                                if (failed(lowering)) {
+                                    return;
+                                }
+                            }
+                            Absent {
+                            }
+                        }
+                        int scene_index = add_function(lowering.scene, name.text, result, shapes, parameter_count);
+                        declare_function(lowering, name.text, scene_index);
+                        if (name.text == "main") {
+                            lowering.main_index = scene_index;
+                            if (parameter_count != 0) {
+                                fail_at(lowering, position_of_token(at), "main must take no parameters");
+                                return;
+                            }
+                            if (!is_void(function.return_type)) {
+                                fail_at(lowering, position_of_token(at), "main must not return a value");
+                                return;
+                            }
+                        }
+                    }
+                    Absent {
+                        fail_at(lowering, position_of_token(at), "function " + quoted(name.text) + " is not resolved");
+                        return;
+                    }
+                }
+            }
+            Struct(at, visibility, name, fields, field_count) {
+                fail_at(lowering, position_of_token(at), "struct declarations are not supported yet");
+                return;
+            }
+            Enum(at, visibility, name, cases, case_count) {
+                fail_at(lowering, position_of_token(at), "enum declarations are not supported yet");
+                return;
+            }
+            Union(at, visibility, name, variants, variant_count) {
+                fail_at(lowering, position_of_token(at), "union declarations are not supported yet");
+                return;
+            }
+        }
+        index++;
+    }
+}
+
+// declare_function records one scene function index under its source name.
+// Duplicate names are impossible: the checker rejected them.
+fn declare_function(Lowering lowering, string name, int scene_index) {
+    lowering.functions[name] = scene_index;
+}
+
+// lower_bodies lowers every function body in declaration order into its
+// registered shell: the parameters land in the body's outermost scope
+// first, the walk creates bindings in order, and the selector's defensive
+// epilogue covers any function whose statements do not end in a return.
+fn lower_bodies(Lowering lowering) {
+    Program program = lowering.module.program;
+    int index = 0;
+    while (index < program.declaration_count) {
+        Decl declaration = program.declarations[index];
+        match (declaration) {
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                NativeFunction handle = function_at(lowering.scene, lowering.functions[name.text]);
+                lowering.body = handle;
+                lowering.label_next = 0;
+                lowering.scope_count = 0;
+                push_scope(lowering);
+                int parameter = 0;
+                while (parameter < parameter_count) {
+                    declare(lowering, parameters[parameter].name.text, parameter);
+                    parameter++;
+                }
+                lower_stmt(lowering, body);
+                if (failed(lowering)) {
+                    return;
+                }
+            }
+            Import(keyword, path) { }
+            Struct(at, visibility, name, fields, field_count) { }
+            Enum(at, visibility, name, cases, case_count) { }
+            Union(at, visibility, name, variants, variant_count) { }
+        }
+        index++;
+    }
+}
+
+// lower_print_helper fills the scene's print helper with the runtime-shaped
+// routine: it reads the string object's length and payload pointer and
+// issues two write syscalls, the string's payload and then the newline
+// blob's payload. The routine is the same paragraph the 10.2 probe's
+// hand-built scenes carry, addressed through "$print" so no user function
+// can ever collide with it.
+fn lower_print_helper(Lowering lowering) {
+    NativeFunction print_function = function_at(lowering.scene, lowering.print_helper);
+    lowering.body = print_function;
+    lowering.label_next = 0;
+    lowering.scope_count = 0;
+    push_scope(lowering);
+
+    int length_binding = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawLoad64 { target = length_binding, address = 0, offset = 0 });
+    int data_binding = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = data_binding, address = 0, offset = 8 });
+
+    int one = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = one, value = 1 });
+    int write = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = write, value = 1 });
+    int[] write_arguments = new int[3];
+    write_arguments[0] = one;
+    write_arguments[1] = data_binding;
+    write_arguments[2] = length_binding;
+    int first = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = first, number = write, arguments = write_arguments, argument_count = 3 });
+
+    int newline_ref = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = lowering.print_newline });
+    int newline_data = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = newline_data, address = newline_ref, offset = 8 });
+    int one_again = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = one_again, value = 1 });
+    int count_one = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = count_one, value = 1 });
+    int[] newline_arguments = new int[3];
+    newline_arguments[0] = one_again;
+    newline_arguments[1] = newline_data;
+    newline_arguments[2] = count_one;
+    int second = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = second, number = write, arguments = newline_arguments, argument_count = 3 });
+
+    push_instruction(print_function, Instruction.ReturnVoid);
+}
+
+// lower_program lowers a successfully checked model into one scene. The
+// lowering covers exactly the scalar, allocation-free subset: it registers
+// one shell per function declaration, registers the print helper when some
+// resolution needs it, lowers every body, lowers the helper, and sets the
+// entry to main. Any unsupported construct fails the whole run with one
+// deterministic message; nothing is returned partially.
+public fn lower_program(SemanticModel model) -> LowerResult {
+    if (model.module_count != 1) {
+        return LowerResult.Failed {
+            message = "the native lowering supports a single-module program, but the program has " + lower_decimal(model.module_count) + " modules"
+        };
+    }
+
+    Lowering lowering = new_lowering(model);
+    register_shells(lowering);
+    if (failed(lowering)) {
+        return LowerResult.Failed { message = lowering.failure };
+    }
+    if (lowering.main_index < 0) {
+        return LowerResult.Failed { message = "the program has no main function" };
+    }
+
+    bool needs_print = false;
+    Program program = lowering.module.program;
+    int index = 0;
+    while (index < program.declaration_count) {
+        Decl declaration = program.declarations[index];
+        match (declaration) {
+            Function(at, visibility, name, parameters, parameter_count, return_type, body) {
+                if (body_uses_print(lowering, body)) {
+                    needs_print = true;
+                }
+            }
+            Import(keyword, path) { }
+            Struct(at, visibility, name, fields, field_count) { }
+            Enum(at, visibility, name, cases, case_count) { }
+            Union(at, visibility, name, variants, variant_count) { }
+        }
+        index++;
+    }
+    if (needs_print) {
+        lowering.print_newline = add_blob(lowering.scene, "\n");
+        NativeType[] one_reference = new NativeType[1];
+        one_reference[0] = NativeType.Ref;
+        lowering.print_helper = add_function(lowering.scene, "$print", NativeType.Void, one_reference, 1);
+    }
+
+    lower_bodies(lowering);
+    if (failed(lowering)) {
+        return LowerResult.Failed { message = lowering.failure };
+    }
+    if (lowering.print_helper >= 0) {
+        lower_print_helper(lowering);
+    }
+
+    lowering.scene.entry = lowering.main_index;
+    return LowerResult.Ok { scene = lowering.scene };
+}

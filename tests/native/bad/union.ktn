@@ -1,0 +1,10 @@
+union Shape {
+    Circle {
+        int radius;
+    }
+    Square {
+        int side;
+    }
+}
+fn main() {
+}

@@ -1,0 +1,32 @@
+fn step(int value) -> int {
+    return value * 3 - 1;
+}
+fn fold(int total) -> bool {
+    return total / 5 > 3;
+}
+fn wrap() -> bool {
+    int under = -1;
+    int flipped = 47 / under;
+    int remains = 47 % under;
+    return flipped < remains;
+}
+fn negcheck() {
+    if (wrap()) {
+        print("negged");
+    }
+}
+fn main() {
+    int total = 47;
+    int round = 0;
+    while (round < 5) {
+        total = step(total);
+        round = round + 1;
+    }
+    bool big = fold(total);
+    if (big) {
+        print("large");
+    } else {
+        print("small");
+    }
+    negcheck();
+}

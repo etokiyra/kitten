@@ -5,7 +5,11 @@ package main
 // print-hello skeleton target and a growth scene) plus the Phase 10.3
 // arithmetic-and-control-flow scene and its divide-failure sibling, checks
 // them with check_scene, and renders them with the text renderer; their
-// output and every validation message are pinned literally here. The ELF
+// output and every validation message are pinned literally here. Since Phase
+// 10.4 the probe also lowers real sources: the `lower` mode loads and checks
+// a program with the Kitten-written loader and checker and reduces its
+// scalar subset into a scene, whose rendering and executable the tests pin
+// and compare with the C pipeline's behavior for the same source. The ELF
 // tests execute the produced executables and compare them with the C
 // pipeline's behavior for mirrored sources. See selfhost/native/README.md
 // for the scene's contract and the spelling rules.
@@ -264,11 +268,11 @@ func TestNativeProbeFailures(t *testing.T) {
 
 func TestNativeProbeTooManyArguments(t *testing.T) {
 	executable := buildNativeProbe(t)
-	result := runExternal(t, executable, []string{"one", "two", "three"}, t.TempDir(), nil)
+	result := runExternal(t, executable, []string{"one", "two", "three", "four"}, t.TempDir(), nil)
 	if result.status != 2 {
 		t.Fatalf("status %d, want 2", result.status)
 	}
-	if result.stderr != "native: expected at most two arguments\n" {
+	if result.stderr != "native: expected at most three arguments\n" {
 		t.Fatalf("stderr %q", result.stderr)
 	}
 	if result.stdout != "" {
@@ -479,6 +483,237 @@ func goPurrReference(t *testing.T) string {
 	return buildGoPurr(t)
 }
 
+// The Phase 10.4 pool render, pinned: equal literals share one blob, the
+// helper's newline blob comes first, and the helper is named "$print" so no
+// user name can collide with it.
+const wantPoolScene = `scene
+data $blob0: 1 bytes 10
+data $blob1: 4 bytes 115 97 109 101
+data $blob2: 5 bytes 111 116 104 101 114
+entry 0 @main
+fn @main () -> void
+  b0: ref binding
+  b1: ref binding
+  b2: ref binding
+  b3: ref binding
+  b4: ref binding
+  b5: ref binding
+  b1: ref = data $blob1
+  b0: ref = copy b1
+  b3: ref = data $blob1
+  b2: ref = copy b3
+  b5: ref = data $blob2
+  b4: ref = copy b5
+  call @1 b0
+  call @1 b2
+  call @1 b4
+fn @$print (p0: ref) -> void
+  b0: ref binding
+  b1: int binding
+  b2: ref binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: ref binding
+  b7: ref binding
+  b8: int binding
+  b9: int binding
+  b10: int binding
+  b1: int = raw_load64 b0 0
+  b2: ref = raw_load64 b0 8
+  b3: int = const 1
+  b4: int = const 1
+  b5: int = raw_syscall syscall b4 b3 b2 b1
+  b6: ref = data $blob0
+  b7: ref = raw_load64 b6 8
+  b8: int = const 1
+  b9: int = const 1
+  b10: int = raw_syscall syscall b4 b8 b7 b9
+  return
+
+`
+
+// lowerCorpusSources returns the scalar corpus programs the lowering runs.
+func lowerCorpusSources(t *testing.T) []string {
+	t.Helper()
+	sources, err := filepath.Glob(repoPath(t, "..", "..", "tests", "native", "*.ktn"))
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("globbing the native corpus: %v (%d sources)", err, len(sources))
+	}
+	return sources
+}
+
+// TestNativeProbeLowerCorpus lowers every corpus program into a static ELF
+// with no C compiler, runs it with an empty PATH, and demands the output,
+// standard error, and status of the C pipeline's build of the same source;
+// the Kitten pipeline's production is byte-compared in its own test. The
+// sources stay deliberately small because the selector's slice frame carries
+// at most fourteen locals per function.
+func TestNativeProbeLowerCorpus(t *testing.T) {
+	requireToolchain(t)
+	executable := buildNativeProbe(t)
+	purr := goPurrReference(t)
+	for _, source := range lowerCorpusSources(t) {
+		name := strings.TrimSuffix(filepath.Base(source), ".ktn")
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			cRun := runExternal(t, purr, []string{"run", source}, directory, nil)
+
+			native := filepath.Join(directory, name)
+			written := runExternal(t, executable, []string{"lower", source, native}, directory, nil)
+			if written.status != 0 || written.stderr != "" || written.stdout != "built "+native+"\n" {
+				t.Fatalf("lower: status %d, stdout %q, stderr %q", written.status, written.stdout, written.stderr)
+			}
+			if err := os.Chmod(native, 0o755); err != nil {
+				t.Fatalf("chmod native: %v", err)
+			}
+
+			run := runExternal(t, native, nil, directory, []string{"PATH=/nonexistent"})
+			if run.status != cRun.status || run.stdout != cRun.stdout || run.stderr != cRun.stderr {
+				t.Fatalf("native behavior differs:\nC: %d %q %q\nnative: %d %q %q",
+					cRun.status, cRun.stdout, cRun.stderr, run.status, run.stdout, run.stderr)
+			}
+
+			// The production is deterministic: a rebuild is byte-identical.
+			again := filepath.Join(directory, name+"-again")
+			if written := runExternal(t, executable, []string{"lower", source, again}, directory, nil); written.status != 0 {
+				t.Fatalf("rebuild status %d", written.status)
+			}
+			first, err := os.ReadFile(native)
+			if err != nil {
+				t.Fatalf("reading the first ELF: %v", err)
+			}
+			second, err := os.ReadFile(again)
+			if err != nil {
+				t.Fatalf("reading the rebuilt ELF: %v", err)
+			}
+			if string(first) != string(second) {
+				t.Fatalf("two productions of %s differ in %d bytes", name, len(first))
+			}
+		})
+	}
+}
+
+// TestNativeProbeLowerRender pins the pooled string-literal scene's
+// rendering, byte for byte.
+func TestNativeProbeLowerRender(t *testing.T) {
+	executable := buildNativeProbe(t)
+	source := repoPath(t, "..", "..", "tests", "native", "pool.ktn")
+	result := runExternal(t, executable, []string{"lower", source}, t.TempDir(), nil)
+	if result.status != 0 || result.stderr != "" {
+		t.Fatalf("pool render: status %d, stderr %q", result.status, result.stderr)
+	}
+	if result.stdout != wantPoolScene {
+		t.Fatalf("pool render differs:\n--- got ---\n%s--- want ---\n%s", result.stdout, wantPoolScene)
+	}
+}
+
+// lowerFailureCase is one unsupported-construct source with its expected
+// message tail. A positionless case omits the position; the loader's
+// read-failure spelling (path with no position) is the pathOnly kind.
+type lowerFailureCase struct {
+	file    string
+	line    string
+	col     string
+	kind    string // "", "pathless", or "readerror"
+	message string
+}
+
+func lowerFailureCases(badDirectory string) []lowerFailureCase {
+	return []lowerFailureCase{
+		{file: "array.ktn", line: "2", col: "5", message: "array values are not supported yet"},
+		{file: "bits.ktn", line: "2", col: "18", message: "bitwise operators are not supported yet"},
+		{file: "booleq.ktn", line: "2", col: "22", message: "comparing bool values is not supported yet"},
+		{file: "concat.ktn", line: "4", col: "25", message: "string concatenation is not supported yet"},
+		{file: "enum.ktn", line: "1", col: "1", message: "enum declarations are not supported yet"},
+		{file: "eprint.ktn", line: "2", col: "5", message: `built-in "eprint" is not supported yet`},
+		{file: "float.ktn", line: "2", col: "5", message: "float values are not supported yet"},
+		{file: "imported.ktn", kind: "pathless", message: "the program has no main function"},
+		{file: "import.ktn", kind: "pathless", message: "the native lowering supports a single-module program, but the program has 2 modules"},
+		{file: "index.ktn", line: "2", col: "10", message: "indexing is not supported yet"},
+		{file: "lex.ktn", line: "2", col: "29", message: "newline in string literal"},
+		{file: "length.ktn", line: "2", col: "16", message: `built-in "length" is not supported yet`},
+		{file: "map.ktn", line: "2", col: "5", message: "map values are not supported yet"},
+		{file: "missing.ktn", kind: "readerror", message: "cannot read source file: open " + filepath.Join(badDirectory, "not_here.ktn") + ": no such file or directory"},
+		{file: "parse.ktn", line: "2", col: "17", message: `expected an expression, found Semicolon ";"`},
+		{file: "printint.ktn", line: "2", col: "10", message: "print is supported with exactly one string argument"},
+		{file: "printmany.ktn", line: "2", col: "10", message: "print is supported with exactly one argument, but the call passes 2"},
+		{file: "streq.ktn", line: "2", col: "23", message: "string equality is not supported yet"},
+		{file: "struct.ktn", line: "1", col: "1", message: "struct declarations are not supported yet"},
+		{file: "typeerror.ktn", line: "2", col: "17", message: `initializer for variable "value": expected int, found string`},
+		{file: "union.ktn", line: "1", col: "1", message: "union declarations are not supported yet"},
+	}
+}
+
+// lowerFailureWant composes the expected `error` line for one case under one
+// bad directory spelling.
+func lowerFailureWant(badDirectory string, failure lowerFailureCase) string {
+	source := filepath.Join(badDirectory, failure.file)
+	lead := "error " + source
+	if failure.kind == "pathless" {
+		return "error " + failure.message + "\n"
+	}
+	if failure.kind == "readerror" || failure.line == "0" {
+		if failure.kind == "readerror" {
+			// A read failure names the missing file, not the importer.
+			missing := filepath.Join(badDirectory, "not_here.ktn")
+			return "error " + missing + ": " + failure.message + "\n"
+		}
+		return lead + ": " + failure.message + "\n"
+	}
+	return "error " + source + ":" + failure.line + ":" + failure.col + ": " + failure.message + "\n"
+}
+
+// TestNativeProbeLowerFailures pins one deterministic message per
+// unsupported construct, lex error, parse error, check error, and load
+// failure: on standard output, with status 1 and empty standard error,
+// exactly like the failure scenes above.
+func TestNativeProbeLowerFailures(t *testing.T) {
+	executable := buildNativeProbe(t)
+	bad := repoPath(t, "..", "..", "tests", "native", "bad")
+	directory := t.TempDir()
+	for _, failure := range lowerFailureCases(bad) {
+		t.Run(failure.file, func(t *testing.T) {
+			source := filepath.Join(bad, failure.file)
+			result := runExternal(t, executable, []string{"lower", source}, directory, nil)
+			if result.status != 1 {
+				t.Fatalf("status %d, want 1", result.status)
+			}
+			want := lowerFailureWant(filepath.Clean(bad), failure)
+			if result.stdout != want {
+				t.Fatalf("failure message differs:\n--- got ---\n%s--- want ---\n%s", result.stdout, want)
+			}
+			if result.stderr != "" {
+				t.Fatalf("stderr %q, want empty", result.stderr)
+			}
+		})
+	}
+}
+
+// TestNativeProbeLowerFrameLimit lowers an oversized function: the scene is
+// valid, so the failure arrives from the selector's frame layout, with the
+// C runtime's status behavior intact and no file written.
+func TestNativeProbeLowerFrameLimit(t *testing.T) {
+	requireToolchain(t)
+	executable := buildNativeProbe(t)
+	directory := t.TempDir()
+	source := repoPath(t, "..", "..", "tests", "native", "bad", "bigfn.ktn")
+	native := filepath.Join(directory, "big")
+	result := runExternal(t, executable, []string{"lower", source, native}, directory, nil)
+	if result.status != 1 {
+		t.Fatalf("status %d, want 1", result.status)
+	}
+	if result.stderr != "native: function @main: 30 locals do not fit the slice's frame layout\n" {
+		t.Fatalf("stderr %q", result.stderr)
+	}
+	if result.stdout != "" {
+		t.Fatalf("stdout %q, want empty", result.stdout)
+	}
+	if _, err := os.Stat(native); !os.IsNotExist(err) {
+		t.Fatalf("an oversized function's production exists")
+	}
+}
+
 // TestNativeProbeKittenPipeline builds the probe with the Kitten-written
 // purr-kt sidecar, so the typed-IR module also compiles and behaves through
 // the Kitten pipeline, and compares every probe output against the pinned
@@ -592,5 +827,89 @@ func TestNativeProbeKittenPipelineSkeleton(t *testing.T) {
 				t.Fatalf("Kitten-produced native run: %d %q %q", run.status, run.stdout, run.stderr)
 			}
 		}
+	}
+}
+
+// TestNativeProbeKittenPipelineLower builds the probe with the Kitten-written
+// purr-kt sidecar as well and opposes the two pipelines over the whole
+// lowering corpus: every scene rendering and every lowering failure message
+// must agree byte for byte, and each corpus program's ELF must be
+// byte-identical. The Kitten-produced arithmetic executable's behavior is
+// asserted directly against the C pipeline's build; the rest share the ELF
+// bytes exactly. The bad corpus lives in one directory used for every run,
+// so the canonical paths inside message texts agree too.
+func TestNativeProbeKittenPipelineLower(t *testing.T) {
+	requireToolchain(t)
+	stage1 := buildStage1(t)
+	kittenPurr := buildPurrKTWithKitten(t, stage1)
+	ktExecutable := filepath.Join(t.TempDir(), "native-probe-kt")
+	built := runPurrKT(t, kittenPurr, t.TempDir(), []string{
+		"build", repoPath(t, "..", "..", "selfhost", "native.ktn"), "-o", ktExecutable,
+	})
+	if built.status != 0 || built.stderr != "" || built.stdout != "built "+ktExecutable+"\n" {
+		t.Fatalf("Kitten build of the native probe: status %d, stdout %q, stderr %q",
+			built.status, built.stdout, built.stderr)
+	}
+	goExecutable := buildNativeProbe(t)
+
+	// One directory for every run, so message texts carrying paths agree.
+	directory := t.TempDir()
+	sources := lowerCorpusSources(t)
+
+	for _, source := range sources {
+		name := filepath.Base(source)
+		t.Run(name, func(t *testing.T) {
+			goRender := runExternal(t, goExecutable, []string{"lower", source}, directory, nil)
+			ktRender := runExternal(t, ktExecutable, []string{"lower", source}, directory, nil)
+			if ktRender.status != goRender.status || ktRender.stdout != goRender.stdout || ktRender.stderr != goRender.stderr {
+				t.Fatalf("renders differ:\nGo: %d %q %q\nKitten: %d %q %q",
+					goRender.status, goRender.stdout, goRender.stderr,
+					ktRender.status, ktRender.stdout, ktRender.stderr)
+			}
+
+			goNative := filepath.Join(directory, name+"-go")
+			pthread := filepath.Join(directory, name+"-kt")
+			if written := runExternal(t, goExecutable, []string{"lower", source, goNative}, directory, nil); written.status != 0 {
+				t.Fatalf("Go pipeline lower: status %d, stderr %q", written.status, written.stderr)
+			}
+			if written := runExternal(t, ktExecutable, []string{"lower", source, pthread}, directory, nil); written.status != 0 {
+				t.Fatalf("Kitten pipeline lower: status %d, stderr %q", written.status, written.stderr)
+			}
+			goBytes, err := os.ReadFile(goNative)
+			if err != nil {
+				t.Fatalf("reading the Go-produced ELF: %v", err)
+			}
+			ktBytes, err := os.ReadFile(pthread)
+			if err != nil {
+				t.Fatalf("reading the Kitten-produced ELF: %v", err)
+			}
+			if string(goBytes) != string(ktBytes) {
+				t.Fatalf("the two pipelines' %s ELFs differ in %d bytes", name, len(goBytes))
+			}
+
+			if name == "arith.ktn" {
+				if err := os.Chmod(pthread, 0o755); err != nil {
+					t.Fatalf("chmod the Kitten-produced ELF: %v", err)
+				}
+				run := runExternal(t, pthread, nil, directory, []string{"PATH=/nonexistent"})
+				if run.status != 0 || run.stdout != "large\nnegged\n" || run.stderr != "" {
+					t.Fatalf("Kitten-produced arith run: %d %q %q", run.status, run.stdout, run.stderr)
+				}
+			}
+		})
+	}
+
+	bad := filepath.Clean(repoPath(t, "..", "..", "tests", "native", "bad"))
+	for _, failure := range lowerFailureCases(bad) {
+		t.Run("bad-"+failure.file, func(t *testing.T) {
+			source := filepath.Join(bad, failure.file)
+			goResult := runExternal(t, goExecutable, []string{"lower", source}, directory, nil)
+			ktResult := runExternal(t, ktExecutable, []string{"lower", source}, directory, nil)
+			if ktResult.status != goResult.status || ktResult.stdout != goResult.stdout || ktResult.stderr != goResult.stderr {
+				t.Fatalf("failures differ for %s:\nGo: %d %q %q\nKitten: %d %q %q",
+					failure.file, goResult.status, goResult.stdout, goResult.stderr,
+					ktResult.status, ktResult.stdout, ktResult.stderr)
+			}
+		})
 	}
 }

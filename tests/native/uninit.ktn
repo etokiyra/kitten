@@ -1,0 +1,10 @@
+fn main() {
+    int value;
+    value = 5;
+    if (value == 5) {
+        print("set");
+    }
+    string text;
+    text = "later";
+    print(text);
+}

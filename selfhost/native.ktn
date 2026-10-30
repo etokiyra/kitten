@@ -8,23 +8,34 @@
 // scene into a static ELF64 executable and writes that file directly, with
 // no C compiler anywhere; `elf-arith` and `elf-divzero` do the same for the
 // Phase 10.3 scenes that exercise arithmetic, comparisons, control flow,
-// calls, and the guarded divide failure.
+// calls, and the guarded divide failure. Since Phase 10.4 the probe also
+// lowers real sources: `lower <path>` loads and checks a checked single-file
+// program with the Kitten-written loader and checker, reduces its scalar
+// subset with the Kitten-written lowering, and prints the scene's rendering,
+// with `lower <path> <output>` writing the program's static executable
+// instead.
 //
-//     native                  print the valid scene's rendering
-//     native <mode>           print one failure scene's check message
-//     native elf <path>       write the skeleton target's executable
-//     native elf-arith ...    write the arithmetic-and-control-flow executable
-//     native elf-divzero ...  write the divide-failure executable
-//     native big              render the growth corpus
-//     native arith            render the arithmetic-and-control-flow scene
+//     native                     print the valid scene's rendering
+//     native <mode>              print one failure scene's check message
+//     native elf <path>          write the skeleton target's executable
+//     native elf-arith ...       write the arithmetic-and-control-flow executable
+//     native elf-divzero ...     write the divide-failure executable
+//     native big                 render the growth corpus
+//     native arith               render the arithmetic-and-control-flow scene
+//     native lower <source>      render a real source's lowered scene
+//     native lower <src> <out>   write a real source's static executable
 //
 // Modes: no-label, bad-binding, bad-call-count, bad-call-shape, bad-entry,
 // undefined-label. This is test infrastructure: the rendering and error
 // messages go to standard output and standard error stays empty.
 
 import "loader/loader.ktn";
+import "checker/checker.ktn";
+import "checker/model.ktn";
+import "checker/state.ktn";
 import "native/ir.ktn";
 import "native/text.ktn";
+import "native/lower.ktn";
 import "native/selector.ktn";
 import "native/elf.ktn";
 
@@ -442,10 +453,74 @@ fn run_elf(NativeScene scene, string path) {
     }
 }
 
+// positioned renders one failure's full diagnostic spelling: the path, and
+// the line and column when the failure carries a position. The loader's
+// read failures carry no position, exactly like the reference loader's.
+fn positioned(string path, int line, int column, string message) -> string {
+    if (line == 0) {
+        return path + ": " + message;
+    }
+    return path + ":" + decimal(line) + ":" + decimal(column) + ": " + message;
+}
+
+// lower_mode lowers one real source: it loads and checks the program with
+// the Kitten-written loader and checker, reduces it with the native
+// lowering, and either prints the scene's rendering (an empty output) or
+// selects, assembles, and writes its static ELF through run_elf. Every
+// failure prints one `error` line and exits with status 1; the messages
+// carry the failure's path, position, and text.
+fn lower_mode(string source, string output) {
+    match (load_program(source)) {
+        Failure(error) {
+            print("error " + positioned(error.path, error.line, error.column, error.message));
+            exit(1);
+        }
+        Success(modules, module_count) {
+            match (check_modules(modules, module_count)) {
+                Failure(check_error) {
+                    print("error " + positioned(check_error.file, check_error.line, check_error.column, check_error.message));
+                    exit(1);
+                }
+                Success(summary, model) {
+                    match (lower_program(model)) {
+                        Failed(message) {
+                            print("error " + message);
+                            exit(1);
+                        }
+                        Ok(scene) {
+                            if (length(output) != 0) {
+                                run_elf(scene, output);
+                            }
+                            match (check_scene(scene)) {
+                                Failed(message) {
+                                    print("error " + message);
+                                    exit(1);
+                                }
+                                Ok {
+                                    print(render(scene));
+                                    exit(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     string[] arguments = argv();
-    if (length(arguments) > 3) {
-        eprint("native: expected at most two arguments");
+    if (length(arguments) > 4) {
+        eprint("native: expected at most three arguments");
+        exit(2);
+    }
+
+    if (length(arguments) == 4) {
+        if (arguments[1] == "lower") {
+            lower_mode(arguments[2], arguments[3]);
+        }
+        eprint("native: unknown mode " + arguments[1]);
         exit(2);
     }
 
@@ -456,6 +531,8 @@ fn main() {
             run_elf(build_arith(), arguments[2]);
         } else if (arguments[1] == "elf-divzero") {
             run_elf(build_divzero(), arguments[2]);
+        } else if (arguments[1] == "lower") {
+            lower_mode(arguments[2], "");
         } else {
             eprint("native: unknown mode " + arguments[1]);
             exit(2);

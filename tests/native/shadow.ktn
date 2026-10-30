@@ -1,0 +1,25 @@
+fn inside() {
+    int value = 5;
+    if (value == 5) {
+        int counter = value + 1;
+        if (counter == 6) {
+            print("inner");
+        }
+    }
+}
+fn outside() {
+    int value = 5;
+    if (value == 5) {
+        print("outer");
+    }
+    string word = "same";
+    if (value == 5) {
+        string word = "other";
+        print(word);
+    }
+    print(word);
+}
+fn main() {
+    inside();
+    outside();
+}

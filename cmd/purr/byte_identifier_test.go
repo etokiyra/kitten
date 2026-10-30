@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"kitten/lexer"
@@ -14,7 +15,9 @@ import (
 // tokenizes every Kitten source file in the repository so comments and string
 // contents cannot hide or falsely report the word, and fails when byte is still
 // used as an identifier. After 8.3b, byte as a type keyword has its own token
-// kind and is intentionally not reported here.
+// kind and is intentionally not reported here. The native lowering's
+// `tests/native/bad` directory is skipped: its failure-mode sources
+// intentionally include lexical errors, which are pinned as such.
 func TestNoByteIdentifierTokens(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -28,6 +31,9 @@ func TestNoByteIdentifierTokens(t *testing.T) {
 		}
 		if entry.IsDir() {
 			if entry.Name() == ".git" {
+				return fs.SkipDir
+			}
+			if entry.Name() == "bad" && strings.HasSuffix(filepath.ToSlash(path), "tests/native/bad") {
 				return fs.SkipDir
 			}
 			return nil

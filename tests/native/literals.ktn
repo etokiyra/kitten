@@ -1,0 +1,26 @@
+fn bases() {
+    int hex = 0xFF;
+    int binary = 0b101;
+    if (hex == 255) {
+        print("hex");
+    }
+    if (binary == 5) {
+        print("bin");
+    }
+}
+fn inline() {
+    if (0x10 == 16) {
+        print("inline");
+    }
+}
+fn top() {
+    int bits = 0x7FFFFFFFFFFFFFFF;
+    if (bits == 9223372036854775807) {
+        print("top");
+    }
+}
+fn main() {
+    bases();
+    inline();
+    top();
+}

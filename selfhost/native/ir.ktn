@@ -171,7 +171,7 @@ fn decimal(int value) -> string {
 
 // new_function allocates an empty function whose binding table starts with
 // spare space and which defines zero labels.
-fn new_function(string name, NativeType result) -> NativeFunction {
+public fn new_function(string name, NativeType result) -> NativeFunction {
     return NativeFunction {
         name = name,
         result = result,
