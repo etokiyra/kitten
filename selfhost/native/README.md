@@ -26,14 +26,27 @@ underflow as the C toolchain does), the scene grew its SSE2 forms
 the exact NaN-handling sequences the C generators emit, float results
 return in `xmm0`, and the corpus exercises the edges — ties, NaN, infinity,
 the subnormal rounding-to-zero edge, both increment positions — against
-the C pipeline byte for byte. Printing floats and value conversions stay
-with the runtime slice.
+the C pipeline byte for byte. Phase 10.6 landed the runtime foundations
+(`native/runtime.ktn`): every blob is one object on the proposal Section
+5.3 header ABI (SPEC Section 19.10) — an 8-byte header word carrying the
+whole size, an 8-byte length, an 8-byte payload pointer, and the payload —
+GetStatic/SetStatic reach a blob's payload for the heap cursor, the bump
+allocator maps one lazy 256 MiB region through `$map`/`$alloc` over a raw
+mmap and halts with the C runtime's exact `purr: out of memory` text at
+status 1, and print(int)/print(bool) lower into decimal-digit and
+true/false helpers that byte-match the C pipeline. The mark-sweep GC,
+string length/equality, and `%g` float printing stay with the runtime
+slices that follow.
 
 ## Files
 
 - `selfhost/native/ir.ktn` — `NativeScene`, its builders, and `check_scene`,
   the whole-scene well-formedness pass; `push_instruction` snapshots call
   argument arrays so the scene stays an immutable snapshot.
+- `selfhost/native/runtime.ktn` — the runtime shells: the `$heap` blob, the
+  `$map`/`$alloc` bump allocator, and the string, digit, and bool print
+  helpers, registered through the same builders the lowering and the probe
+  use; every shell stays below the slice's fourteen-local frame layout.
 - `selfhost/native/lower.ktn` — the lowering from a checked program's
   semantic model to one scene, covering the scalar subset, with one
   deterministic message for every unsupported construct (top of the
@@ -51,11 +64,12 @@ with the runtime slice.
   the two program headers, header-and-code text segment, page-aligned data
   segment, and the entry point.
 - `selfhost/native.ktn` — the probe: the skeleton target's scene, the
-  arithmetic scene, the divide-failure scene, the growth scene, the failure
-  scenes, the `lower` driver over real sources — `load_program` →
-  `check_modules` → `lower_program` → `check_scene` → `select_scene` and the
-  writer — and `elf`, `elf-arith`, `elf-divzero`, and `lower <source>
-  [<output>]`, which write runnable executables.
+  arithmetic scene, the divide-failure scene, the allocation-failure scene,
+  the growth scene, the failure scenes, the `lower` driver over real
+  sources — `load_program` → `check_modules` → `lower_program` →
+  `check_scene` → `select_scene` and the writer — and `elf`, `elf-arith`,
+  `elf-divzero`, `elf-oom`, and `lower <source> [<output>]`, which write
+  runnable executables.
 - `cmd/purr/native_test.go` — the pinned tests, the executions and their
   C-pipeline parity, staticness checks, and both-pipeline ELF byte identity.
 - `tests/native/*.ktn` — the scalar corpus: every program lowers, and its
@@ -69,26 +83,61 @@ with the runtime slice.
 `lower_program(model)` walks one checked single-module program and fills the
 scene directly from the model the Kitten-written checker produced; it never
 resolves a name, infers a type, or re-reads source text. Function shells
-register in declaration order, the print helper — when resolution needs it —
-lands after them, and bodies lower in declaration order, so binding order is
-the walk order: parameters first, then each local and temporary as the
-lowering creates it. String literals pool by decoded bytes exactly as the C
-generator pools its literals. The lowering emits the boolean operators and
-the derived comparisons through the branch forms the scene already carries —
-`!`, `!=`, `<=`, and `>=` materialize a bool through a branch on their
-flipped condition — and lowers `&&` and `||` short-circuit, so the right
-operand evaluates only when the first did not decide, matching the C
-pipeline's generated `&&`/`||`. The `print` built-in lowers with exactly one
-string argument to a scene-internal helper named `"$print"`, which no user
-name can collide with, and `exit` lowers to the backend's own raw
+register in declaration order, then the allocator's shells — `$heap`, `$map`,
+`$alloc` — register into every program, then one print helper per argument
+kind the print-kind prescan found, and bodies lower in declaration order, so
+binding order is the walk order: parameters first, then each local and
+temporary as the lowering creates it. String literals pool by decoded bytes
+exactly as the C generator pools its literals. The lowering emits the boolean
+operators and the derived comparisons through the branch forms the scene
+already carries — `!`, `!=`, `<=`, and `>=` materialize a bool through a
+branch on their flipped condition — and lowers `&&` and `||` short-circuit,
+so the right operand evaluates only when the first did not decide, matching
+the C pipeline's generated `&&`/`||`. The `print` built-in lowers with
+exactly one argument to its kind's shell: `"$print"` for a string,
+`"$print_int"` for an int (digits render one byte at a time through the
+recursive `"$digits"`, sharing the `"$print_newline"` tail), and
+`"$print_bool"` for a bool. `exit` lowers to the backend's own raw
 `exit_group` syscall. Since Phase 10.5, float values lower through the
 scene's SSE2 forms — literals become `constf` constants with the encoder's
-bit patterns, arithmetic and comparisons take their derived forms with
-IEEE semantics, and `exit` stays the raw syscall. The slice's frame is still
-the selector's: at most fourteen locals per function, so corpus functions
-stay small; the C generator's known self-shadowing-initializer quirk is why
-the corpus avoids a `local` whose initializer names a same-scoped outer
-local.
+bit patterns, arithmetic and comparisons take their derived forms with IEEE
+semantics — and `exit` stays the raw syscall. The slice's frame is still the
+selector's: at most fourteen locals per function, so corpus functions and
+runtime shells stay small; the C generator's known
+self-shadowing-initializer quirk is why the corpus avoids a `local` whose
+initializer names a same-scoped outer local.
+
+## The runtime shells
+
+`selfhost/native/runtime.ktn` is the first part of proposal Section 6.2's
+runtime written in Kitten. The allocator's `$heap` blob is mutable scene
+data: GetStatic/SetStatic address its payload at raw offsets 24 and 32,
+whose starting bytes are the all-ones pattern, the negative value -1, so
+`cursor < 0` is the one unmapped test. `$map` makes the raw `mmap`
+(PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS) for `heap_size()` — 256
+MiB, the proposal Section 7.1's first target — parks cursor and limit in
+`$heap`, and reaches a FailOOM on a failed mapping; `$alloc` rounds the
+request to eight, advances the cursor past the object's 8-byte header,
+guards against a negative size, a wrapped cursor, and a cursor past the
+limit, and returns the object address. Exhaustion is exact: the shared
+paragraph writes `purr: out of memory` to standard error and exits with
+status 1, the C runtime's `ktn_rt_fail` spelling. The print helpers mirror
+the C runtime byte for byte: `$write1` writes one payload byte, and the
+integer rendering prints the minus sign through it, then digits — `$digits`
+recurses on the truncated quotient over a negative magnitude, so
+`%lld`-equivalent text comes out most-significant-first and INT64_MIN needs
+no special case. Every shell is under the frame cap.
+
+## The header ABI
+
+Every data blob is one runtime object on the layout the proposal Section 5.3
+fixes and SPEC Section 19.10 records: an 8-byte header carrying the whole
+object size (8-aligned; its three low bits are reserved for the collector),
+an 8-byte length, an 8-byte payload pointer, and the payload, everything
+8-aligned. `ConstRefData` binds the object's start; the print helpers load
+length at raw offset 8 and the payload pointer at 16; GetStatic and
+SetStatic address a raw offset inside the blob's whole mapped size, which
+`blob_total` in `ir.ktn` computes and `check_scene` bounds.
 
 ## The float encoder
 
@@ -138,10 +187,12 @@ across several calls then keeps every instruction's own arguments.
 `check_scene` validates, per function: no shapeless parameter or binding, every
 label referenced has a definition, and every instruction's index ranges, operand
 shapes, and call agreement are checked with one deterministic message naming
-function, instruction position, and role. The failure texts are pinned in
-`cmd/purr/native_test.go` in both this corpus's failure modes: `no-label`,
-`bad-binding`, `bad-call-count`, `bad-call-shape`, `bad-entry`, and
-`undefined-label`, plus the fall-through of an unknown mode to the empty
+function, instruction position, and role. GetStatic and SetStatic additionally
+bound their blob and its whole mapped size through `blob_total`. The failure
+texts are pinned in `cmd/purr/native_test.go` in both this corpus's failure
+modes: `no-label`, `bad-binding`, `bad-call-count`, `bad-call-shape`,
+`bad-entry`, `undefined-label`, `bad-static-blob`, `bad-static-offset`, and
+`bad-static-value`, plus the fall-through of an unknown mode to the empty
 scene's entry failure.
 
 ## Renderer spellings
@@ -157,28 +208,30 @@ The renderer output is deterministic and pinned:
   `= whole_divide`, `= whole_remainder`, `= negate`, `= equal`,
   `= less_than`, `= constf`, `= addf`, `= subtractf`, `= multiplyf`,
   `= dividef`, `= negatef`, `= equalf`, `= greaterf`, `= less_or_equalf`,
-  `= call @<index>`, `call`, `jump`, `branch`, `label`, `return`; the float
-  bit patterns render as their signed decimal reading).
+  `= call @<index>`, `call`, `jump`, `branch`, `label`, `return`,
+  `= raw_load64`, `= raw_syscall syscall`, `= get_static`, `set_static`,
+  `fail_oom`; the float bit patterns render as their signed decimal
+  reading).
 
 The probe's render ends with the extra newline `print` adds; the pinned text
 expects it.
 
 ## What is not here
 
-- Field access, allocation, bounds checks, and tag switches: strings lower
-  as static literal blobs alone; concatenation, string equality, and every
-  composite type fail with their message.
+- Field access, allocation from user code, bounds checks, and tag switches:
+  strings lower as static literal blobs alone; user-side allocation, string
+  concatenation, string equality, and every composite type fail with their
+  message. The allocator's shells exist and are exercised through the probe,
+  but no source construct reaches `$alloc` yet.
 - Printing floats and any int-to-float or float-to-int conversion: the
-  rendering work belongs to the runtime slice (`%g` exactly), and the
+  rendering work belongs to the runtime slices (`%g` exactly), and the
   conversions have no lowering yet.
 - Bitwise and shift operators, byte values, imports, and `match`: the
   scalar subset is single-module, and each fails with its message.
 - Stack-alignment refinement, a System V interop convention, register
-  allocation, and the runtime's GC. The frame still carries at most fourteen
-  parameters and fourteen locals, which shapes the corpus; the proposal's
-  order stages the rest into later slices.
-- The print helper is the only runtime-shaped routine the lowering emits;
-  the runtime written in Kitten arrives with the runtime slice.
+  allocation, and the mark-sweep GC. The frame still carries at most
+  fourteen parameters and fourteen locals, which shapes the corpus and the
+  shells; the proposal's order stages the rest into later slices.
 
 ## What the selector lowers
 
@@ -221,15 +274,24 @@ expects it.
    for the quotient, `xor edx,edx` for the remainder) so `idiv` can never
    trap. The paragraph and its private message blob are emitted only when
    some guard exists.
-7. Lay out one string object per data blob (length, payload pointer, payload,
-   padding to eight); the object's pointer field is one recorded fixup. The
-   float sign mask, when a `negatef` exists, appends to the selector's
-   private data with one RIP-relative fixup of its own.
-8. Patch all recorded fixups in place: call displacements, RIP-relative data
-   references, absolute payload pointers, forward branch and jump
-   displacements, the failure paragraph's own reference and guard jumps,
-   and the sign-mask references. Every earlier position survives patching
-   inside mutable byte buffers.
+7. Lower the runtime forms: `get_static` reads eight bytes straight out of a
+   blob's raw offset (`mov rax, [rip+disp]`) and `set_static` stores them
+   (`mov [rip+disp], rax`); `fail_oom` is one unconditional jump to the
+   shared out-of-memory paragraph, which writes the C runtime's exact
+   `purr: out of memory` text to standard error and exits with status 1.
+   That paragraph and its private message blob exist only when some
+   `fail_oom` was emitted.
+8. Lay out one object per data blob, eight-aligned, on the object-header
+   ABI: the header word (the whole size), the payload length, the payload
+   pointer (patched in place the moment the blob starts), the payload, and
+   the padding. The failure messages are private objects of the same shape;
+   the float sign mask, when a `negatef` exists, stays raw with one
+   RIP-relative fixup of its own.
+9. Patch all recorded fixups in place: call displacements, RIP-relative data
+   references, forward branch and jump displacements, the failure
+   paragraphs' own references and guard jumps, and the sign-mask
+   references. Every earlier position survives patching inside mutable
+   byte buffers.
 
 ## The ELF layout
 
@@ -251,8 +313,9 @@ purr build selfhost/native.ktn -o /tmp/native-probe
 /tmp/native-probe elf /tmp/hello && /tmp/hello               # write and run the skeleton executable
 /tmp/native-probe elf-arith /tmp/arith && /tmp/arith         # write and run the arithmetic executable
 /tmp/native-probe elf-divzero /tmp/dv && /tmp/dv             # write and run the divide-failure executable
-/tmp/native-probe lower tests/native/pool.ktn                # render a real source's lowered scene
-/tmp/native-probe lower tests/native/arith.ktn /tmp/a        # write and run a real source's executable
+/tmp/native-probe elf-oom /tmp/oom && /tmp/oom               # write and run the allocation-failure executable
+/tmp/native-probe lower tests/native/printint.ktn            # render a real source's lowered scene
+/tmp/native-probe lower tests/native/printint.ktn /tmp/pi     # write and run a real source's executable
 /tmp/native-probe lower tests/native/floats.ktn /tmp/f && /tmp/f   # float corpus, no C anywhere
 /tmp/native-probe float 0.300000000000000044                 # the precision bound's message
 ```
@@ -265,7 +328,10 @@ purr build selfhost/native.ktn -o /tmp/native-probe
   every table-doubling path is exercised deterministically; the
   argument-snapshot scene's calls are pinned literally in the both-pipeline
   comparison.
-- The six validation messages plus the unknown-mode fall-through are pinned.
+- The nine validation messages plus the unknown-mode fall-through are pinned:
+  the six original modes, the three Phase 10.6 static-data modes
+  (`bad-static-blob`, `bad-static-offset`, `bad-static-value`), and the
+  fall-through.
 - The skeleton writes a static ELF (no interpreter, no dynamic section, two
   program headers) whose run output and status match the C pipeline's
   program for the same source; repeated productions are byte-identical.
@@ -273,18 +339,26 @@ purr build selfhost/native.ktn -o /tmp/native-probe
   the divide-failure executable prints `purr: integer division by zero` to
   standard error with status 1; each matches the C pipeline's build of the
   mirrored source byte for byte.
+- The allocation-failure executable prints the C runtime's exact
+  `purr: out of memory` to standard error with status 1, byte for byte and
+  deterministically.
 - The Phase 10.4 lowering corpus (`tests/native/*.ktn`) lowers and runs with
   output, standard error, and status matching the C pipeline's `purr run` of
   the same source, deterministically per source; the pooled-literal scene's
   rendering is pinned byte for byte; and one message per unsupported
   construct and per load/lex/parse/check failure is pinned.
+- The Phase 10.6 print corpus (`printint.ktn`, `printbool.ktn`,
+  `negatives.ktn`, `mixed.ktn`) covers zero, negative, wrap-to-INT64_MIN,
+  and bool printings against the C pipeline byte for byte, inside the
+  general corpus run; the integer and bool print scenes' renderings are
+  pinned.
 - The Phase 10.5 float slice: the encoder's corpus of fixed edges plus a
   seeded random corpus matches the `strconv` oracle's bit patterns with no
   disagreement; the float corpus programs (arithmetic through recursion,
   NaN and infinity behavior, the subnormal edge, both increment positions,
   tie rounding) match the C pipeline byte for byte with an empty PATH; and
   the float scene's rendering is pinned.
-- Both pipelines produce byte-identical ELFs for all three scene kinds and
+- Both pipelines produce byte-identical ELFs for all four scene kinds and
   for every corpus program, and their `lower`-mode renderings and failure
   messages agree byte for byte: the Kitten-written `purr-kt` sidecar builds
   the probe and runs the whole suite, and its outputs equal the Go

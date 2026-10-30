@@ -1878,6 +1878,48 @@ targets the host platform; cross-compilation and Windows are **not** supported.
 17. String length and indexing are byte-oriented, `text[i]` yields an `int`
     byte, and `substring` yields a byte range (Section 20.6).
 
+### 19.10 The native backend's runtime ABI (provisional)
+
+The native backend (AGENTS.md roadmap item 4, design in
+`proposals/zero-dependency-toolchain.md`, record in Section 30) compiles the
+same language to a static x86-64 ELF executable with no C compiler, no libc,
+and no linker. Its memory ABI so far is this, recorded here because both the
+compiler and the native runtime must agree on it, and both may refine it
+before the native fixpoint as later rungs land:
+
+- **Object header ABI.** Every data object — the string literals, and the
+  GC-managed blocks the collector will own later — begins with one 8-byte
+  header word holding the object's whole size in bytes, including the
+  header, rounded up to eight; the three low bits are reserved for the
+  collector and stay zero in this slice. A string object is the header word,
+  an 8-byte byte length, an 8-byte pointer to the payload, and the bytes,
+  the whole object aligned to eight. There is no NUL terminator behind the
+  payload: the length rules.
+- **Static mutable data.** The data section is one file-backed writable
+  segment. The backend's own instruction forms read and write 8 bytes at a
+  raw offset inside a data object's whole mapped size; the language still
+  has no globals (Section 19.9), so mutable static data is backend-owned —
+  today the allocator's cursor and limit.
+- **Allocator.** Every lowered program receives a bump allocator over one
+  anonymous `mmap` of 256 MiB, mapped once, lazily, through a raw syscall on
+  first allocation. The allocator walks one 64-bit cursor and limit left in
+  static mutable data; objects are 8-aligned, preceded by the header word.
+  Exhaustion, a negative size, or a wrapped cursor is a fatal runtime error
+  with the C runtime's `ktn_rt_fail` spelling — `purr: out of memory` to
+  standard error and exit status 1 — and a failed mapping fails the same
+  way. No source construct reaches it yet; the approved mark-sweep
+  collector (Section 30) replaces the flat region without changing the
+  header ABI.
+- **Native print helpers.** `print` on the lowered argument kinds writes
+  exactly the C runtime's bytes (Section 19.4): decimal text for `int`
+  including the minus sign and INT64_MIN, `true`/`false` for `bool`, the
+  payload bytes for `string`, and one trailing newline each; the native
+  helpers rebuild their argument's rendering as one or a few `write(2)`
+  calls whose bytes equal the C pipeline's output.
+
+The C pipeline's behavior remains the oracle for every observable byte these
+ABIs touch.
+
 ---
 
 ## 20. Strings (provisional)
@@ -3833,3 +3875,69 @@ int conversions, no float printing, no field access, allocation, bounds
 checks, or tag switches, no bitwise and shift operators, no
 stack-alignment refinement, and no register allocation. The production
 sidecar still does not depend on this module.
+
+### 30.7 The runtime foundations (Phase 10.6)
+
+The backend received the runtime foundations of proposal Section 9 step 3's
+road to a mark-sweep collector: mutable scene data, one object-header ABI,
+a bump allocator, and the integer and bool print helpers. The oracle for
+every byte they touch is still the C pipeline's behavior (Section 19.10
+records the ABI's substance).
+
+- **The instruction forms.** The scene grows three backend-internal forms:
+  `GetStatic` reads one 8-byte slot at a raw offset inside a scene blob and
+  `SetStatic` writes one, which is how the allocator's heap cursor lives in
+  mutable scene data — the language has no globals, so the state is
+  backend-owned — and `FailOOM` jumps to the shared out-of-memory paragraph.
+  `check_scene` bounds both static forms against the blob's whole mapped
+  size (`blob_total`) with messages pinned alongside the others.
+- **The header ABI.** Every data blob is one runtime object: an 8-byte
+  header word carrying the whole object size (8-aligned, three low bits
+  reserved zero), an 8-byte length, an 8-byte payload pointer, and the
+  payload. The string literals are rebuilt on it — the print helpers read
+  length at raw offset 8 and the payload pointer at 16 — and the selector's
+  private failure messages are objects of the same shape. The pointer slot
+  is patched in place the moment its blob starts, replacing the deferred
+  pointer-fixup list.
+- **The allocator.** `selfhost/native/runtime.ktn` holds the runtime
+  shells: the `$heap` blob — two 8-byte words on a payload whose starting
+  bytes are the all-ones pattern, the negative value -1, so "unmapped" is
+  the one test `cursor < 0` — plus `$map`, which maps 256 MiB
+  (PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS) through a raw `mmap`
+  once, lazily, and `$alloc`, which rounds the request to eight, advances
+  the cursor past the object header the caller writes, and guards a
+  negative size, a wrapped cursor, and a cursor past the limit with the
+  same `FailOOM`. Every lowered program registers the allocator, and no
+  source construct reaches `$alloc` yet; the probe's `elf-oom` scene makes
+  one call the user side cannot.
+- **The failure text.** The out-of-memory paragraph is the division
+  failure's sibling: write(2) the C runtime's exact `purr: out of memory`
+  to standard error, then `exit_group(1)`, byte for byte the
+  `ktn_rt_fail("out of memory")` spelling. Each paragraph's private message
+  object and its jumps are emitted only when some failure reaches it.
+- **The print helpers.** The print-kind prescan folds the argument kinds of
+  every call resolving to the print built-in, and the lowering registers
+  one helper per kind: `$print` (the string helper, unchanged except for
+  the header offsets), `$print_int` with the recursive `$digits` — digits
+  render over a negative magnitude, the minus sign goes through the
+  one-byte `$write1` helper, and the shared `$print_newline` ends the call
+  — and `$print_bool`, which branches on the one-byte condition and hands
+  "true" or "false" to `$print`. print is supported with exactly one
+  string, int, or bool argument; every other type still fails with its own
+  message.
+- **The acceptance rung.** The print corpus (`printint.ktn`,
+  `printbool.ktn`, `negatives.ktn`, `mixed.ktn` — zero, negatives,
+  wrap-to-INT64_MIN, formatted bools, and mixed kinds) joins
+  `tests/native/*.ktn`; every program's native executable output, standard
+  error, and status match `purr run` of the same source with an empty
+  `PATH`, deterministically in repeat, and the two pipelines' ELFs are
+  byte-identical. `elf-oom` halts with the exact failure text at status 1,
+  the integer and bool print scenes' renderings are pinned byte for byte,
+  and the three new validation messages are pinned in both pipelines.
+
+What remains unimplemented is unchanged from Section 30.6: no float
+printing or value conversions, no user-side allocation, no string
+length/equality, no field access, bounds checks, or tag switches, no
+bitwise and shift operators, no stack-alignment refinement, no register
+allocation, and no mark-sweep collector — the flat region is this slice's
+whole heap. The production sidecar still does not depend on this module.

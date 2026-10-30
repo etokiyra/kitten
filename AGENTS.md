@@ -506,8 +506,20 @@ carry the C generators' exact NaN behavior, float results return in xmm0,
 the probe gained a `float` mode differential-driven against Go's strconv
 oracle, and the corpus covers the edges — tie rounding, NaN unorderedness,
 infinity, the subnormal-to-zero edge, both increment positions — with
-byte-identical C-pipeline parity and a pinned float render. Float printing
-and value conversions stay with the runtime/GC slice. Field access,
+byte-identical C-pipeline parity and a pinned float render. Phase 10.6
+landed the runtime foundations: every data blob is one object on the
+8-byte-header ABI (the whole size in the header, then length, payload
+pointer, payload — SPEC §19.10 and §30.7), with the string literals rebuilt
+on it; `GetStatic`/`SetStatic` reach a blob's payload at a raw offset for
+the heap cursor, which `runtime.ktn`'s `$heap`/`$map`/`$alloc` shells walk —
+a lazy 256 MiB `mmap` bump allocator whose exhaustion, negative size, or
+wrapped cursor halts with the C runtime's exact `purr: out of memory` at
+status 1 — and `print(int)`/`print(bool)` lower into decimal-digit and
+true/false helpers that byte-match the C pipeline, including INT64_MIN.
+The print-kind prescan registers one print helper per argument kind, print
+is supported with exactly one string, int, or bool argument, and the probe
+gained `elf-oom` plus three pinned static-form validation messages. GC,
+string length/equality, and %g wait for 10.7/10.8. Field access,
 allocation, bounds checks, tag switches, stack-alignment refinement,
 register allocation, and the composite subset's lowering remain staged for
 later slices.
