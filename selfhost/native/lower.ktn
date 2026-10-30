@@ -38,6 +38,7 @@ import "../parser/parser.ktn";
 import "../checker/model.ktn";
 import "../checker/state.ktn";
 import "ir.ktn";
+import "floats.ktn";
 
 // LowerResult is the lowering's outcome. Ok carries the whole scene, with
 // the entry index already set; Failed carries one message naming the
@@ -181,15 +182,15 @@ fn lookup(Lowering lowering, string name, Position at) -> int {
 
 // --- Values -------------------------------------------------------------------
 
-// value_shape maps a checked type onto the scene's shapes. Int, bool, and
-// string lower; string is a reference to a static literal object. Every
-// other kind fails with its unsupported-construct message.
+// value_shape maps a checked type onto the scene's shapes. Int, bool,
+// float, and string lower; string is a reference to a static literal
+// object. Every other kind fails with its unsupported-construct message.
 fn value_shape(Lowering lowering, Type type, Position at) -> NativeType {
     match (type.kind) {
         Int { return NativeType.Int; }
         Bool { return NativeType.Bool; }
         String { return NativeType.Ref; }
-        Float { fail_at(lowering, at, "float values are not supported yet"); return NativeType.Void; }
+        Float { return NativeType.Float; }
         Byte { fail_at(lowering, at, "byte values are not supported yet"); return NativeType.Void; }
         Struct { fail_at(lowering, at, "struct values are not supported yet"); return NativeType.Void; }
         Array { fail_at(lowering, at, "array values are not supported yet"); return NativeType.Void; }
@@ -363,8 +364,17 @@ fn lower_expression(Lowering lowering, Expr expression) -> int {
             return lookup(lowering, token.text, position_of_token(token));
         }
         Float(node_id, token) {
-            fail_at(lowering, position_of_token(token), "float values are not supported yet");
-            return -1;
+            match (encode_float(token.text)) {
+                Ok(bits) {
+                    int target = new_temporary(lowering.body, NativeType.Float);
+                    push_instruction(lowering.body, Instruction.ConstFloat { target = target, bits = bits });
+                    return target;
+                }
+                Failed(message) {
+                    fail_at(lowering, position_of_token(token), message);
+                    return -1;
+                }
+            }
         }
         Unary(node_id, operator, operand, postfix) {
             return lower_unary(lowering, operator, operand, postfix);
@@ -418,6 +428,11 @@ fn lower_unary(Lowering lowering, Token operator, Expr operand, bool postfix) ->
         if (failed(lowering)) {
             return -1;
         }
+        if (type_name(lowering.body.binding_types[value]) == type_name(NativeType.Float)) {
+            int float_target = new_temporary(lowering.body, NativeType.Float);
+            push_instruction(lowering.body, Instruction.NegateFloat { target = float_target, value = value });
+            return float_target;
+        }
         int target = new_temporary(lowering.body, NativeType.Int);
         push_instruction(lowering.body, Instruction.Negate { target = target, value = value });
         return target;
@@ -434,8 +449,8 @@ fn lower_unary(Lowering lowering, Token operator, Expr operand, bool postfix) ->
 }
 
 // lower_increment lowers prefix or postfix ++ and --. The target must be a
-// local variable or parameter of type int; the step reads, folds, and
-// stores the new value, and a postfix position additionally copies the
+// local variable or parameter of type int or float; the step reads, folds,
+// and stores the new value, and a postfix position additionally copies the
 // previous value out first. Every non-identifier operand fails: the
 // subset's assignable l-values are variables alone.
 fn lower_increment(Lowering lowering, Token operator, Expr operand, bool postfix) -> int {
@@ -445,20 +460,39 @@ fn lower_increment(Lowering lowering, Token operator, Expr operand, bool postfix
             if (failed(lowering)) {
                 return -1;
             }
-            if (type_name(lowering.body.binding_types[target]) != type_name(NativeType.Int)) {
-                fail_at(lowering, position_of_token(operator), "++ and -- are supported on int values only");
+            NativeType shape = lowering.body.binding_types[target];
+            bool integer = type_name(shape) == type_name(NativeType.Int);
+            bool floating = type_name(shape) == type_name(NativeType.Float);
+            if (!integer && !floating) {
+                fail_at(lowering, position_of_token(operator), "++ and -- are supported on int and float values only");
                 return -1;
             }
-            int value = new_temporary(lowering.body, NativeType.Int);
-            push_instruction(lowering.body, Instruction.ConstInt { target = value, value = 1 });
-            int updated = new_temporary(lowering.body, NativeType.Int);
-            if (operator.text == "++") {
-                push_instruction(lowering.body, Instruction.Add { target = updated, left = target, right = value });
+            NativeType step_shape = NativeType.Int;
+            if (floating) {
+                step_shape = NativeType.Float;
+            }
+            int value = new_temporary(lowering.body, step_shape);
+            if (floating) {
+                push_instruction(lowering.body, Instruction.ConstFloat { target = value, bits = 4607182418800017408 });
             } else {
-                push_instruction(lowering.body, Instruction.Subtract { target = updated, left = target, right = value });
+                push_instruction(lowering.body, Instruction.ConstInt { target = value, value = 1 });
+            }
+            int updated = new_temporary(lowering.body, step_shape);
+            if (operator.text == "++") {
+                if (floating) {
+                    push_instruction(lowering.body, Instruction.AddFloat { target = updated, left = target, right = value });
+                } else {
+                    push_instruction(lowering.body, Instruction.Add { target = updated, left = target, right = value });
+                }
+            } else {
+                if (floating) {
+                    push_instruction(lowering.body, Instruction.SubtractFloat { target = updated, left = target, right = value });
+                } else {
+                    push_instruction(lowering.body, Instruction.Subtract { target = updated, left = target, right = value });
+                }
             }
             if (postfix) {
-                int previous = new_temporary(lowering.body, NativeType.Int);
+                int previous = new_temporary(lowering.body, step_shape);
                 push_instruction(lowering.body, Instruction.Copy { target = previous, source = target });
                 push_instruction(lowering.body, Instruction.Copy { target = target, source = updated });
                 return previous;
@@ -527,31 +561,56 @@ fn lower_binary(Lowering lowering, Token operator, Expr left, Expr right) -> int
             return -1;
         }
     }
+    bool floating = type_name(lowering.body.binding_types[left_value]) == type_name(NativeType.Float);
     if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
         op == "<" || op == ">" || op == "<=" || op == ">=") {
-        if (!int_operand(lowering, left_value, at) || !int_operand(lowering, right_value, at)) {
-            return -1;
+        if (floating) {
+            if (!float_operand(lowering, left_value, at) || !float_operand(lowering, right_value, at)) {
+                return -1;
+            }
+        } else {
+            if (!int_operand(lowering, left_value, at) || !int_operand(lowering, right_value, at)) {
+                return -1;
+            }
         }
     }
 
     if (op == "+") {
-        int target = new_temporary(lowering.body, NativeType.Int);
-        push_instruction(lowering.body, Instruction.Add { target = target, left = left_value, right = right_value });
+        int target = new_temporary(lowering.body, shape_of_float(floating));
+        if (floating) {
+            push_instruction(lowering.body, Instruction.AddFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.Add { target = target, left = left_value, right = right_value });
+        }
         return target;
     }
     if (op == "-") {
-        int target = new_temporary(lowering.body, NativeType.Int);
-        push_instruction(lowering.body, Instruction.Subtract { target = target, left = left_value, right = right_value });
+        int target = new_temporary(lowering.body, shape_of_float(floating));
+        if (floating) {
+            push_instruction(lowering.body, Instruction.SubtractFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.Subtract { target = target, left = left_value, right = right_value });
+        }
         return target;
     }
     if (op == "*") {
-        int target = new_temporary(lowering.body, NativeType.Int);
-        push_instruction(lowering.body, Instruction.Multiply { target = target, left = left_value, right = right_value });
+        int target = new_temporary(lowering.body, shape_of_float(floating));
+        if (floating) {
+            push_instruction(lowering.body, Instruction.MultiplyFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.Multiply { target = target, left = left_value, right = right_value });
+        }
         return target;
     }
     if (op == "/") {
-        int target = new_temporary(lowering.body, NativeType.Int);
-        push_instruction(lowering.body, Instruction.WholeDivide { target = target, left = left_value, right = right_value });
+        int target = new_temporary(lowering.body, shape_of_float(floating));
+        if (floating) {
+            // IEEE division: a zero divisor yields infinity, and zero over
+            // zero NaN, exactly as the C compiler's text passes it through.
+            push_instruction(lowering.body, Instruction.DivideFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.WholeDivide { target = target, left = left_value, right = right_value });
+        }
         return target;
     }
     if (op == "%") {
@@ -561,31 +620,54 @@ fn lower_binary(Lowering lowering, Token operator, Expr left, Expr right) -> int
     }
     if (op == "==" || op == "!=") {
         int target = new_temporary(lowering.body, NativeType.Bool);
-        push_instruction(lowering.body, Instruction.Equal { target = target, left = left_value, right = right_value });
+        if (floating) {
+            push_instruction(lowering.body, Instruction.EqualFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.Equal { target = target, left = left_value, right = right_value });
+        }
         if (op == "!=") {
             return negate_binding(lowering, target);
         }
         return target;
     }
     if (op == "<") {
+        // a < b through the ordered greater form on the swapped operands.
         int target = new_temporary(lowering.body, NativeType.Bool);
-        push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
+        if (floating) {
+            push_instruction(lowering.body, Instruction.GreaterFloat { target = target, left = right_value, right = left_value });
+        } else {
+            push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
+        }
         return target;
     }
     if (op == ">") {
         int target = new_temporary(lowering.body, NativeType.Bool);
-        push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
+        if (floating) {
+            push_instruction(lowering.body, Instruction.GreaterFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
+        }
         return target;
     }
     if (op == "<=") {
         int target = new_temporary(lowering.body, NativeType.Bool);
-        push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
-        return negate_binding(lowering, target);
+        if (floating) {
+            push_instruction(lowering.body, Instruction.LessOrEqualFloat { target = target, left = left_value, right = right_value });
+        } else {
+            push_instruction(lowering.body, Instruction.LessThan { target = target, left = right_value, right = left_value });
+            return negate_binding(lowering, target);
+        }
+        return target;
     }
     if (op == ">=") {
         int target = new_temporary(lowering.body, NativeType.Bool);
-        push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
-        return negate_binding(lowering, target);
+        if (floating) {
+            push_instruction(lowering.body, Instruction.LessOrEqualFloat { target = target, left = right_value, right = left_value });
+        } else {
+            push_instruction(lowering.body, Instruction.LessThan { target = target, left = left_value, right = right_value });
+            return negate_binding(lowering, target);
+        }
+        return target;
     }
     fail_at(lowering, at, "bitwise operators are not supported yet");
     return -1;
@@ -596,6 +678,25 @@ fn int_operand(Lowering lowering, int binding, Position at) -> bool {
         return false;
     }
     return true;
+}
+
+// float_operand is the float sibling of int_operand: a guard against a
+// checker guarantee the lowering relies on, since arithmetic and
+// comparisons share one operand type.
+fn float_operand(Lowering lowering, int binding, Position at) -> bool {
+    if (type_name(lowering.body.binding_types[binding]) != type_name(NativeType.Float)) {
+        fail_at(lowering, at, "arithmetic and comparisons are supported on float values only");
+        return false;
+    }
+    return true;
+}
+
+// shape_of_float picks the float shape when the operator folds floats.
+fn shape_of_float(bool floating) -> NativeType {
+    if (floating) {
+        return NativeType.Float;
+    }
+    return NativeType.Int;
 }
 
 // lower_assign lowers one assignment expression: the target must be a local
@@ -646,21 +747,44 @@ fn lower_assign(Lowering lowering, Token operator, Expr target, Expr value) -> i
         return assigned;
     }
     if (op == "+=" || op == "-=") {
-        if (!int_operand(lowering, slot, at)) {
-            return -1;
+        NativeType fold_shape = NativeType.Int;
+        bool floating = type_name(lowering.body.binding_types[slot]) == type_name(NativeType.Float);
+        if (floating) {
+            if (!float_operand(lowering, slot, at)) {
+                return -1;
+            }
+            fold_shape = NativeType.Float;
+        } else {
+            if (!int_operand(lowering, slot, at)) {
+                return -1;
+            }
         }
         int assigned = lower_expression(lowering, value);
         if (failed(lowering)) {
             return -1;
         }
-        if (!int_operand(lowering, assigned, at)) {
-            return -1;
-        }
-        int folded = new_temporary(lowering.body, NativeType.Int);
-        if (op == "+=") {
-            push_instruction(lowering.body, Instruction.Add { target = folded, left = slot, right = assigned });
+        if (floating) {
+            if (!float_operand(lowering, assigned, at)) {
+                return -1;
+            }
         } else {
-            push_instruction(lowering.body, Instruction.Subtract { target = folded, left = slot, right = assigned });
+            if (!int_operand(lowering, assigned, at)) {
+                return -1;
+            }
+        }
+        int folded = new_temporary(lowering.body, fold_shape);
+        if (op == "+=") {
+            if (floating) {
+                push_instruction(lowering.body, Instruction.AddFloat { target = folded, left = slot, right = assigned });
+            } else {
+                push_instruction(lowering.body, Instruction.Add { target = folded, left = slot, right = assigned });
+            }
+        } else {
+            if (floating) {
+                push_instruction(lowering.body, Instruction.SubtractFloat { target = folded, left = slot, right = assigned });
+            } else {
+                push_instruction(lowering.body, Instruction.Subtract { target = folded, left = slot, right = assigned });
+            }
         }
         push_instruction(lowering.body, Instruction.Copy { target = slot, source = folded });
         return folded;

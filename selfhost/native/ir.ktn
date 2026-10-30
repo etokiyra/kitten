@@ -17,11 +17,13 @@
 // is three-address and index-addressed: the renderer, the layout pass, and the
 // x86-64 selector can walk the same representation deterministically.
 //
-// What this slice does not carry yet: float arithmetic and conversions (they
-// land with the selector's SSE2 work), struct and union field access,
-// allocation, bounds checks, tag switches, and runtime-module intrinsics. The
-// instruction union is open; each later slice adds its forms together with the
-// selectors that lower them, and this file's validation grows with them.
+// What this slice does not carry yet: float printing and conversions (the
+// littlest runtime work), struct and union field access, allocation, bounds
+// checks, tag switches, and runtime-module intrinsics. Float values
+// themselves — literals, arithmetic, and comparisons — since the Phase 10.5
+// slice lower, select, and run. The instruction union is open; each later
+// slice adds its forms together with the selectors that lower them, and
+// this file's validation grows with them.
 
 // NativeType names one of the value shapes the IR carries.
 public union NativeType {
@@ -88,15 +90,24 @@ public union Instruction {
     ConstInt { int target; int value; }
     ConstBool { int target; bool value; }
     ConstRefData { int target; int blob; }
+    ConstFloat { int target; int bits; }
     Copy { int target; int source; }
     Add { int target; int left; int right; }
     Subtract { int target; int left; int right; }
     Multiply { int target; int left; int right; }
     WholeDivide { int target; int left; int right; }
     WholeRemainder { int target; int left; int right; }
+    AddFloat { int target; int left; int right; }
+    SubtractFloat { int target; int left; int right; }
+    MultiplyFloat { int target; int left; int right; }
+    DivideFloat { int target; int left; int right; }
     Negate { int target; int value; }
+    NegateFloat { int target; int value; }
     Equal { int target; int left; int right; }
     LessThan { int target; int left; int right; }
+    EqualFloat { int target; int left; int right; }
+    GreaterFloat { int target; int left; int right; }
+    LessOrEqualFloat { int target; int left; int right; }
     Call { int target; int function; int[] arguments; int argument_count; }
     CallVoid { int function; int[] arguments; int argument_count; }
     RawLoad64 { int target; int address; int offset; }
@@ -257,15 +268,24 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         ConstInt(n, v) {}
         ConstBool(n, v) {}
         ConstRefData(n, b) {}
+        ConstFloat(n, bits) {}
         Copy(n, s) {}
         Add(n, l, r) {}
         Subtract(n, l, r) {}
         Multiply(n, l, r) {}
         WholeDivide(n, l, r) {}
         WholeRemainder(n, l, r) {}
+        AddFloat(n, l, r) {}
+        SubtractFloat(n, l, r) {}
+        MultiplyFloat(n, l, r) {}
+        DivideFloat(n, l, r) {}
         Negate(n, v) {}
+        NegateFloat(n, v) {}
         Equal(n, l, r) {}
         LessThan(n, l, r) {}
+        EqualFloat(n, l, r) {}
+        GreaterFloat(n, l, r) {}
+        LessOrEqualFloat(n, l, r) {}
         Call(n, c, a, count) {}
         CallVoid(c, a, count) {}
         RawLoad64(n, a, o) {}
@@ -293,15 +313,24 @@ fn snapshot_arguments(Instruction instruction) -> Instruction {
         ConstInt(n, v) { return instruction; }
         ConstBool(n, v) { return instruction; }
         ConstRefData(n, b) { return instruction; }
+        ConstFloat(n, bits) { return instruction; }
         Copy(n, s) { return instruction; }
         Add(n, l, r) { return instruction; }
         Subtract(n, l, r) { return instruction; }
         Multiply(n, l, r) { return instruction; }
         WholeDivide(n, l, r) { return instruction; }
         WholeRemainder(n, l, r) { return instruction; }
+        AddFloat(n, l, r) { return instruction; }
+        SubtractFloat(n, l, r) { return instruction; }
+        MultiplyFloat(n, l, r) { return instruction; }
+        DivideFloat(n, l, r) { return instruction; }
         Negate(n, v) { return instruction; }
+        NegateFloat(n, v) { return instruction; }
         Equal(n, l, r) { return instruction; }
         LessThan(n, l, r) { return instruction; }
+        EqualFloat(n, l, r) { return instruction; }
+        GreaterFloat(n, l, r) { return instruction; }
+        LessOrEqualFloat(n, l, r) { return instruction; }
         RawLoad64(n, a, o) { return instruction; }
         Jump(l) { return instruction; }
         Branch(c, t, f) { return instruction; }
@@ -517,6 +546,9 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
                 failure = require_binding(function, target, shape, position + "target");
             }
         }
+        ConstFloat(target, bits) {
+            failure = require_binding(function, target, NativeType.Float, position + "target");
+        }
         Add(target, left, right) {
             failure = check_int_pair(function, target, left, right, position);
         }
@@ -532,10 +564,28 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
         WholeRemainder(target, left, right) {
             failure = check_int_pair(function, target, left, right, position);
         }
+        AddFloat(target, left, right) {
+            failure = check_float_pair(function, target, left, right, position);
+        }
+        SubtractFloat(target, left, right) {
+            failure = check_float_pair(function, target, left, right, position);
+        }
+        MultiplyFloat(target, left, right) {
+            failure = check_float_pair(function, target, left, right, position);
+        }
+        DivideFloat(target, left, right) {
+            failure = check_float_pair(function, target, left, right, position);
+        }
         Negate(target, value) {
             failure = require_binding(function, value, NativeType.Int, position + "operand");
             if (length(failure) == 0) {
                 failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+        }
+        NegateFloat(target, value) {
+            failure = require_binding(function, value, NativeType.Float, position + "operand");
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Float, position + "target");
             }
         }
         Equal(target, left, right) {
@@ -543,6 +593,15 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
         }
         LessThan(target, left, right) {
             failure = check_compare(function, target, left, right, position);
+        }
+        EqualFloat(target, left, right) {
+            failure = check_float_compare(function, target, left, right, position);
+        }
+        GreaterFloat(target, left, right) {
+            failure = check_float_compare(function, target, left, right, position);
+        }
+        LessOrEqualFloat(target, left, right) {
+            failure = check_float_compare(function, target, left, right, position);
         }
         Call(target, callee, arguments, argument_count) {
             failure = check_call(scene, function, callee, arguments, argument_count, position, true);
@@ -643,6 +702,20 @@ fn check_int_pair(NativeFunction function, int target, int left, int right, stri
     return require_binding(function, target, NativeType.Int, position + "target");
 }
 
+// check_float_pair is the float binary-operation gate: both operands and the
+// target carry float shapes.
+fn check_float_pair(NativeFunction function, int target, int left, int right, string position) -> string {
+    string failure = require_binding(function, left, NativeType.Float, position + "left");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    failure = require_binding(function, right, NativeType.Float, position + "right");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    return require_binding(function, target, NativeType.Float, position + "target");
+}
+
 // check_compare is the integer comparison gate: both operands carry int shapes
 // and the target carries bool.
 fn check_compare(NativeFunction function, int target, int left, int right, string position) -> string {
@@ -651,6 +724,22 @@ fn check_compare(NativeFunction function, int target, int left, int right, strin
         return failure;
     }
     failure = require_binding(function, right, NativeType.Int, position + "right");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    return require_binding(function, target, NativeType.Bool, position + "target");
+}
+
+// check_float_compare is the float comparison gate: both operands carry
+// float shapes and the target carries bool. The three forms cover every
+// ordered comparison the lowering derives; unordered values make all three
+// false, exactly as the C pipeline's generated comparisons do.
+fn check_float_compare(NativeFunction function, int target, int left, int right, string position) -> string {
+    string failure = require_binding(function, left, NativeType.Float, position + "left");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    failure = require_binding(function, right, NativeType.Float, position + "right");
     if (length(failure) != 0) {
         return failure;
     }
@@ -697,15 +786,24 @@ fn label_defined(NativeFunction function, int label) -> bool {
             ConstInt(n, v) {}
             ConstBool(n, v) {}
             ConstRefData(n, b) {}
+            ConstFloat(n, bits) {}
             Copy(n, s) {}
             Add(n, l, r) {}
             Subtract(n, l, r) {}
             Multiply(n, l, r) {}
             WholeDivide(n, l, r) {}
             WholeRemainder(n, l, r) {}
+            AddFloat(n, l, r) {}
+            SubtractFloat(n, l, r) {}
+            MultiplyFloat(n, l, r) {}
+            DivideFloat(n, l, r) {}
             Negate(n, v) {}
+            NegateFloat(n, v) {}
             Equal(n, l, r) {}
             LessThan(n, l, r) {}
+            EqualFloat(n, l, r) {}
+            GreaterFloat(n, l, r) {}
+            LessOrEqualFloat(n, l, r) {}
             Call(n, c, a, count) {}
             CallVoid(c, a, count) {}
             RawLoad64(n, a, o) {}

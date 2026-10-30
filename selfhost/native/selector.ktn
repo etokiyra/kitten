@@ -219,6 +219,15 @@ struct FailJump {
     int position;
 }
 
+// NegateFloatMask is one RIP-relative displacement into the selector's
+// private sign-mask data, whose offset is known only after layout. The
+// lowerings' negate-in-refusal steps load the mask through `movsd` and flip
+// the bit inside the register, so unaligned xmm data never enters the
+// encoding.
+struct NegateFloatMask {
+    int position;
+}
+
 // Lowering accumulates one select_scene run.
 struct Lowering {
     Bytes code;
@@ -243,6 +252,9 @@ struct Lowering {
     int[] label_positions;
     int fail_blob_offset;
     int fail_lea_position;
+    NegateFloatMask[] negate_masks;
+    int negate_count;
+    int negate_capacity;
 }
 
 // Function offsets are indexed by scene function index; the table is exactly
@@ -270,7 +282,10 @@ fn new_lowering(NativeScene scene) -> Lowering {
         fail_jump_capacity = 4,
         label_positions = new int[0],
         fail_blob_offset = 0,
-        fail_lea_position = 0
+        fail_lea_position = 0,
+        negate_masks = new NegateFloatMask[4],
+        negate_count = 0,
+        negate_capacity = 4
     };
 }
 
@@ -332,6 +347,30 @@ fn grow_fail_jumps(Lowering lowering) {
     }
     lowering.fail_jumps = grown;
     lowering.fail_jump_capacity = capacity;
+}
+
+fn grow_negate_masks(Lowering lowering) {
+    int capacity = lowering.negate_capacity * 2;
+    NegateFloatMask[] grown = new NegateFloatMask[capacity];
+    int index = 0;
+    while (index < lowering.negate_count) {
+        grown[index] = lowering.negate_masks[index];
+        index++;
+    }
+    lowering.negate_masks = grown;
+    lowering.negate_capacity = capacity;
+}
+
+// add_negate_mask records one RIP-relative displacement slot to the
+// selector's sign-mask data, whose offset is known after layout.
+fn add_negate_mask(Lowering lowering) {
+    if (lowering.negate_count == lowering.negate_capacity) {
+        grow_negate_masks(lowering);
+    }
+    lowering.negate_masks[lowering.negate_count] = NegateFloatMask {
+        position = lowering.code.count + 4
+    };
+    lowering.negate_count++;
 }
 
 // add_function_offset records one function's code offset.
@@ -582,6 +621,63 @@ fn lower_branch(Lowering lowering, NativeFunction function, int condition, int l
     push_hex(lowering.code, "e9 00 00 00 00");
 }
 
+// movsd_slot_xmm loads a slot into xmm0: movsd xmm0, [rbp+disp].
+fn movsd_slot_xmm(Bytes list, NativeFunction function, int binding) {
+    push_hex(list, "f2 0f 10 45");
+    push_int(list, slot_disp(function, binding), 1);
+}
+
+// movsd_xmm_slot stores xmm0 into a slot: movsd [rbp+disp], xmm0.
+fn movsd_xmm_slot(Bytes list, NativeFunction function, int binding) {
+    push_hex(list, "f2 0f 11 45");
+    push_int(list, slot_disp(function, binding), 1);
+}
+
+// lower_float_binary emits one SSE2 binary double operation exactly the
+// way lower_binary does for ints: load the left slot, fold the right slot
+// in, and store the 8-byte result. Reading happens strictly before the
+// store, so a target that aliases an operand stays correct.
+fn lower_float_binary(Lowering lowering, NativeFunction function, int target, int left, int right, string op_hex) {
+    movsd_slot_xmm(lowering.code, function, left);
+    push_hex(lowering.code, op_hex);
+    push_int(lowering.code, slot_disp(function, right), 1);
+    movsd_xmm_slot(lowering.code, function, target);
+}
+
+// lower_float_compare emits EqualFloat, GreaterFloat, and
+// LessOrEqualFloat. The setCC family carries the exact C semantics over
+// unordered values: `seta` and `setae` read the carry flag, which an
+// unordered compare sets, so those two forms answer false on NaN exactly
+// as the C generators' `(a op b)` does; the equality form pairs `sete`
+// with `setnp` and the two results are ANDed, which does the same.
+fn lower_float_compare(Lowering lowering, NativeFunction function, int target, int left, int right, bool swap, string set_hex) {
+    int loaded = left;
+    int against = right;
+    if (swap) {
+        loaded = right;
+        against = left;
+    }
+    movsd_slot_xmm(lowering.code, function, loaded);
+    push_hex(lowering.code, "66 0f 2f 45");
+    push_int(lowering.code, slot_disp(function, against), 1);
+    push_hex(lowering.code, set_hex);
+    push_hex(lowering.code, "0f b6 c0");
+    mov_slot_rax(lowering.code, slot_disp(function, target));
+}
+
+// lower_equal_float emits EqualFloat: the ordered-and-equal test takes the
+// parity flag along, because an unordered compare also sets the zero flag.
+fn lower_equal_float(Lowering lowering, NativeFunction function, int target, int left, int right) {
+    movsd_slot_xmm(lowering.code, function, left);
+    push_hex(lowering.code, "66 0f 2f 45");
+    push_int(lowering.code, slot_disp(function, right), 1);
+    push_hex(lowering.code, "0f 9b c0");
+    push_hex(lowering.code, "0f 94 c2");
+    push_hex(lowering.code, "22 c2");
+    push_hex(lowering.code, "0f b6 c0");
+    mov_slot_rax(lowering.code, slot_disp(function, target));
+}
+
 // lower_fail_paragraph emits the program's shared divide-failure halt:
 // write(2) the fatal message, then exit_group(1). The paragraph lands after
 // every function and is reached only by the guard jumps; the message
@@ -675,7 +771,11 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
         }
         Call(target, callee, arguments, argument_count) {
             lower_call(lowering, function, callee, arguments, argument_count);
-            mov_slot_rax(lowering.code, slot_disp(function, target));
+            if (type_name(function.binding_types[target]) == type_name(NativeType.Float)) {
+                movsd_xmm_slot(lowering.code, function, target);
+            } else {
+                mov_slot_rax(lowering.code, slot_disp(function, target));
+            }
         }
         CallVoid(callee, arguments, argument_count) {
             lower_call(lowering, function, callee, arguments, argument_count);
@@ -698,7 +798,11 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
             mov_slot_rax(lowering.code, slot_disp(function, target));
         }
         Return(value) {
-            mov_rax_slot(lowering.code, slot_disp(function, value));
+            if (type_name(function.result) == type_name(NativeType.Float)) {
+                movsd_slot_xmm(lowering.code, function, value);
+            } else {
+                mov_rax_slot(lowering.code, slot_disp(function, value));
+            }
             frame_epilogue(lowering.code, function);
         }
         ReturnVoid {
@@ -718,6 +822,44 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
         }
         WholeRemainder(target, left, right) {
             lower_divide(lowering, function, target, left, right, false);
+        }
+        ConstFloat(target, bits) {
+            // The constant's bit pattern reaches the slot through rax and
+            // xmm0: movabs rax, imm64; movq xmm0, rax; store.
+            movabs_rax(lowering.code, bits);
+            push_hex(lowering.code, "66 48 0f 6e c0");
+            movsd_xmm_slot(lowering.code, function, target);
+        }
+        AddFloat(target, left, right) {
+            lower_float_binary(lowering, function, target, left, right, "f2 0f 58 45");
+        }
+        SubtractFloat(target, left, right) {
+            lower_float_binary(lowering, function, target, left, right, "f2 0f 5c 45");
+        }
+        MultiplyFloat(target, left, right) {
+            lower_float_binary(lowering, function, target, left, right, "f2 0f 59 45");
+        }
+        DivideFloat(target, left, right) {
+            // IEEE division, with no zero guard: a zero divisor produces
+            // infinity or NaN exactly as the C pipeline's generated
+            // division over doubles does.
+            lower_float_binary(lowering, function, target, left, right, "f2 0f 5e 45");
+        }
+        NegateFloat(target, value) {
+            movsd_slot_xmm(lowering.code, function, value);
+            add_negate_mask(lowering);
+            push_hex(lowering.code, "f2 0f 10 0d 00 00 00 00");
+            push_hex(lowering.code, "66 0f 57 c1");
+            movsd_xmm_slot(lowering.code, function, target);
+        }
+        EqualFloat(target, left, right) {
+            lower_equal_float(lowering, function, target, left, right);
+        }
+        GreaterFloat(target, left, right) {
+            lower_float_compare(lowering, function, target, left, right, false, "0f 97 c0");
+        }
+        LessOrEqualFloat(target, left, right) {
+            lower_float_compare(lowering, function, target, left, right, true, "0f 93 c0");
         }
         Negate(target, value) {
             mov_rax_slot(lowering.code, slot_disp(function, value));
@@ -762,15 +904,24 @@ fn ends_with_return(NativeFunction function) -> bool {
         ConstInt(n, v) { return false; }
         ConstBool(n, v) { return false; }
         ConstRefData(n, b) { return false; }
+        ConstFloat(n, v) { return false; }
         Copy(n, s) { return false; }
         Add(n, l, r) { return false; }
         Subtract(n, l, r) { return false; }
         Multiply(n, l, r) { return false; }
         WholeDivide(n, l, r) { return false; }
         WholeRemainder(n, l, r) { return false; }
+        AddFloat(n, l, r) { return false; }
+        SubtractFloat(n, l, r) { return false; }
+        MultiplyFloat(n, l, r) { return false; }
+        DivideFloat(n, l, r) { return false; }
         Negate(n, v) { return false; }
+        NegateFloat(n, v) { return false; }
         Equal(n, l, r) { return false; }
         LessThan(n, l, r) { return false; }
+        EqualFloat(n, l, r) { return false; }
+        GreaterFloat(n, l, r) { return false; }
+        LessOrEqualFloat(n, l, r) { return false; }
         Call(n, c, a, count) { return false; }
         CallVoid(c, a, count) { return false; }
         RawLoad64(n, a, o) { return false; }
@@ -912,6 +1063,24 @@ public fn select_scene(NativeScene scene) -> SelectionResult {
             int jump_site = text_base() + header_size() + fixup.position + 4;
             patch32(lowering.code, fixup.position, paragraph - jump_site);
             fail_jump++;
+        }
+    }
+
+    // The sign mask for NegateFloat, appended once when some negate reach
+    // was emitted; its single RIP-relative reference patch lands here.
+    if (lowering.negate_count > 0) {
+        int mask_offset = lowering.data.count;
+        // movsd requires no alignment; the mask bytes are the double's
+        // sign bit in the low quad, the high quad zero.
+        push_hex(lowering.data, "00 00 00 00 00 00 00 80");
+        int mask_site = text_base() + header_size();
+        int index = 0;
+        while (index < lowering.negate_count) {
+            NegateFloatMask fixup = lowering.negate_masks[index];
+            int target = data_base() + mask_offset;
+            int site = mask_site + fixup.position + 4;
+            patch32(lowering.code, fixup.position, target - site);
+            index++;
         }
     }
 

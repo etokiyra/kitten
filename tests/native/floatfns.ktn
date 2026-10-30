@@ -1,0 +1,62 @@
+fn add_half(float value) -> float {
+    return value + 0.5;
+}
+fn accumulate(float start) -> float {
+    int i = 0;
+    while (i < 4) {
+        start += 0.25;
+        i = i + 1;
+    }
+    return start;
+}
+fn step(float value) -> float {
+    value += 1.0;
+    return value;
+}
+fn tick(float value) -> float {
+    value++;
+    return value;
+}
+fn post(float value) -> float {
+    return value--;
+}
+fn halfcheck() -> bool {
+    return add_half(0.5) == 1.0;
+}
+fn growcheck() -> bool {
+    return accumulate(0.5) == 1.5;
+}
+fn stepcheck() -> bool {
+    return step(1.5) == 2.5;
+}
+fn tickcheck() -> bool {
+    return tick(1.0) == 2.0;
+}
+fn postcheck() -> bool {
+    bool unchanged = post(2.5) == 2.5;
+    bool advanced = tick(1.0) == 2.0;
+    return unchanged && advanced;
+}
+fn report() {
+    if (halfcheck()) {
+        print("half");
+    }
+    if (growcheck()) {
+        print("cycle");
+    }
+    if (stepcheck()) {
+        print("step");
+    }
+}
+fn report2() {
+    if (tickcheck()) {
+        print("ticked");
+    }
+    if (postcheck()) {
+        print("post");
+    }
+}
+fn main() {
+    report();
+    report2();
+}

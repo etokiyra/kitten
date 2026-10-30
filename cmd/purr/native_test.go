@@ -17,9 +17,12 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -533,6 +536,56 @@ fn @$print (p0: ref) -> void
 
 `
 
+// The Phase 10.5 float render, pinned: float literals bind their IEEE 754
+// bit patterns as `constf`, the SSE2 forms carry the `f` suffix, and the
+// branch shapes stay identical to the scalar slices.
+const wantQuartersScene = `scene
+data $blob0: 1 bytes 10
+data $blob1: 8 bytes 113 117 97 114 116 101 114 115
+entry 0 @main
+fn @main () -> void
+  b0: float64 binding
+  b1: float64 binding
+  b2: float64 binding
+  b3: float64 binding
+  b4: bool binding
+  b5: ref binding
+  b0: float = constf 4602678819172646912
+  b1: float = constf 4598175219545276416
+  b2: float = addf b0 b1
+  b3: float = constf 4604930618986332160
+  b4: bool = equalf b2 b3
+  branch b4 %0 %1
+  label %0
+  b5: ref = data $blob1
+  call @1 b5
+  label %1
+fn @$print (p0: ref) -> void
+  b0: ref binding
+  b1: int binding
+  b2: ref binding
+  b3: int binding
+  b4: int binding
+  b5: int binding
+  b6: ref binding
+  b7: ref binding
+  b8: int binding
+  b9: int binding
+  b10: int binding
+  b1: int = raw_load64 b0 0
+  b2: ref = raw_load64 b0 8
+  b3: int = const 1
+  b4: int = const 1
+  b5: int = raw_syscall syscall b4 b3 b2 b1
+  b6: ref = data $blob0
+  b7: ref = raw_load64 b6 8
+  b8: int = const 1
+  b9: int = const 1
+  b10: int = raw_syscall syscall b4 b8 b7 b9
+  return
+
+`
+
 // lowerCorpusSources returns the scalar corpus programs the lowering runs.
 func lowerCorpusSources(t *testing.T) []string {
 	t.Helper()
@@ -608,6 +661,116 @@ func TestNativeProbeLowerRender(t *testing.T) {
 	}
 }
 
+// TestNativeProbeFloatEncode drives the decimal-to-binary64 encoder through
+// the probe's `float` mode: every case the corpus carries must equal the
+// bit pattern the language-level oracle (binary64 of the same literal)
+// produces, across both pipelines' builds. The fixed list pins every edge
+// the slice's claims rest on: exact halves and thirds, halfway ties at
+// powers of two, the round-trip precision edge, the smallest subnormal, the
+// maximal normal's boundary, and the saturations. The seeded random corpus
+// stays within the seventeen-digit precision bound; literals beyond it fail
+// deterministically and belong to the failure table.
+func TestNativeProbeFloatEncode(t *testing.T) {
+	requireToolchain(t)
+	executable := buildNativeProbe(t)
+	directory := t.TempDir()
+	cases := []string{
+		// Exact dyadic halves at every exponent the bits carry.
+		"0.5", "1.5", "2.5", "4.5", "1125899906842624.5", "2251799813685248.5",
+		"4503599627370496.5", "9007199254740991.5",
+		// Ties where round-to-nearest-even keeps the even side.
+		"4503599627370495.5",
+		// Thirds and the decimal classics.
+		"0.1", "0.2", "0.25", "0.3", "0.75", "3.0625", "3.14159265358979",
+		"3.141592653589793", "2.718281828459045", "0.30000000000000001",
+		"0.30000000000000004", "0.99999999999999999", "100.5", "512.025",
+		// Precision and range edges.
+		"9007199254740992.0", "99999999999999999.0", "17976931348623157.0",
+		"0.0000000000000000000005", "0.05", "0.005", "0.0005",
+		// Saturation and underflow.
+		"1" + strings.Repeat("0", 308) + ".0",
+		"1" + strings.Repeat("0", 309) + ".0",
+		"0" + strings.Repeat("0", 323) + "5.0",
+		"0" + strings.Repeat("0", 323) + "25.0",
+	}
+	rng := rand.New(rand.NewSource(10260030))
+	for index := 0; index < 1200; index++ {
+		integers := 1 + rng.Intn(5)
+		digits := []byte{byte('1' + rng.Intn(9))}
+		for position := 1; position < integers; position++ {
+			digits = append(digits, byte('0'+rng.Intn(10)))
+		}
+		fractional := 17 - integers
+		if rng.Intn(2) == 0 {
+			fractional = 1 + rng.Intn(6)
+			if integers+fractional > 17 {
+				fractional = 17 - integers
+			}
+		}
+		if fractional < 1 {
+			fractional = 1
+		}
+		for position := 0; position < fractional; position++ {
+			digits = append(digits, byte('0'+rng.Intn(10)))
+		}
+		cases = append(cases, string(digits[:integers])+"."+string(digits[integers:]))
+	}
+	badCase := "0.300000000000000044"
+	failures := 0
+	for _, text := range cases {
+		result := runExternal(t, executable, []string{"float", text}, directory, nil)
+		bits, err := strconv.ParseUint(strings.TrimSpace(result.stdout), 10, 64)
+		if err != nil {
+			t.Errorf("float %q: probe printed %q", text, result.stdout)
+			failures++
+			continue
+		}
+		want := math.Float64bits(mustParseFloat(t, text))
+		if uint64(bits) != want {
+			t.Errorf("float %q: bits %d, want %d", text, bits, want)
+			failures++
+		}
+	}
+	if failures != 0 {
+		t.Fatalf("%d float encodings differ from the oracle", failures)
+	}
+	broken := runExternal(t, executable, []string{"float", badCase}, directory, nil)
+	if broken.status != 1 || broken.stdout != "error float literals with more than 17 significant digits are not supported yet\n" {
+		t.Fatalf("float %q: status %d, stdout %q", badCase, broken.status, broken.stdout)
+	}
+}
+
+// mustParseFloat is the language-level oracle: Go's strconv parses a
+// decimal literal exactly as correctly as the C toolchain's conversion.
+// The range error is the saturation the double performs on out-of-band
+// magnitudes, and the returned magnitude (infinite or zero) is what the
+// conversion produces, so it is not an oracle disagreement.
+func mustParseFloat(t *testing.T, text string) float64 {
+	t.Helper()
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		if rangeError, ok := err.(*strconv.NumError); ok && rangeError.Err == strconv.ErrRange {
+			return value
+		}
+		t.Fatalf("the oracle rejects %q: %v", text, err)
+	}
+	return value
+}
+
+// TestNativeProbeLowerFloatRender pins the float scene's rendering, byte
+// for byte: bit patterns as constf constants and the SSE2 spellings.
+func TestNativeProbeLowerFloatRender(t *testing.T) {
+	executable := buildNativeProbe(t)
+	source := repoPath(t, "..", "..", "tests", "native", "quarters.ktn")
+	result := runExternal(t, executable, []string{"lower", source}, t.TempDir(), nil)
+	if result.status != 0 || result.stderr != "" {
+		t.Fatalf("quarters render: status %d, stderr %q", result.status, result.stderr)
+	}
+	if result.stdout != wantQuartersScene {
+		t.Fatalf("quarters render differs:\n--- got ---\n%s--- want ---\n%s", result.stdout, wantQuartersScene)
+	}
+}
+
 // lowerFailureCase is one unsupported-construct source with its expected
 // message tail. A positionless case omits the position; the loader's
 // read-failure spelling (path with no position) is the pathOnly kind.
@@ -627,7 +790,8 @@ func lowerFailureCases(badDirectory string) []lowerFailureCase {
 		{file: "concat.ktn", line: "4", col: "25", message: "string concatenation is not supported yet"},
 		{file: "enum.ktn", line: "1", col: "1", message: "enum declarations are not supported yet"},
 		{file: "eprint.ktn", line: "2", col: "5", message: `built-in "eprint" is not supported yet`},
-		{file: "float.ktn", line: "2", col: "5", message: "float values are not supported yet"},
+		{file: "float.ktn", line: "2", col: "21", message: "float literals with more than 17 significant digits are not supported yet"},
+		{file: "printfloat.ktn", line: "2", col: "10", message: "print is supported with exactly one string argument"},
 		{file: "imported.ktn", kind: "pathless", message: "the program has no main function"},
 		{file: "import.ktn", kind: "pathless", message: "the native lowering supports a single-module program, but the program has 2 modules"},
 		{file: "index.ktn", line: "2", col: "10", message: "indexing is not supported yet"},

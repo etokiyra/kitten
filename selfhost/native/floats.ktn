@@ -1,0 +1,488 @@
+// floats.ktn - decimal literal text, reduced to IEEE 754 binary64 bit
+// patterns in pure integer Kitten.
+//
+// The native backend must do what the C pipeline's C compiler does: turn a
+// float literal like 0.30000000000000004 into the exact 64-bit bit pattern
+// its double denotes. Kitten has no floating-point arithmetic, so the
+// conversion runs entirely on the defined integer semantics (Phase 8.1's
+// wrap rules and Phase 8.2's bitwise operators), bit by bit.
+//
+// The algorithm is exact and rounds precisely once:
+//
+//   1. The literal's digits split into the significant run (at most
+//      seventeen digits, every double's round-trip precision) and the
+//      decimal exponent that run carries: value = M x 10^E.
+//   2. M and 10^E materialize exactly into 16-bit limbs, low word first.
+//      Sixteen bits keep every product inside the signed 64-bit range, so
+//      no wrap and no undefined behavior appear anywhere; the limb budget
+//      (400 words = 6400 bits) sits orders of magnitude above the largest
+//      values the conversion can ever need.
+//   3. For E >= 0 the exact value is a plain integer: its top 53 bits are
+//      the significand, and the guard and sticky come from the bits below.
+//      For E < 0 the value is a division by 10^-E: the ratio is steered
+//      into [1, 2) with exact doublings of the divisor or the numerator,
+//      52 successive shift-compare-subtract steps draw the fractional
+//      bits, one more step draws the guard bit, and the leftover remainder
+//      is the sticky.
+//   4. The significand rounds to nearest-even once, against guard and
+//      sticky; the exponent field walks the subnormal edge downward and
+//      saturates to infinity upward, exactly as the IEEE rules and the C
+//      toolchain's text conversion do.
+//
+// What the literal grammar delivers: digits, one decimal point, digits, no
+// sign (the unary minus lowers elsewhere), no exponent notation, and no
+// digit-run bound. Literals with more than seventeen significant digits
+// fail deterministically instead of silently rounding twice; that bound
+// covers every value a double can round-trip, and longer runs upgrade
+// with the runtime. Values so large the double saturates become positive
+// infinity's pattern exactly as the text conversion does, and values so
+// far under the subnormal half point become zero.
+
+// FloatNum is one exact nonnegative value in little-endian 16-bit limbs.
+// Every limb slot stays below 2^16, so per-limb arithmetic is exact, and
+// only x10 steps and exact bit shifts ever touch the whole.
+struct FloatNum {
+    int[] words;
+    int count;
+    int capacity;
+}
+
+// The encoder's limb budget: 400 limbs of 16 bits = 6400 bits, against a
+// worst case below 1400 bits (a 1e308-sized numerator, a 10^400-sized
+// divisor, and their steering shifts), so the budget never governs a
+// result.
+fn float_capacity() -> int {
+    return 400;
+}
+
+fn float_new() -> FloatNum {
+    return FloatNum {
+        words = new int[float_capacity()],
+        count = 0,
+        capacity = float_capacity()
+    };
+}
+
+// float_word reads one limb; reads beyond the run are zero, which keeps
+// the helpers' argument positions simple.
+fn float_word(FloatNum number, int word) -> int {
+    if (word < 0 || word >= number.count) {
+        return 0;
+    }
+    return number.words[word];
+}
+
+// float_bit reads one bit of the value at a zero-based position.
+fn float_bit(FloatNum number, int position) -> int {
+    if (position < 0) {
+        return 0;
+    }
+    int word = position / 16;
+    int shift = position - word * 16;
+    return (float_word(number, word) >> shift) & 1;
+}
+
+// float_top is the position of the value's highest set bit, one-based, or
+// 0 when the value is zero. Higher zero limbs shrink the word run once,
+// here, so the later walks skip them.
+fn float_top(FloatNum number) -> int {
+    int top = number.count - 1;
+    while (top >= 0 && number.words[top] == 0) {
+        top--;
+    }
+    number.count = top + 1;
+    if (top < 0) {
+        return 0;
+    }
+    int word = number.words[top];
+    int bits = 0;
+    while (word > 0) {
+        word = word >> 1;
+        bits++;
+    }
+    return top * 16 + bits;
+}
+
+// float_add_digit appends one decimal digit: value = value * 10 + digit.
+fn float_add_digit(FloatNum number, int digit) {
+    int carry = digit;
+    int word = 0;
+    while (carry > 0 || word < number.count) {
+        int value = float_word(number, word) * 10 + carry;
+        number.words[word] = value & 65535;
+        carry = value >> 16;
+        if (word >= number.count && number.count < number.capacity) {
+            number.count = word + 1;
+        }
+        word++;
+    }
+}
+
+// float_mul_10 multiplies the value by ten exactly.
+fn float_mul_10(FloatNum number) {
+    int carry = 0;
+    int word = 0;
+    while (word < number.count || carry > 0) {
+        int value = float_word(number, word) * 10 + carry;
+        number.words[word] = value & 65535;
+        carry = value >> 16;
+        word++;
+    }
+    if (word > number.count && number.count < number.capacity) {
+        number.count = word;
+    }
+}
+
+// float_shift_left doubles the value by one exact bit.
+fn float_shift_left(FloatNum number) {
+    int carry = 0;
+    int word = 0;
+    while (word < number.count || carry > 0) {
+        int value = (float_word(number, word) << 1) | carry;
+        number.words[word] = value & 65535;
+        carry = value >> 16;
+        word++;
+    }
+    if (word > number.count && number.count < number.capacity) {
+        number.count = word;
+    }
+}
+
+// float_shift_left_copy shifts a fresh copy of number into target by
+// shift bits exactly, leaving number untouched.
+fn float_shift_left_copy(FloatNum number, int shift, FloatNum target) {
+    int word = 0;
+    while (word < number.count) {
+        target.words[word] = number.words[word];
+        word++;
+    }
+    target.count = number.count;
+    int index = 0;
+    while (index < shift) {
+        float_shift_left(target);
+        index++;
+    }
+}
+
+// float_sub subtracts right from left in place; the callers keep
+// left >= right. The run's trailing zero limbs stay until the next
+// float_top call shrinks them.
+fn float_sub(FloatNum left, FloatNum right) {
+    int borrow = 0;
+    int word = 0;
+    while (word < left.count) {
+        int value = left.words[word] - borrow - float_word(right, word);
+        if (value < 0) {
+            value += 65536;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        left.words[word] = value;
+        word++;
+    }
+}
+
+// float_ge reports whether left >= right, walking limbs from the top.
+fn float_ge(FloatNum left, FloatNum right) -> bool {
+    int left_top = float_top(left);
+    int right_top = float_top(right);
+    if (left_top != right_top) {
+        return left_top > right_top;
+    }
+    int word = (left_top - 1) / 16;
+    while (word >= 0) {
+        int left_word = float_word(left, word);
+        int right_word = float_word(right, word);
+        if (left_word != right_word) {
+            return left_word > right_word;
+        }
+        word--;
+    }
+    return true;
+}
+
+// float_ge_shifted reports whether left >= right shifted up by shift
+// bits, at bit level: left's bits at [shift, top) walk position by
+// position against right's own bits. Anything left can hold below the
+// shift only ever helps left, since right shifted up is zero there, so
+// the walk never misses a decisive difference.
+fn float_ge_shifted(FloatNum left, FloatNum right, int shift) -> bool {
+    int left_top = float_top(left);
+    int right_top = float_top(right) + shift;
+    if (left_top != right_top) {
+        return left_top > right_top;
+    }
+    int position = left_top - 1;
+    while (position >= shift) {
+        int left_bit = float_bit(left, position);
+        int right_bit = float_bit(right, position - shift);
+        if (left_bit != right_bit) {
+            return left_bit > right_bit;
+        }
+        position--;
+    }
+    return true;
+}
+
+// float_nonzero reports whether the value has any set bit; the answer
+// reads the value's top, since subtraction may leave zero limbs in the
+// run without shrinking it. Its use is the sticky after the last
+// subtraction, which must count the actual value.
+fn float_nonzero(FloatNum number) -> bool {
+    return float_top(number) != 0;
+}
+
+// float_any_below reports whether any set bit sits at a position in
+// [0, bound): the sticky half of the final round.
+fn float_any_below(FloatNum number, int bound) -> bool {
+    int top = float_top(number);
+    if (top == 0) {
+        return false;
+    }
+    int full = bound / 16;
+    int word = 0;
+    while (word < full && word < number.count) {
+        if (number.words[word] != 0) {
+            return true;
+        }
+        word++;
+    }
+    int shift = bound - full * 16;
+    if (shift > 0 && full < number.count) {
+        return (number.words[full] & ((1 << shift) - 1)) != 0;
+    }
+    return false;
+}
+
+// float_extract reads the [position, position + 53) bit run as an
+// unsigned integer, so its top bit maps to 2^52.
+fn float_extract(FloatNum number, int position) -> int {
+    int value = 0;
+    int index = 52;
+    while (index >= 0) {
+        value = (value << 1) | float_bit(number, position + index);
+        index--;
+    }
+    return value;
+}
+
+// float_as_int reads a value that fits in 53 bits as one integer.
+fn float_as_int(FloatNum number) -> int {
+    int value = 0;
+    int word = number.count - 1;
+    while (word >= 0) {
+        value = (value << 16) | number.words[word];
+        word--;
+    }
+    return value;
+}
+
+// float_inf_bits is positive infinity's IEEE 754 pattern.
+fn float_inf_bits() -> int {
+    return 9218868437227405312;
+}
+
+// float_round_assemble rounds the 53-bit significand (implicit bit at
+// 2^52 included) against guard and sticky, then assembles the pattern at
+// the value's binary exponent: normal, subnormal, zero, or infinity,
+// each through exactly one rounding.
+fn float_round_assemble(int exponent, int significand, bool guard, bool sticky) -> int {
+    if (guard && (sticky || (significand & 1) == 1)) {
+        significand++;
+    }
+    if (significand == (1 << 53)) {
+        significand = 1 << 52;
+        exponent++;
+    }
+    int field = exponent + 1023;
+    if (field >= 2047) {
+        return float_inf_bits();
+    }
+    if (field <= 0) {
+        // Subnormal: the pattern's bits carry the significand scaled to
+        // 2^-1074. The pre-rounding guard folds into the sticky, then the
+        // needed shifts walk down with the same rule.
+        int shifts = -1022 - exponent;
+        int index = 0;
+        while (index < shifts) {
+            sticky = sticky || guard;
+            guard = ((significand & 1) == 1);
+            significand = significand >> 1;
+            index++;
+        }
+        if (guard && (sticky || (significand & 1) == 1)) {
+            significand++;
+            if (significand == (1 << 52)) {
+                // The rounded-up subnormal is the smallest normal.
+                return significand;
+            }
+        }
+        return significand;
+    }
+    return (field << 52) | (significand - (1 << 52));
+}
+
+// float_integer_bits extracts an exact nonnegative integer's
+// significand: its top 53 bits, the guard and everything below them for
+// sticky, at binary exponent height - 1.
+fn float_integer_bits(FloatNum value, int height) -> int {
+    int binary = height - 1;
+    int significand = 0;
+    bool guard = false;
+    bool sticky = false;
+    if (height <= 53) {
+        significand = float_as_int(value) << (53 - height);
+    } else {
+        int shift = height - 53;
+        significand = float_extract(value, shift);
+        guard = (float_bit(value, shift - 1) == 1);
+        sticky = float_any_below(value, shift - 1);
+    }
+    return float_round_assemble(binary, significand, guard, sticky);
+}
+
+// float_ratio_bits extracts the significand of an exact ratio whose value
+// sits below one: the steering steers numerator/divisor into [1, 2) with
+// exact doublings (tracking the binary exponent), then 52
+// shift-compare-subtract draws the fractional bits, one more the guard,
+// and the remainder is the sticky.
+fn float_ratio_bits(FloatNum numerator, FloatNum divisor) -> int {
+    int binary = 0;
+    while (float_ge_shifted(numerator, divisor, 1)) {
+        // numerator >= 2 x divisor: double the divisor, exponent up.
+        float_shift_left(divisor);
+        binary++;
+    }
+    while (!float_ge(numerator, divisor)) {
+        // numerator < divisor: double the numerator, exponent down.
+        float_shift_left(numerator);
+        binary--;
+    }
+
+    // The ratio now sits in [1, 2): record the implicit one, then walk
+    // the fraction's 52 bits into a separate accumulator so the implicit
+    // bit stays at 2^52, one more step for the guard, and the remainder
+    // for the sticky.
+    float_sub(numerator, divisor);
+    int fraction = 0;
+    int index = 0;
+    while (index < 52) {
+        float_shift_left(numerator);
+        if (float_ge(numerator, divisor)) {
+            float_sub(numerator, divisor);
+            fraction = (fraction << 1) | 1;
+        } else {
+            fraction = fraction << 1;
+        }
+        index++;
+    }
+    float_shift_left(numerator);
+    bool guard = float_ge(numerator, divisor);
+    if (guard) {
+        float_sub(numerator, divisor);
+    }
+    bool sticky = float_nonzero(numerator);
+    return float_round_assemble(binary, (1 << 52) | fraction, guard, sticky);
+}
+
+// EncodeFloatResult is the conversion's outcome: one exact bit pattern, or
+// one deterministic failure for a literal outside the encoder's bound.
+public union EncodeFloatResult {
+    Ok { int bits; }
+    Failed { string message; }
+}
+
+// encode_float reads one float literal's lexeme - digits, a decimal
+// point, digits, no sign, no exponent - and returns its binary64 bit
+// pattern.
+public fn encode_float(string text) -> EncodeFloatResult {
+    int size = length(text);
+    int point = -1;
+    int index = 0;
+    while (index < size) {
+        if (text[index] == 46) {
+            point = index;
+        }
+        index++;
+    }
+    if (point < 0) {
+        return EncodeFloatResult.Failed {
+            message = "a float literal carries no decimal point"
+        };
+    }
+
+    // The digit run: strip zeros on both sides. A digit K (0-based) of
+    // the concatenated digits sits at weight 10^(point - 1 - K), so the
+    // stripped run's last digit (at index end - 1) carries the scale.
+    string digits = substring(text, 0, point) + substring(text, point + 1, size);
+    int total = length(digits);
+    int start = 0;
+    while (start < total && digits[start] == 48) {
+        start++;
+    }
+    int end = total;
+    while (end > start && digits[end - 1] == 48) {
+        end--;
+    }
+    int significant = end - start;
+    if (significant == 0) {
+        return EncodeFloatResult.Ok { bits = 0 };
+    }
+
+    if (significant > 17) {
+        return EncodeFloatResult.Failed {
+            message = "float literals with more than 17 significant digits are not supported yet"
+        };
+    }
+
+    // value = M x 10^exponent, exactly.
+    int exponent = point - end;
+
+    FloatNum value = float_new();
+    int digit_index = start;
+    while (digit_index < end) {
+        float_add_digit(value, digits[digit_index] - 48);
+        digit_index++;
+    }
+
+    if (exponent > 0) {
+        // The exact value is the integer M x 10^exponent.
+        if (exponent > 308) {
+            // M >= 1, so the value already exceeds 2^1024.
+            return EncodeFloatResult.Ok { bits = float_inf_bits() };
+        }
+        int scale = 0;
+        while (scale < exponent) {
+            float_mul_10(value);
+            scale++;
+        }
+        int height = float_top(value);
+        if (height > 1024) {
+            // 2^1024 and beyond: the double saturates to infinity.
+            return EncodeFloatResult.Ok { bits = float_inf_bits() };
+        }
+        return EncodeFloatResult.Ok { bits = float_integer_bits(value, height) };
+    }
+
+    if (exponent < 0) {
+        // The exact value is M / 10^-exponent. Anything below 10^-401 is
+        // smaller than 2^-1075 (the subnormal round-to-zero half point
+        // sits at 1.235e-324, nondenumerable in decimal, so it never
+        // arises exactly here), and rounds to zero.
+        if (exponent < -400) {
+            return EncodeFloatResult.Ok { bits = 0 };
+        }
+        FloatNum divisor = float_new();
+        float_add_digit(divisor, 1);
+        int scale = 0;
+        while (scale < -exponent) {
+            float_mul_10(divisor);
+            scale++;
+        }
+        return EncodeFloatResult.Ok { bits = float_ratio_bits(value, divisor) };
+    }
+
+    // exponent == 0: the value is M itself.
+    return EncodeFloatResult.Ok { bits = float_integer_bits(value, float_top(value)) };
+}

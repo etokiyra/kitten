@@ -1,0 +1,5 @@
+fn main() {
+    if (0.5 + 0.25 == 0.75) {
+        print("quarters");
+    }
+}

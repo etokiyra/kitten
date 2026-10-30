@@ -1,3 +1,3 @@
 fn main() {
-    float value = 1.5;
+    float precise = 0.300000000000000044;
 }

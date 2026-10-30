@@ -1,0 +1,83 @@
+fn combine(float x, float y) -> float {
+    return x + y;
+}
+fn quarter() -> bool {
+    return 0.5 + 0.25 == 0.75;
+}
+fn accumulate() -> bool {
+    float total = 0.0;
+    int i = 0;
+    while (i < 3) {
+        total += 0.25;
+        i = i + 1;
+    }
+    return total == 0.75;
+}
+fn tie() -> bool {
+    float value = 4503599627370496.0 + 0.5;
+    return value == 4503599627370496.5;
+}
+fn reciprocal() -> bool {
+    float half = 1.0 / 2.0;
+    return half == 0.5;
+}
+fn unordered() -> bool {
+    float nanq = 0.0 / 0.0;
+    return nanq < 1.0;
+}
+fn overflowing() -> bool {
+    float side = 1.0 / 0.0;
+    return side == side;
+}
+fn signflip() -> bool {
+    float negative = -(0.5);
+    float scaled = 0.75 / 2.0;
+    return scaled * negative == -0.1875;
+}
+fn merged() -> bool {
+    float least = 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005;
+    float rounded = least / 2.0;
+    return rounded == 0.0;
+}
+fn zeroish() -> bool {
+    float flipped = -(0.0);
+    return flipped == 0.0;
+}
+fn report() {
+    if (quarter()) {
+        print("quarters");
+    }
+    if (accumulate()) {
+        print("accumulated");
+    }
+    if (tie()) {
+        print("tie");
+    }
+    if (reciprocal()) {
+        print("half");
+    }
+    if (!unordered()) {
+        print("ordered-false");
+    }
+}
+fn report2() {
+    if (overflowing()) {
+        print("inf");
+    }
+    if (signflip()) {
+        print("/sign");
+    }
+    if (merged()) {
+        print("merged");
+    }
+    if (zeroish()) {
+        print("zero");
+    }
+    if (combine(1.0, 2.0) == 3.0) {
+        print("combine");
+    }
+}
+fn main() {
+    report();
+    report2();
+}

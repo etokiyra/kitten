@@ -24,6 +24,18 @@ fn decimal(int value) -> string {
     return result;
 }
 
+// signed_decimal renders an integer in decimal, including the patterns
+// above 2^63 whose bit reading wraps negative; float bit patterns land in
+// the renderer through this helper.
+fn signed_decimal(int value) -> string {
+    if (value >= 0) {
+        return decimal(value);
+    }
+    // The negation wraps for the minimum pattern, but a bit pattern is one
+    // below 2^63 at most, so plain subtraction reaches zero safely.
+    return "-" + decimal(-value);
+}
+
 // binding_role renders a binding reference: parameters share the binding table,
 // so one spelling covers both.
 fn binding(int index) -> string {
@@ -83,6 +95,9 @@ fn render_instruction(NativeFunction function, int index) -> string {
         ConstRefData(target, blob) {
             return "  " + binding(target) + ": ref = data $blob" + decimal(blob);
         }
+        ConstFloat(target, bits) {
+            return "  " + binding(target) + ": float = constf " + signed_decimal(bits);
+        }
         Copy(target, source) {
             return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = copy " + binding(source);
         }
@@ -101,14 +116,38 @@ fn render_instruction(NativeFunction function, int index) -> string {
         WholeRemainder(target, left, right) {
             return "  " + binding(target) + ": int = whole_remainder " + binding(left) + " " + binding(right);
         }
+        AddFloat(target, left, right) {
+            return "  " + binding(target) + ": float = addf " + binding(left) + " " + binding(right);
+        }
+        SubtractFloat(target, left, right) {
+            return "  " + binding(target) + ": float = subtractf " + binding(left) + " " + binding(right);
+        }
+        MultiplyFloat(target, left, right) {
+            return "  " + binding(target) + ": float = multiplyf " + binding(left) + " " + binding(right);
+        }
+        DivideFloat(target, left, right) {
+            return "  " + binding(target) + ": float = dividef " + binding(left) + " " + binding(right);
+        }
         Negate(target, value) {
             return "  " + binding(target) + ": int = negate " + binding(value);
+        }
+        NegateFloat(target, value) {
+            return "  " + binding(target) + ": float = negatef " + binding(value);
         }
         Equal(target, left, right) {
             return "  " + binding(target) + ": bool = equal " + binding(left) + " " + binding(right);
         }
         LessThan(target, left, right) {
             return "  " + binding(target) + ": bool = less_than " + binding(left) + " " + binding(right);
+        }
+        EqualFloat(target, left, right) {
+            return "  " + binding(target) + ": bool = equalf " + binding(left) + " " + binding(right);
+        }
+        GreaterFloat(target, left, right) {
+            return "  " + binding(target) + ": bool = greaterf " + binding(left) + " " + binding(right);
+        }
+        LessOrEqualFloat(target, left, right) {
+            return "  " + binding(target) + ": bool = less_or_equalf " + binding(left) + " " + binding(right);
         }
         Call(target, callee, arguments, argument_count) {
             return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = call @" + decimal(callee) + render_arguments(arguments, argument_count);

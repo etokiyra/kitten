@@ -24,6 +24,7 @@
 //     native arith               render the arithmetic-and-control-flow scene
 //     native lower <source>      render a real source's lowered scene
 //     native lower <src> <out>   write a real source's static executable
+//     native float <text>        encode one float literal to its bit pattern
 //
 // Modes: no-label, bad-binding, bad-call-count, bad-call-shape, bad-entry,
 // undefined-label. This is test infrastructure: the rendering and error
@@ -36,6 +37,7 @@ import "checker/state.ktn";
 import "native/ir.ktn";
 import "native/text.ktn";
 import "native/lower.ktn";
+import "native/floats.ktn";
 import "native/selector.ktn";
 import "native/elf.ktn";
 
@@ -463,6 +465,30 @@ fn positioned(string path, int line, int column, string message) -> string {
     return path + ":" + decimal(line) + ":" + decimal(column) + ": " + message;
 }
 
+// encode_float_debug is temporary: reports the walk's binary exponent and
+// sticky/guard represented as 1/0 dots, for the tie investigations.
+public fn encode_float_debug(string text) -> string {
+    match (encode_float(text)) {
+        Ok(bits) {
+            int field = bits >> 52;
+            int mantissa = bits - (field << 52);
+            string report = lower_decimal_bits(bits) + " field=" + decimal(field) + " mant=" + decimal(mantissa);
+            return report;
+        }
+        Failed(message) {
+            return "error " + message;
+        }
+    }
+}
+
+// lower_decimal_bits renders possibly negative patterns like the renderer.
+fn lower_decimal_bits(int value) -> string {
+    if (value >= 0) {
+        return decimal(value);
+    }
+    return "-" + decimal(-value);
+}
+
 // lower_mode lowers one real source: it loads and checks the program with
 // the Kitten-written loader and checker, reduces it with the native
 // lowering, and either prints the scene's rendering (an empty output) or
@@ -533,6 +559,20 @@ fn main() {
             run_elf(build_divzero(), arguments[2]);
         } else if (arguments[1] == "lower") {
             lower_mode(arguments[2], "");
+        } else if (arguments[1] == "float") {
+            // Encode one float literal into its IEEE 754 bit pattern; the
+            // differential harness compares the pattern against a
+            // language-level oracle.
+            match (encode_float(arguments[2])) {
+                Ok(bits) {
+                    print(decimal(bits));
+                    exit(0);
+                }
+                Failed(message) {
+                    print("error " + message);
+                    exit(1);
+                }
+            }
         } else {
             eprint("native: unknown mode " + arguments[1]);
             exit(2);
