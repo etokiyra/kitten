@@ -167,6 +167,18 @@ fn render_instruction(NativeFunction function, int index) -> string {
         FailOOM {
             return "  fail_oom";
         }
+        RawStore64(address, offset, value) {
+            return "  raw_store64 " + binding(address) + " " + decimal(offset) + " " + binding(value);
+        }
+        RawLoad8(target, address, offset) {
+            return "  " + binding(target) + ": int = raw_load8 " + binding(address) + " " + decimal(offset);
+        }
+        RawStore8(address, offset, value) {
+            return "  raw_store8 " + binding(address) + " " + decimal(offset) + " " + binding(value);
+        }
+        StackPointer(target) {
+            return "  " + binding(target) + ": int = stack_pointer";
+        }
         RawSyscall(target, number, arguments, argument_count) {
             return "  " + binding(target) + ": int = raw_syscall syscall " + binding(number) + render_arguments(arguments, argument_count);
         }

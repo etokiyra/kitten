@@ -1,0 +1,10 @@
+fn sizes(string one, string two) -> int {
+    return length(one) + length(two);
+}
+fn main() {
+    string greeting = "hello";
+    print(length(greeting));
+    print(length(""));
+    print(length(greeting + "pur"));
+    print(sizes(greeting, "yes"));
+}

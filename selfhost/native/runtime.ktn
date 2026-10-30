@@ -1,58 +1,95 @@
 // runtime.ktn - the native backend's runtime shells.
 //
-// These are the Phase 10.6 runtime foundations, the first part of proposal
-// Section 6.2's runtime written in Kitten, exposed as scene functions the
-// lowering registers into every lowered program and that the probe's
-// hand-built scenes can reach through the same builders. Nothing here is
-// user-callable: every function name starts with "$", which no user
-// identifier can collide with.
+// These are the Phase 10.6/10.7 foundations of proposal Section 6.2's
+// runtime written in Kitten, exposed as scene functions the lowering
+// registers into every lowered program and that the probe's hand-built
+// scenes can reach through the same builders. Nothing here is user-callable:
+// every function name starts with "$", which no user identifier can collide
+// with.
 //
-// The allocator is a bump allocator over one anonymous mmap (proposal
-// Section 7.1's approved first GC reuses the same header ABI on heap
-// blocks): `$heap` is scene data whose payload holds the 64-bit cursor and
-// limit, `$map` maps the region once, and `$alloc` reads the cursor with
-// GetStatic, rounds the request to eight, advances it past the 8-byte object
-// header, writes the cursor back with SetStatic, and returns the object's
-// address. A negative size, a wrapped cursor, or a cursor past the limit all
-// reach a FailOOM instruction, which the selector lowers onto one shared
-// paragraph that writes the C runtime's exact `purr: out of memory` text and
-// exits with status 1. The heap stays a flat region in this slice; the
-// mark-sweep collector replaces the stepper in a later rung.
+// The collector is the proposal Section 7.1's approved non-moving
+// conservative mark-sweep, over the same header ABI the earlier slices
+// recorded. All blocks live in one mapped region; every block starts with
+// an 8-byte header word whose value is the whole block size (8-aligned, so
+// the three low bits stay reserved-zero as SPEC Section 19.10 fixes). Mark
+// state lives beside the heap in a one-byte-per-word ledger (`$gc`'s array
+// word): 1 certifies "a block header starts at this word", 2 adds "and this
+// block is marked live", and 0 means free space. Allocation writes the
+// ledger byte through one shared shell, conservative scanning marks only
+// where the ledger certifies a header, so a stale stack value or an
+// interior pointer can never write into payload data, and the sweep walks
+// the heap by size, demoting live ledger bytes and handing dead blocks to
+// the free-list builder, whose address-ordered runs coalesce. Search takes
+// first fit through the list (splitting tails), and bumping serves the
+// untouched cursor while it has room. Exhaustion after one collection
+// halts with the C runtime's exact `purr: out of memory` text and exits
+// with status 1.
 //
-// The print helpers mirror the C runtime's print family byte for byte:
-// `$print` writes a string object's payload plus the newline blob's payload;
-// `$write1` writes one byte and `$print_newline` writes the newline blob
-// alone; `$print_int` renders decimal text digit by digit — `$digits`
-// recurses so the most significant digit prints first over a negative
-// magnitude, which makes INT64_MIN print exactly as `%lld` does — and
-// `$print_bool` writes "true" or "false". Every helper sits below the
-// selector's fourteen-local frame layout, so every routine is small.
+// The string runtime carries the first user-reachable clients of the
+// collector: `$string_length` reads a string object's length word,
+// `$string_equal` compares byte for byte, and `$string_concat` allocates
+// one fresh object through `$alloc` and copies both payloads byte for
+// byte, so `+`, `+=`, `==`, `!=` between strings and the `length` built-in
+// land in the language exactly as the C pipeline words them. Every helper
+// stays below the selector's fourteen-local frame layout, so each routine
+// is small.
 
 import "ir.ktn";
 
-// Heap geometry: `$heap`'s payload holds two 8-byte words, the cursor and the
-// limit. The object ABI puts a blob's payload 24 bytes into the blob, so
+// Heap geometry: `$heap`'s payload is a six-word table (`$gc`'s is two
+// words). The object ABI puts a blob's payload 24 bytes into the blob, so
 // GetStatic and SetStatic address the words at these raw offsets.
-public fn heap_cursor_offset() -> int {
+public fn heap_base_offset() -> int {
     return 24;
 }
 
-public fn heap_limit_offset() -> int {
+public fn heap_cursor_offset() -> int {
     return 32;
 }
 
-// heap_size is the one mmap request: 256 MiB, the proposal Section 7.1's
+public fn heap_limit_offset() -> int {
+    return 40;
+}
+
+public fn heap_free_offset() -> int {
+    return 48;
+}
+
+public fn heap_last_offset() -> int {
+    return 56;
+}
+
+public fn heap_last_end_offset() -> int {
+    return 64;
+}
+
+public fn ledger_array_offset() -> int {
+    return 24;
+}
+
+public fn ledger_stack_offset() -> int {
+    return 32;
+}
+
+// heap_size is the one heap mmap: 256 MiB, the proposal Section 7.1's
 // first-shippable heap target. The kernel maps pages lazily, so an unused
 // program pays only the virtual reservation.
 public fn heap_size() -> int {
     return 268435456;
 }
 
-// ones_bytes builds the all-ones payload a scene blob holds before its
-// first write. The uncommented facts it carries: `bytes_to_string` rejects
-// NUL bytes, and the allocator reads the cursor's unwritten state as the
-// all-ones pattern, the negative value -1, so "unmapped" and "never
-// allocated" are one test the integer comparison `cursor < 0` answers.
+// ledger_size is the ledger's byte count: one byte per 8-byte heap word,
+// plus an eight-byte overhang, so a stale value equal to the limit still
+// indexes a real byte when the scan offers it.
+public fn ledger_size() -> int {
+    return 33554440;
+}
+
+// ones_bytes builds the all-ones payload the scene blobs start with: the
+// language cannot write a NUL byte (bytes_to_string rejects it), and every
+// word of these tables reads as the negative -1 before its first write,
+// the one value that means "absent" for cursors, links, and the captured
+// stack.
 fn ones_bytes(int count) -> string {
     byte[] data = new byte[count];
     int index = 0;
@@ -63,12 +100,20 @@ fn ones_bytes(int count) -> string {
     return bytes_to_string(data);
 }
 
-// AllocShell carries the allocator's scene indices: `$heap`'s blob index and
-// the `$map` and `$alloc` function indexes.
+// AllocShell carries the collector's scene indices: the `$heap` blob index
+// and the `$map` and `$alloc` function indexes.
 public struct AllocShell {
     int alloc;
     int map_shell;
     int heap_blob;
+}
+
+// StringShell carries the string runtime's function indexes.
+public struct StringShell {
+    int length;
+    int equal;
+    int concat;
+    int copy;
 }
 
 // one_ref_parameter returns a shape list holding exactly one reference.
@@ -92,97 +137,55 @@ fn one_bool_parameter() -> NativeType[] {
     return shapes;
 }
 
-// add_allocator registers the allocator into a scene: the `$heap` blob, then
-// the `$map` and `$alloc` shells with their bodies, in that order. It returns
-// every index the lowering and the probe need.
+// two_ref_parameters returns a shape list holding exactly two references.
+fn two_ref_parameters() -> NativeType[] {
+    NativeType[] shapes = new NativeType[2];
+    shapes[0] = NativeType.Ref;
+    shapes[1] = NativeType.Ref;
+    return shapes;
+}
+
+// two_int_parameters returns a shape list holding exactly two ints.
+fn two_int_parameters() -> NativeType[] {
+    NativeType[] shapes = new NativeType[2];
+    shapes[0] = NativeType.Int;
+    shapes[1] = NativeType.Int;
+    return shapes;
+}
+
+// three_int_parameters returns a shape list holding exactly three ints.
+fn three_int_parameters() -> NativeType[] {
+    NativeType[] shapes = new NativeType[3];
+    shapes[0] = NativeType.Int;
+    shapes[1] = NativeType.Int;
+    shapes[2] = NativeType.Int;
+    return shapes;
+}
+
+// --- The collector ----------------------------------------------------------
+
+// add_allocator registers the collector into a scene: the `$heap` blob, the
+// `$gc` ledger blob, then the shells in dependency order with their bodies.
+// It returns every index the lowering and the probe need.
 public fn add_allocator(NativeScene scene) -> AllocShell {
     AllocShell shell = AllocShell { alloc = 0, map_shell = 0, heap_blob = 0 };
 
-    int heap_blob = add_blob(scene, ones_bytes(16));
-    int map_shell = add_function(scene, "$map", NativeType.Void, new NativeType[0], 0);
-    NativeFunction map_function = function_at(scene, map_shell);
-
-    // $map maps the heap region once and parks cursor and limit in $heap.
-    //   cursor = mapping; limit = mapping + heap_size
-    int zero = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = zero, value = 0 });
-    int number = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = number, value = 9 });
-    int address = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = address, value = 0 });
-    int size = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = size, value = heap_size() });
-    int protection = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = protection, value = 3 });
-    int flags = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.ConstInt { target = flags, value = 34 });
-    int mapping = new_temporary(map_function, NativeType.Int);
-    int[] map_arguments = new int[4];
-    map_arguments[0] = address;
-    map_arguments[1] = size;
-    map_arguments[2] = protection;
-    map_arguments[3] = flags;
-    push_instruction(map_function, Instruction.RawSyscall { target = mapping, number = number, arguments = map_arguments, argument_count = 4 });
-    int failed = new_temporary(map_function, NativeType.Bool);
-    push_instruction(map_function, Instruction.LessThan { target = failed, left = mapping, right = zero });
-    push_instruction(map_function, Instruction.Branch { condition = failed, label_true = 0, label_false = 1 });
-    push_instruction(map_function, Instruction.Label { label = 0 });
-    push_instruction(map_function, Instruction.FailOOM);
-    push_instruction(map_function, Instruction.Label { label = 1 });
-    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = mapping });
-    int limit = new_temporary(map_function, NativeType.Int);
-    push_instruction(map_function, Instruction.Add { target = limit, left = mapping, right = size });
-    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_limit_offset(), value = limit });
-    push_instruction(map_function, Instruction.ReturnVoid);
-
-    // $alloc rounds the request to eight, walks the cursor back past the
-    // object header the caller writes, and answers with the object address.
-    // A negative size, a wrapper past the limit, and a wrapped cursor all
-    // reach the same FailOOM.
-    int alloc = add_function(scene, "$alloc", NativeType.Int, one_int_parameter(), 1);
-    NativeFunction alloc_function = function_at(scene, alloc);
-
-    int alloc_zero = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.ConstInt { target = alloc_zero, value = 0 });
-    int cursor = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
-    int flag = new_temporary(alloc_function, NativeType.Bool);
-    // The all-ones initial bytes read as the negative -1, so "unmapped" is
-    // plain "the cursor is negative".
-    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = cursor, right = alloc_zero });
-    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 0, label_false = 1 });
-    push_instruction(alloc_function, Instruction.Label { label = 0 });
-    int[] no_arguments = new int[0];
-    push_instruction(alloc_function, Instruction.CallVoid { function = map_shell, arguments = no_arguments, argument_count = 0 });
-    push_instruction(alloc_function, Instruction.Label { label = 1 });
-    push_instruction(alloc_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
-    int alloc_limit = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.GetStatic { target = limit, blob = heap_blob, offset = heap_limit_offset() });
-    int seven = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.ConstInt { target = seven, value = 7 });
-    int eight = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.ConstInt { target = eight, value = 8 });
-    int padded = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.Add { target = padded, left = 0, right = seven });
-    int rounded = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.WholeDivide { target = rounded, left = padded, right = eight });
-    push_instruction(alloc_function, Instruction.Multiply { target = rounded, left = rounded, right = eight });
-    int advanced = new_temporary(alloc_function, NativeType.Int);
-    push_instruction(alloc_function, Instruction.Add { target = advanced, left = cursor, right = rounded });
-    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = 0, right = alloc_zero });
-    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 2, label_false = 3 });
-    push_instruction(alloc_function, Instruction.Label { label = 3 });
-    int beyond = new_temporary(alloc_function, NativeType.Bool);
-    push_instruction(alloc_function, Instruction.LessThan { target = beyond, left = alloc_limit, right = advanced });
-    push_instruction(alloc_function, Instruction.Branch { condition = beyond, label_true = 2, label_false = 4 });
-    push_instruction(alloc_function, Instruction.Label { label = 4 });
-    push_instruction(alloc_function, Instruction.LessThan { target = flag, left = advanced, right = alloc_zero });
-    push_instruction(alloc_function, Instruction.Branch { condition = flag, label_true = 2, label_false = 5 });
-    push_instruction(alloc_function, Instruction.Label { label = 2 });
-    push_instruction(alloc_function, Instruction.FailOOM);
-    push_instruction(alloc_function, Instruction.Label { label = 5 });
-    push_instruction(alloc_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = advanced });
-    push_instruction(alloc_function, Instruction.Return { value = cursor });
+    int heap_blob = add_blob(scene, ones_bytes(48));
+    int gc_blob = add_blob(scene, ones_bytes(16));
+    int mmap = add_mmap_shell(scene);
+    int map_shell = add_map_shell(scene, heap_blob, gc_blob, mmap);
+    int pad8 = add_pad8_shell(scene);
+    int set_one = add_byte_set_shell(scene, heap_blob, gc_blob, 1);
+    int set_zero = add_byte_set_shell(scene, heap_blob, gc_blob, 0);
+    int search = add_search_shell(scene, heap_blob, set_one);
+    int bump = add_bump_shell(scene, heap_blob, set_one);
+    int marker = add_mark_at_shell(scene, heap_blob, gc_blob);
+    int scan_roots = add_scan_roots_shell(scene, gc_blob, marker);
+    int free_block = add_free_block_shell(scene, heap_blob, set_zero);
+    int sweep_block = add_sweep_block_shell(scene, heap_blob, gc_blob, free_block);
+    int sweep = add_sweep_shell(scene, heap_blob, sweep_block);
+    int collect = add_collect_shell(scene, scan_roots, sweep);
+    int alloc = add_alloc_shell(scene, heap_blob, map_shell, pad8, search, bump, collect);
 
     shell.alloc = alloc;
     shell.map_shell = map_shell;
@@ -190,6 +193,378 @@ public fn add_allocator(NativeScene scene) -> AllocShell {
     return shell;
 }
 
+// add_mmap_shell registers "$mmap": one anonymous mmap of the request, with
+// a failed mapping reaching FailOOM. Locals: 6.
+fn add_mmap_shell(NativeScene scene) -> int {
+    int mmap = add_function(scene, "$mmap", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction mmap_function = function_at(scene, mmap);
+
+    int zero = new_temporary(mmap_function, NativeType.Int);
+    push_instruction(mmap_function, Instruction.ConstInt { target = zero, value = 0 });
+    int prot = new_temporary(mmap_function, NativeType.Int);
+    push_instruction(mmap_function, Instruction.ConstInt { target = prot, value = 3 });
+    int flags = new_temporary(mmap_function, NativeType.Int);
+    push_instruction(mmap_function, Instruction.ConstInt { target = flags, value = 34 });
+    int number = new_temporary(mmap_function, NativeType.Int);
+    push_instruction(mmap_function, Instruction.ConstInt { target = number, value = 9 });
+    int mapping = new_temporary(mmap_function, NativeType.Int);
+    int[] arguments = new int[4];
+    arguments[0] = zero;
+    arguments[1] = 0;
+    arguments[2] = prot;
+    arguments[3] = flags;
+    push_instruction(mmap_function, Instruction.RawSyscall { target = mapping, number = number, arguments = arguments, argument_count = 4 });
+    int failed = new_temporary(mmap_function, NativeType.Bool);
+    push_instruction(mmap_function, Instruction.LessThan { target = failed, left = mapping, right = zero });
+    push_instruction(mmap_function, Instruction.Branch { condition = failed, label_true = 0, label_false = 1 });
+    push_instruction(mmap_function, Instruction.Label { label = 0 });
+    push_instruction(mmap_function, Instruction.FailOOM);
+    push_instruction(mmap_function, Instruction.Label { label = 1 });
+    push_instruction(mmap_function, Instruction.Return { value = mapping });
+    return mmap;
+}
+
+// add_map_shell registers "$map": two mmaps (the heap and its ledger) and
+// the one stack-pointer capture the conservative scan uses. The six `$heap`
+// words take their working values; the three free-list/last words take -1.
+// Locals: 7.
+fn add_map_shell(NativeScene scene, int heap_blob, int gc_blob, int mmap) -> int {
+    int map_shell = add_function(scene, "$map", NativeType.Void, new NativeType[0], 0);
+    NativeFunction map_function = function_at(scene, map_shell);
+
+    int size = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = size, value = heap_size() });
+    int ledger = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = ledger, value = ledger_size() });
+    int heap = new_temporary(map_function, NativeType.Int);
+    int[] heap_arguments = new int[1];
+    heap_arguments[0] = size;
+    push_instruction(map_function, Instruction.Call { target = heap, function = mmap, arguments = heap_arguments, argument_count = 1 });
+    int array = new_temporary(map_function, NativeType.Int);
+    int[] array_arguments = new int[1];
+    array_arguments[0] = ledger;
+    push_instruction(map_function, Instruction.Call { target = array, function = mmap, arguments = array_arguments, argument_count = 1 });
+    int rsp = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.StackPointer { target = rsp });
+    int minus_one = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.ConstInt { target = minus_one, value = -1 });
+    int limit = new_temporary(map_function, NativeType.Int);
+    push_instruction(map_function, Instruction.Add { target = limit, left = heap, right = size });
+
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_base_offset(), value = heap });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = heap });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_limit_offset(), value = limit });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_free_offset(), value = minus_one });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_offset(), value = minus_one });
+    push_instruction(map_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_end_offset(), value = minus_one });
+    push_instruction(map_function, Instruction.SetStatic { blob = gc_blob, offset = ledger_array_offset(), value = array });
+    push_instruction(map_function, Instruction.SetStatic { blob = gc_blob, offset = ledger_stack_offset(), value = rsp });
+    push_instruction(map_function, Instruction.ReturnVoid);
+    return map_shell;
+}
+
+// add_pad8_shell registers "$pad8": the whole block size is the request plus
+// the 8-byte header, rounded up to eight, with a 16-byte minimum, so a block
+// always fits its header and a free-list link. Locals: 7.
+fn add_pad8_shell(NativeScene scene) -> int {
+    int pad8 = add_function(scene, "$pad8", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction pad_function = function_at(scene, pad8);
+
+    int fifteen = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.ConstInt { target = fifteen, value = 15 });
+    int eight = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.ConstInt { target = eight, value = 8 });
+    int sixteen = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.ConstInt { target = sixteen, value = 16 });
+    int padded = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.Add { target = padded, left = 0, right = fifteen });
+    int divided = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.WholeDivide { target = divided, left = padded, right = eight });
+    int rounded = new_temporary(pad_function, NativeType.Int);
+    push_instruction(pad_function, Instruction.Multiply { target = rounded, left = divided, right = eight });
+    int small = new_temporary(pad_function, NativeType.Bool);
+    push_instruction(pad_function, Instruction.LessThan { target = small, left = rounded, right = sixteen });
+    push_instruction(pad_function, Instruction.Branch { condition = small, label_true = 0, label_false = 1 });
+    push_instruction(pad_function, Instruction.Label { label = 0 });
+    push_instruction(pad_function, Instruction.Copy { target = rounded, source = sixteen });
+    push_instruction(pad_function, Instruction.Label { label = 1 });
+    push_instruction(pad_function, Instruction.Return { value = rounded });
+    return pad8;
+}
+
+// add_byte_set_shell registers "$byte_set1"/"$byte_set0": the ledger byte
+// at the given block's word takes the fixed digit (1 certifies a block
+// header, 0 releases it). Every ledger write outside the sweep goes through
+// one of these shells, so a stale value can never steer a write into
+// payload data. Locals: 7.
+fn add_byte_set_shell(NativeScene scene, int heap_blob, int gc_blob, int digit) -> int {
+    string name = "$byte_set1";
+    if (digit == 0) {
+        name = "$byte_set0";
+    }
+    int setter = add_function(scene, name, NativeType.Void, one_int_parameter(), 1);
+    NativeFunction setter_function = function_at(scene, setter);
+
+    int base = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.GetStatic { target = base, blob = heap_blob, offset = heap_base_offset() });
+    int rel = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.Subtract { target = rel, left = 0, right = base });
+    int eight = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.ConstInt { target = eight, value = 8 });
+    int idx = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.WholeDivide { target = idx, left = rel, right = eight });
+    int array = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.GetStatic { target = array, blob = gc_blob, offset = ledger_array_offset() });
+    int addr = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.Add { target = addr, left = array, right = idx });
+    int value = new_temporary(setter_function, NativeType.Int);
+    push_instruction(setter_function, Instruction.ConstInt { target = value, value = digit });
+    push_instruction(setter_function, Instruction.RawStore8 { address = addr, offset = 0, value = value });
+    push_instruction(setter_function, Instruction.ReturnVoid);
+    return setter;
+}
+
+// add_search_shell registers "$search": first fit through the free list.
+// The found block is unlinked (the head word or the predecessor's link),
+// its tail splits off and relinks at the list head when the remainder
+// still fits a block, its header re-stamps to the taken size, and its
+// ledger byte gets certified 1. Locals: 14 (at the frame cap).
+fn add_search_shell(NativeScene scene, int heap_blob, int set_one) -> int {
+    int search = add_function(scene, "$search", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction search_function = function_at(scene, search);
+
+    int zero = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.ConstInt { target = zero, value = 0 });
+    int free = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.GetStatic { target = free, blob = heap_blob, offset = heap_free_offset() });
+    int prev = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.Copy { target = prev, source = zero });
+    int cur = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.Copy { target = cur, source = free });
+    int sixteen = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.ConstInt { target = sixteen, value = 16 });
+
+    // Walk: while cur >= 0 — the list's -1 sentinel ends it.
+    push_instruction(search_function, Instruction.Label { label = 0 });
+    int end = new_temporary(search_function, NativeType.Bool);
+    push_instruction(search_function, Instruction.LessThan { target = end, left = cur, right = zero });
+    push_instruction(search_function, Instruction.Branch { condition = end, label_true = 9, label_false = 1 });
+    push_instruction(search_function, Instruction.Label { label = 1 });
+    int hdr = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.RawLoad64 { target = hdr, address = cur, offset = 0 });
+    int too_small = new_temporary(search_function, NativeType.Bool);
+    push_instruction(search_function, Instruction.LessThan { target = too_small, left = hdr, right = 0 });
+    push_instruction(search_function, Instruction.Branch { condition = too_small, label_true = 2, label_false = 3 });
+
+    // Too small: prev = cur; cur = [cur+8], the address feeding its own load.
+    push_instruction(search_function, Instruction.Label { label = 2 });
+    push_instruction(search_function, Instruction.Copy { target = prev, source = cur });
+    push_instruction(search_function, Instruction.RawLoad64 { target = cur, address = cur, offset = 8 });
+    push_instruction(search_function, Instruction.Jump { label = 0 });
+
+    // Found. Unlink, then decide split.
+    push_instruction(search_function, Instruction.Label { label = 3 });
+    int next = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.RawLoad64 { target = next, address = cur, offset = 8 });
+    int is_first = new_temporary(search_function, NativeType.Bool);
+    push_instruction(search_function, Instruction.Equal { target = is_first, left = prev, right = zero });
+    push_instruction(search_function, Instruction.Branch { condition = is_first, label_true = 4, label_false = 5 });
+    push_instruction(search_function, Instruction.Label { label = 4 });
+    push_instruction(search_function, Instruction.SetStatic { blob = heap_blob, offset = heap_free_offset(), value = next });
+    push_instruction(search_function, Instruction.Jump { label = 6 });
+    push_instruction(search_function, Instruction.Label { label = 5 });
+    push_instruction(search_function, Instruction.RawStore64 { address = prev, offset = 8, value = next });
+    push_instruction(search_function, Instruction.Label { label = 6 });
+    int rest = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.Subtract { target = rest, left = hdr, right = 0 });
+    int small = new_temporary(search_function, NativeType.Bool);
+    push_instruction(search_function, Instruction.LessThan { target = small, left = rest, right = sixteen });
+    push_instruction(search_function, Instruction.Branch { condition = small, label_true = 8, label_false = 7 });
+    // Split: a fresh free node at cur + T, relinked at the list head.
+    push_instruction(search_function, Instruction.Label { label = 7 });
+    int tail = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.Add { target = tail, left = cur, right = 0 });
+    int head_now = new_temporary(search_function, NativeType.Int);
+    push_instruction(search_function, Instruction.RawStore64 { address = tail, offset = 0, value = rest });
+    push_instruction(search_function, Instruction.GetStatic { target = head_now, blob = heap_blob, offset = heap_free_offset() });
+    push_instruction(search_function, Instruction.RawStore64 { address = tail, offset = 8, value = head_now });
+    push_instruction(search_function, Instruction.SetStatic { blob = heap_blob, offset = heap_free_offset(), value = tail });
+    push_instruction(search_function, Instruction.Jump { label = 8 });
+    // Whole block: the remainder would not hold a node.
+    push_instruction(search_function, Instruction.Label { label = 8 });
+    push_instruction(search_function, Instruction.RawStore64 { address = cur, offset = 0, value = 0 });
+    int[] set_arguments = new int[1];
+    set_arguments[0] = cur;
+    push_instruction(search_function, Instruction.CallVoid { function = set_one, arguments = set_arguments, argument_count = 1 });
+    push_instruction(search_function, Instruction.Return { value = cur });
+    // walked off the end: no fit.
+    push_instruction(search_function, Instruction.Label { label = 9 });
+    push_instruction(search_function, Instruction.Return { value = zero });
+    return search;
+}
+
+// add_bump_shell registers "$bump": the fast path. The cursor advances past
+// the block when the limit allows, the header and ledger byte go down at
+// the object start, and the block's address returns. No room answers zero.
+// Locals: 5.
+fn add_bump_shell(NativeScene scene, int heap_blob, int set_one) -> int {
+    int bump = add_function(scene, "$bump", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction bump_function = function_at(scene, bump);
+
+    int zero = new_temporary(bump_function, NativeType.Int);
+    push_instruction(bump_function, Instruction.ConstInt { target = zero, value = 0 });
+    int cursor = new_temporary(bump_function, NativeType.Int);
+    push_instruction(bump_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
+    int limit = new_temporary(bump_function, NativeType.Int);
+    push_instruction(bump_function, Instruction.GetStatic { target = limit, blob = heap_blob, offset = heap_limit_offset() });
+    int advanced = new_temporary(bump_function, NativeType.Int);
+    push_instruction(bump_function, Instruction.Add { target = advanced, left = cursor, right = 0 });
+    int over = new_temporary(bump_function, NativeType.Bool);
+    push_instruction(bump_function, Instruction.LessThan { target = over, left = limit, right = advanced });
+    push_instruction(bump_function, Instruction.Branch { condition = over, label_true = 0, label_false = 1 });
+    push_instruction(bump_function, Instruction.Label { label = 1 });
+    push_instruction(bump_function, Instruction.SetStatic { blob = heap_blob, offset = heap_cursor_offset(), value = advanced });
+    push_instruction(bump_function, Instruction.RawStore64 { address = cursor, offset = 0, value = 0 });
+    int[] set_arguments = new int[1];
+    set_arguments[0] = cursor;
+    push_instruction(bump_function, Instruction.CallVoid { function = set_one, arguments = set_arguments, argument_count = 1 });
+    push_instruction(bump_function, Instruction.Return { value = cursor });
+    push_instruction(bump_function, Instruction.Label { label = 0 });
+    push_instruction(bump_function, Instruction.Return { value = zero });
+    return bump;
+}
+
+// add_mark_at_shell registers "$mark_at": one conservative stack value. A
+// value below the heap or at/above the limit is refused. A value inside the
+// heap maps to its ledger word, and only when the ledger certifies a block
+// header does the scanner set the byte to 2 (marked and live) unless it
+// already reads 2. Locals: 13.
+fn add_mark_at_shell(NativeScene scene, int heap_blob, int gc_blob) -> int {
+    int marker = add_function(scene, "$mark_at", NativeType.Void, one_int_parameter(), 1);
+    NativeFunction marker_function = function_at(scene, marker);
+
+    int base = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.GetStatic { target = base, blob = heap_blob, offset = heap_base_offset() });
+    int below = new_temporary(marker_function, NativeType.Bool);
+    push_instruction(marker_function, Instruction.LessThan { target = below, left = 0, right = base });
+    push_instruction(marker_function, Instruction.Branch { condition = below, label_true = 0, label_false = 1 });
+    push_instruction(marker_function, Instruction.Label { label = 1 });
+    int limit = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.GetStatic { target = limit, blob = heap_blob, offset = heap_limit_offset() });
+    int above = new_temporary(marker_function, NativeType.Bool);
+    push_instruction(marker_function, Instruction.LessThan { target = above, left = limit, right = 0 });
+    push_instruction(marker_function, Instruction.Branch { condition = above, label_true = 0, label_false = 2 });
+    push_instruction(marker_function, Instruction.Label { label = 2 });
+    int eight = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.ConstInt { target = eight, value = 8 });
+    int rel = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.Subtract { target = rel, left = 0, right = base });
+    int idx = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.WholeDivide { target = idx, left = rel, right = eight });
+    int array = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.GetStatic { target = array, blob = gc_blob, offset = ledger_array_offset() });
+    int addr = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.Add { target = addr, left = array, right = idx });
+    int state = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.RawLoad8 { target = state, address = addr, offset = 0 });
+    int one = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.ConstInt { target = one, value = 1 });
+    int certified = new_temporary(marker_function, NativeType.Bool);
+    push_instruction(marker_function, Instruction.Equal { target = certified, left = state, right = one });
+    push_instruction(marker_function, Instruction.Branch { condition = certified, label_true = 3, label_false = 0 });
+    push_instruction(marker_function, Instruction.Label { label = 3 });
+    int two = new_temporary(marker_function, NativeType.Int);
+    push_instruction(marker_function, Instruction.ConstInt { target = two, value = 2 });
+    push_instruction(marker_function, Instruction.RawStore8 { address = addr, offset = 0, value = two });
+    push_instruction(marker_function, Instruction.Label { label = 0 });
+    push_instruction(marker_function, Instruction.ReturnVoid);
+    return marker;
+}
+
+// add_scan_roots_shell registers "$scan_roots": the conservative root walk.
+// Every 8-byte slot from the current stack pointer (rounded down to a word)
+// to the stack captured at mapping time is offered to "$mark_at". Locals: 7.
+fn add_scan_roots_shell(NativeScene scene, int gc_blob, int marker) -> int {
+    int scanner = add_function(scene, "$scan_roots", NativeType.Void, new NativeType[0], 0);
+    NativeFunction scanner_function = function_at(scene, scanner);
+
+    int top = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.GetStatic { target = top, blob = gc_blob, offset = ledger_stack_offset() });
+    int rsp = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.StackPointer { target = rsp });
+    int seven = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.ConstInt { target = seven, value = 7 });
+    int eight = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.ConstInt { target = eight, value = 8 });
+    int low = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.Subtract { target = low, left = rsp, right = seven });
+    push_instruction(scanner_function, Instruction.WholeDivide { target = low, left = low, right = eight });
+    push_instruction(scanner_function, Instruction.Multiply { target = low, left = low, right = eight });
+
+    push_instruction(scanner_function, Instruction.Label { label = 0 });
+    int more = new_temporary(scanner_function, NativeType.Bool);
+    push_instruction(scanner_function, Instruction.LessThan { target = more, left = low, right = top });
+    push_instruction(scanner_function, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(scanner_function, Instruction.Label { label = 1 });
+    int value = new_temporary(scanner_function, NativeType.Int);
+    push_instruction(scanner_function, Instruction.RawLoad64 { target = value, address = low, offset = 0 });
+    int[] mark_arguments = new int[1];
+    mark_arguments[0] = value;
+    push_instruction(scanner_function, Instruction.CallVoid { function = marker, arguments = mark_arguments, argument_count = 1 });
+    push_instruction(scanner_function, Instruction.Add { target = low, left = low, right = eight });
+    push_instruction(scanner_function, Instruction.Jump { label = 0 });
+    push_instruction(scanner_function, Instruction.Label { label = 2 });
+    push_instruction(scanner_function, Instruction.ReturnVoid);
+    return scanner;
+}
+
+// add_free_block_shell registers "$free_block": one dead block's disposal.
+// A walk whose end is exactly this block's address extends the preceding
+// free run (its header absorbs the size, its list node stays); otherwise
+// the block heads the free list. Both shapes record the walk's last words
+// and clear the ledger byte. Locals: 8.
+fn add_free_block_shell(NativeScene scene, int heap_blob, int set_zero) -> int {
+    int free_block = add_function(scene, "$free_block", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction free_function = function_at(scene, free_block);
+
+    int zero = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.ConstInt { target = zero, value = 0 });
+    int head = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.GetStatic { target = head, blob = heap_blob, offset = heap_free_offset() });
+    int last = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.GetStatic { target = last, blob = heap_blob, offset = heap_last_offset() });
+    int last_end = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.GetStatic { target = last_end, blob = heap_blob, offset = heap_last_end_offset() });
+    int grows = new_temporary(free_function, NativeType.Bool);
+    push_instruction(free_function, Instruction.Equal { target = grows, left = last_end, right = 0 });
+    push_instruction(free_function, Instruction.Branch { condition = grows, label_true = 0, label_false = 1 });
+    // Extend the preceding free run: the header absorbs the size and the
+    // walk's end moves past this block.
+    push_instruction(free_function, Instruction.Label { label = 0 });
+    int hdr = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.RawLoad64 { target = hdr, address = last, offset = 0 });
+    int grown = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.Add { target = grown, left = hdr, right = 1 });
+    push_instruction(free_function, Instruction.RawStore64 { address = last, offset = 0, value = grown });
+    int end = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.Add { target = end, left = 0, right = 1 });
+    push_instruction(free_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_end_offset(), value = end });
+    int[] zero_arguments = new int[1];
+    zero_arguments[0] = 0;
+    push_instruction(free_function, Instruction.CallVoid { function = set_zero, arguments = zero_arguments, argument_count = 1 });
+    push_instruction(free_function, Instruction.ReturnVoid);
+    // Fresh: the block heads the list and the walk's last words.
+    push_instruction(free_function, Instruction.Label { label = 1 });
+    int fresh_end = new_temporary(free_function, NativeType.Int);
+    push_instruction(free_function, Instruction.Add { target = fresh_end, left = 0, right = 1 });
+    push_instruction(free_function, Instruction.RawStore64 { address = 0, offset = 8, value = head });
+    push_instruction(free_function, Instruction.SetStatic { blob = heap_blob, offset = heap_free_offset(), value = 0 });
+    push_instruction(free_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_offset(), value = 0 });
+    push_instruction(free_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_end_offset(), value = fresh_end });
+    push_instruction(free_function, Instruction.CallVoid { function = set_zero, arguments = zero_arguments, argument_count = 1 });
+    push_instruction(free_function, Instruction.ReturnVoid);
+    return free_block;
+}
 // add_string_print registers the "$print" routine: one reference parameter,
 // the object's length at raw offset 8 and payload pointer at raw offset 16,
 // one write syscall, then the newline blob's own byte through a second one.
@@ -396,4 +771,315 @@ public fn add_bool_print(NativeScene scene, int string_print) -> int {
     push_instruction(bool_function, Instruction.CallVoid { function = string_print, arguments = false_arguments, argument_count = 1 });
     push_instruction(bool_function, Instruction.ReturnVoid);
     return shell;
+}
+
+// add_sweep_block_shell registers "$sweep_block": one heap block's fate and
+// the size that advances the walk. A ledger byte of 2 (marked live) demotes
+// to 1; 1 (allocated, unmarked) hands the block to "$free_block"; 0
+// (released already) is skipped. Locals: 11.
+fn add_sweep_block_shell(NativeScene scene, int heap_blob, int gc_blob, int free_block) -> int {
+    int sweep_block = add_function(scene, "$sweep_block", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction sweep_function = function_at(scene, sweep_block);
+
+    int base = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.GetStatic { target = base, blob = heap_blob, offset = heap_base_offset() });
+    int rel = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.Subtract { target = rel, left = 0, right = base });
+    int eight = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.ConstInt { target = eight, value = 8 });
+    int idx = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.WholeDivide { target = idx, left = rel, right = eight });
+    int array = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.GetStatic { target = array, blob = gc_blob, offset = ledger_array_offset() });
+    int addr = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.Add { target = addr, left = array, right = idx });
+    int state = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.RawLoad8 { target = state, address = addr, offset = 0 });
+    int hdr = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.RawLoad64 { target = hdr, address = 0, offset = 0 });
+    int two = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.ConstInt { target = two, value = 2 });
+    int one = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.ConstInt { target = one, value = 1 });
+    int marked = new_temporary(sweep_function, NativeType.Bool);
+    push_instruction(sweep_function, Instruction.Equal { target = marked, left = state, right = two });
+    push_instruction(sweep_function, Instruction.Branch { condition = marked, label_true = 0, label_false = 1 });
+    push_instruction(sweep_function, Instruction.Label { label = 0 });
+    push_instruction(sweep_function, Instruction.RawStore8 { address = addr, offset = 0, value = one });
+    push_instruction(sweep_function, Instruction.Return { value = hdr });
+    push_instruction(sweep_function, Instruction.Label { label = 1 });
+    push_instruction(sweep_function, Instruction.Equal { target = marked, left = state, right = one });
+    push_instruction(sweep_function, Instruction.Branch { condition = marked, label_true = 2, label_false = 3 });
+    push_instruction(sweep_function, Instruction.Label { label = 2 });
+    int[] free_arguments = new int[2];
+    free_arguments[0] = 0;
+    free_arguments[1] = hdr;
+    push_instruction(sweep_function, Instruction.CallVoid { function = free_block, arguments = free_arguments, argument_count = 2 });
+    push_instruction(sweep_function, Instruction.Return { value = hdr });
+    push_instruction(sweep_function, Instruction.Label { label = 3 });
+    push_instruction(sweep_function, Instruction.Return { value = hdr });
+    return sweep_block;
+}
+
+// add_sweep_shell registers "$sweep": walk the heap block by block from its
+// base to the cursor, calling "$sweep_block" on each and advancing by its
+// size. The walk leaves the sweep's last words at -1 for the next run.
+// Locals: 6.
+fn add_sweep_shell(NativeScene scene, int heap_blob, int sweep_block) -> int {
+    int sweep = add_function(scene, "$sweep", NativeType.Void, new NativeType[0], 0);
+    NativeFunction sweep_function = function_at(scene, sweep);
+
+    int base = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.GetStatic { target = base, blob = heap_blob, offset = heap_base_offset() });
+    int cursor = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
+    int cur = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.Copy { target = cur, source = base });
+    push_instruction(sweep_function, Instruction.Label { label = 0 });
+    int more = new_temporary(sweep_function, NativeType.Bool);
+    push_instruction(sweep_function, Instruction.LessThan { target = more, left = cur, right = cursor });
+    push_instruction(sweep_function, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(sweep_function, Instruction.Label { label = 1 });
+    int size = new_temporary(sweep_function, NativeType.Int);
+    int[] block_arguments = new int[1];
+    block_arguments[0] = cur;
+    push_instruction(sweep_function, Instruction.Call { target = size, function = sweep_block, arguments = block_arguments, argument_count = 1 });
+    push_instruction(sweep_function, Instruction.Add { target = cur, left = cur, right = size });
+    push_instruction(sweep_function, Instruction.Jump { label = 0 });
+    push_instruction(sweep_function, Instruction.Label { label = 2 });
+    int minus_one = new_temporary(sweep_function, NativeType.Int);
+    push_instruction(sweep_function, Instruction.ConstInt { target = minus_one, value = -1 });
+    push_instruction(sweep_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_offset(), value = minus_one });
+    push_instruction(sweep_function, Instruction.SetStatic { blob = heap_blob, offset = heap_last_end_offset(), value = minus_one });
+    push_instruction(sweep_function, Instruction.ReturnVoid);
+    return sweep;
+}
+
+// add_collect_shell registers "$collect": mark from the stack, then sweep.
+fn add_collect_shell(NativeScene scene, int scan_roots, int sweep) -> int {
+    int collect = add_function(scene, "$collect", NativeType.Void, new NativeType[0], 0);
+    NativeFunction collect_function = function_at(scene, collect);
+
+    int[] no_arguments = new int[0];
+    push_instruction(collect_function, Instruction.CallVoid { function = scan_roots, arguments = no_arguments, argument_count = 0 });
+    push_instruction(collect_function, Instruction.CallVoid { function = sweep, arguments = no_arguments, argument_count = 0 });
+    push_instruction(collect_function, Instruction.ReturnVoid);
+    return collect;
+}
+
+// add_alloc_shell registers "$alloc": search the free list, bump the
+// cursor, and one full collection in between, all converging on one return
+// paragraph. Locals: 8.
+fn add_alloc_shell(NativeScene scene, int heap_blob, int map_shell, int pad8, int search, int bump, int collect) -> int {
+    int alloc = add_function(scene, "$alloc", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction alloc_function = function_at(scene, alloc);
+
+    int zero = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.ConstInt { target = zero, value = 0 });
+    int cursor = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.GetStatic { target = cursor, blob = heap_blob, offset = heap_cursor_offset() });
+    int unmapped = new_temporary(alloc_function, NativeType.Bool);
+    push_instruction(alloc_function, Instruction.LessThan { target = unmapped, left = cursor, right = zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = unmapped, label_true = 0, label_false = 1 });
+    push_instruction(alloc_function, Instruction.Label { label = 0 });
+    int[] no_arguments = new int[0];
+    push_instruction(alloc_function, Instruction.CallVoid { function = map_shell, arguments = no_arguments, argument_count = 0 });
+    push_instruction(alloc_function, Instruction.Label { label = 1 });
+    int size = new_temporary(alloc_function, NativeType.Int);
+    int[] request_arguments = new int[1];
+    request_arguments[0] = 0;
+    push_instruction(alloc_function, Instruction.Call { target = size, function = pad8, arguments = request_arguments, argument_count = 1 });
+    int[] padded_arguments = new int[1];
+    padded_arguments[0] = size;
+    int block = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.Call { target = block, function = search, arguments = padded_arguments, argument_count = 1 });
+    int miss = new_temporary(alloc_function, NativeType.Bool);
+    push_instruction(alloc_function, Instruction.Equal { target = miss, left = block, right = zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = miss, label_true = 2, label_false = 7 });
+    // Bump attempt: the untouched cursor still has room.
+    push_instruction(alloc_function, Instruction.Label { label = 2 });
+    int bumped = new_temporary(alloc_function, NativeType.Int);
+    push_instruction(alloc_function, Instruction.Call { target = bumped, function = bump, arguments = padded_arguments, argument_count = 1 });
+    int empty = new_temporary(alloc_function, NativeType.Bool);
+    push_instruction(alloc_function, Instruction.Equal { target = empty, left = bumped, right = zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = empty, label_true = 3, label_false = 6 });
+    // Collect, then one last search and one last bump.
+    push_instruction(alloc_function, Instruction.Label { label = 3 });
+    push_instruction(alloc_function, Instruction.CallVoid { function = collect, arguments = no_arguments, argument_count = 0 });
+    push_instruction(alloc_function, Instruction.Call { target = block, function = search, arguments = padded_arguments, argument_count = 1 });
+    push_instruction(alloc_function, Instruction.Equal { target = miss, left = block, right = zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = miss, label_true = 4, label_false = 7 });
+    push_instruction(alloc_function, Instruction.Label { label = 4 });
+    push_instruction(alloc_function, Instruction.Call { target = bumped, function = bump, arguments = padded_arguments, argument_count = 1 });
+    push_instruction(alloc_function, Instruction.Equal { target = empty, left = bumped, right = zero });
+    push_instruction(alloc_function, Instruction.Branch { condition = empty, label_true = 5, label_false = 6 });
+    push_instruction(alloc_function, Instruction.Label { label = 5 });
+    push_instruction(alloc_function, Instruction.FailOOM);
+    push_instruction(alloc_function, Instruction.Label { label = 6 });
+    push_instruction(alloc_function, Instruction.Copy { target = block, source = bumped });
+    push_instruction(alloc_function, Instruction.Label { label = 7 });
+    push_instruction(alloc_function, Instruction.Return { value = block });
+    return alloc;
+}
+
+// --- The string runtime -----------------------------------------------------
+
+// add_strings registers the string runtime: `$string_length`, `$copy_bytes`,
+// `$string_equal`, and `$string_concat`, in dependency order, with the
+// allocator's index handed to the concat shell. Nothing here depends on a
+// prescan, so every lowered program carries the shells.
+public fn add_strings(NativeScene scene, int alloc) -> StringShell {
+    StringShell shell = StringShell { length = 0, equal = 0, concat = 0, copy = 0 };
+    shell.length = add_string_length_shell(scene);
+    shell.copy = add_copy_bytes_shell(scene);
+    shell.equal = add_string_equal_shell(scene);
+    shell.concat = add_string_concat_shell(scene, shell.copy, alloc);
+    return shell;
+}
+
+// add_string_length_shell registers "$string_length": the length word at
+// offset 8. Locals: 1.
+fn add_string_length_shell(NativeScene scene) -> int {
+    int length = add_function(scene, "$string_length", NativeType.Int, one_ref_parameter(), 1);
+    NativeFunction length_function = function_at(scene, length);
+    int len = new_temporary(length_function, NativeType.Int);
+    push_instruction(length_function, Instruction.RawLoad64 { target = len, address = 0, offset = 8 });
+    push_instruction(length_function, Instruction.Return { value = len });
+    return length;
+}
+
+// add_copy_bytes_shell registers "$copy_bytes": copy `n` bytes from source
+// address to destination address, one byte per iteration. Locals: 6.
+fn add_copy_bytes_shell(NativeScene scene) -> int {
+    int copy = add_function(scene, "$copy_bytes", NativeType.Void, three_int_parameters(), 3);
+    NativeFunction copy_function = function_at(scene, copy);
+
+    int i = new_temporary(copy_function, NativeType.Int);
+    push_instruction(copy_function, Instruction.ConstInt { target = i, value = 0 });
+    int one = new_temporary(copy_function, NativeType.Int);
+    push_instruction(copy_function, Instruction.ConstInt { target = one, value = 1 });
+    push_instruction(copy_function, Instruction.Label { label = 0 });
+    int cont = new_temporary(copy_function, NativeType.Bool);
+    push_instruction(copy_function, Instruction.LessThan { target = cont, left = i, right = 2 });
+    push_instruction(copy_function, Instruction.Branch { condition = cont, label_true = 2, label_false = 1 });
+    // Body: destination[i] = source[i]; i += 1.
+    push_instruction(copy_function, Instruction.Label { label = 2 });
+    int saddr = new_temporary(copy_function, NativeType.Int);
+    push_instruction(copy_function, Instruction.Add { target = saddr, left = 1, right = i });
+    int value = new_temporary(copy_function, NativeType.Int);
+    push_instruction(copy_function, Instruction.RawLoad8 { target = value, address = saddr, offset = 0 });
+    int daddr = new_temporary(copy_function, NativeType.Int);
+    push_instruction(copy_function, Instruction.Add { target = daddr, left = 0, right = i });
+    push_instruction(copy_function, Instruction.RawStore8 { address = daddr, offset = 0, value = value });
+    push_instruction(copy_function, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(copy_function, Instruction.Jump { label = 0 });
+    push_instruction(copy_function, Instruction.Label { label = 1 });
+    push_instruction(copy_function, Instruction.ReturnVoid);
+    return copy;
+}
+
+// add_string_equal_shell registers "$string_equal": two content-compare
+// string objects, byte for byte, across the payload pointers at offset 16.
+// Locals: 14 (at the frame cap).
+fn add_string_equal_shell(NativeScene scene) -> int {
+    int equal = add_function(scene, "$string_equal", NativeType.Bool, two_ref_parameters(), 2);
+    NativeFunction equal_function = function_at(scene, equal);
+
+    int len_a = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad64 { target = len_a, address = 0, offset = 8 });
+    int len_b = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad64 { target = len_b, address = 1, offset = 8 });
+    int same = new_temporary(equal_function, NativeType.Bool);
+    push_instruction(equal_function, Instruction.Equal { target = same, left = len_a, right = len_b });
+    int answer = new_temporary(equal_function, NativeType.Bool);
+    push_instruction(equal_function, Instruction.Branch { condition = same, label_true = 0, label_false = 1 });
+    // Lengths differ: false.
+    push_instruction(equal_function, Instruction.Label { label = 1 });
+    push_instruction(equal_function, Instruction.ConstBool { target = answer, value = false });
+    push_instruction(equal_function, Instruction.Return { value = answer });
+    // Byte loop over the two payloads.
+    push_instruction(equal_function, Instruction.Label { label = 0 });
+    int pa = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad64 { target = pa, address = 0, offset = 16 });
+    int pb = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad64 { target = pb, address = 1, offset = 16 });
+    int i = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.ConstInt { target = i, value = 0 });
+    int one = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.ConstInt { target = one, value = 1 });
+    push_instruction(equal_function, Instruction.Label { label = 2 });
+    push_instruction(equal_function, Instruction.LessThan { target = same, left = i, right = len_a });
+    push_instruction(equal_function, Instruction.Branch { condition = same, label_true = 3, label_false = 4 });
+    push_instruction(equal_function, Instruction.Label { label = 3 });
+    int saddr = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.Add { target = saddr, left = pa, right = i });
+    int ba = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad8 { target = ba, address = saddr, offset = 0 });
+    int daddr = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.Add { target = daddr, left = pb, right = i });
+    int bb = new_temporary(equal_function, NativeType.Int);
+    push_instruction(equal_function, Instruction.RawLoad8 { target = bb, address = daddr, offset = 0 });
+    int matching = new_temporary(equal_function, NativeType.Bool);
+    push_instruction(equal_function, Instruction.Equal { target = matching, left = ba, right = bb });
+    push_instruction(equal_function, Instruction.Branch { condition = matching, label_true = 5, label_false = 1 });
+    push_instruction(equal_function, Instruction.Label { label = 5 });
+    push_instruction(equal_function, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(equal_function, Instruction.Jump { label = 2 });
+    push_instruction(equal_function, Instruction.Label { label = 4 });
+    push_instruction(equal_function, Instruction.ConstBool { target = answer, value = true });
+    push_instruction(equal_function, Instruction.Return { value = answer });
+    return equal;
+}
+
+// add_string_concat_shell registers "$string_concat": allocate one object
+// through "$alloc" large enough for both payloads, then copy the bytes.
+// The parameters and the fresh object all live in the same frame, so a
+// collection inside "$alloc" finds both source strings on the stack.
+// Locals: 9.
+fn add_string_concat_shell(NativeScene scene, int copy_bytes, int alloc) -> int {
+    int concat = add_function(scene, "$string_concat", NativeType.Ref, two_ref_parameters(), 2);
+    NativeFunction concat_function = function_at(scene, concat);
+
+    int len_a = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.RawLoad64 { target = len_a, address = 0, offset = 8 });
+    int len_b = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.RawLoad64 { target = len_b, address = 1, offset = 8 });
+    int total = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.Add { target = total, left = len_a, right = len_b });
+    int sixteen = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.ConstInt { target = sixteen, value = 16 });
+    // The request names everything after the block header: the length word,
+    // the payload pointer, and the concatenated bytes.
+    int request = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.Add { target = request, left = total, right = sixteen });
+    int obj_raw = new_temporary(concat_function, NativeType.Int);
+    int[] alloc_arguments = new int[1];
+    alloc_arguments[0] = request;
+    push_instruction(concat_function, Instruction.Call { target = obj_raw, function = alloc, arguments = alloc_arguments, argument_count = 1 });
+    int obj = new_temporary(concat_function, NativeType.Ref);
+    push_instruction(concat_function, Instruction.Copy { target = obj, source = obj_raw });
+    int twenty_four = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.ConstInt { target = twenty_four, value = 24 });
+    int dst = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.Add { target = dst, left = obj, right = twenty_four });
+    push_instruction(concat_function, Instruction.RawStore64 { address = obj, offset = 8, value = total });
+    push_instruction(concat_function, Instruction.RawStore64 { address = obj, offset = 16, value = dst });
+    int pa = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.RawLoad64 { target = pa, address = 0, offset = 16 });
+    int pb = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.RawLoad64 { target = pb, address = 1, offset = 16 });
+    int[] first = new int[3];
+    first[0] = dst;
+    first[1] = pa;
+    first[2] = len_a;
+    push_instruction(concat_function, Instruction.CallVoid { function = copy_bytes, arguments = first, argument_count = 3 });
+    int mid = new_temporary(concat_function, NativeType.Int);
+    push_instruction(concat_function, Instruction.Add { target = mid, left = dst, right = len_a });
+    int[] second = new int[3];
+    second[0] = mid;
+    second[1] = pb;
+    second[2] = len_b;
+    push_instruction(concat_function, Instruction.CallVoid { function = copy_bytes, arguments = second, argument_count = 3 });
+    push_instruction(concat_function, Instruction.Return { value = obj });
+    return concat;
 }

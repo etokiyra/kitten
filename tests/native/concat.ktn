@@ -1,0 +1,12 @@
+fn main() {
+    string a = "pur";
+    string b = "r";
+    print(a + b);
+    print(b + a + a);
+    string c = a + b;
+    print(c);
+    c += "!";
+    print(c);
+    print("");
+    print(a + "");
+}

@@ -1,0 +1,9 @@
+fn main() {
+    string a = "ab";
+    string b = "ab";
+    string d = "cd";
+    print(a == b);
+    print(a == d);
+    print(a != d);
+    print(a + d == "abcd");
+}

@@ -287,6 +287,54 @@ fn build_oom() -> NativeScene {
     return scene;
 }
 
+// build_gc is the collection-mirror program: six hundred one-megabyte
+// blocks, of which only the last allocation's reference survives, force the
+// cursor to the 256 MiB limit and then the collector to reclaim everything
+// not on the stack. The loop continues past each collection to the print,
+// so the executable demonstrates the sweep and the coalescing free list at
+// work; the mirrored claim is only that the run stays correct and
+// terminates, which the C pipeline cannot observe through Boehm.
+fn build_gc() -> NativeScene {
+    NativeScene scene = new_scene();
+    int done = add_blob(scene, "done");
+    int newline = add_blob(scene, "\n");
+    int print = add_print(scene, newline);
+    AllocShell allocator = add_allocator(scene);
+
+    int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
+    NativeFunction main_function = function_at(scene, main);
+
+    int chunk = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = chunk, value = 1048576 });
+    int count = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = count, value = 600 });
+    int one = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = one, value = 1 });
+    int counter = new_temporary(main_function, NativeType.Int);
+    push_instruction(main_function, Instruction.ConstInt { target = counter, value = 0 });
+    int scratch = new_temporary(main_function, NativeType.Int);
+    int[] alloc_arguments = new int[1];
+    alloc_arguments[0] = chunk;
+    push_instruction(main_function, Instruction.Label { label = 0 });
+    int more = new_temporary(main_function, NativeType.Bool);
+    push_instruction(main_function, Instruction.LessThan { target = more, left = counter, right = count });
+    push_instruction(main_function, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(main_function, Instruction.Label { label = 1 });
+    push_instruction(main_function, Instruction.Call { target = scratch, function = allocator.alloc, arguments = alloc_arguments, argument_count = 1 });
+    push_instruction(main_function, Instruction.Add { target = counter, left = counter, right = one });
+    push_instruction(main_function, Instruction.Jump { label = 0 });
+    push_instruction(main_function, Instruction.Label { label = 2 });
+    int text = new_temporary(main_function, NativeType.Ref);
+    push_instruction(main_function, Instruction.ConstRefData { target = text, blob = done });
+    int[] print_arguments = new int[1];
+    print_arguments[0] = text;
+    push_instruction(main_function, Instruction.CallVoid { function = print, arguments = print_arguments, argument_count = 1 });
+    push_instruction(main_function, Instruction.ReturnVoid);
+
+    scene.entry = main;
+    return scene;
+}
+
 // build_simple pins the argument-array shape: one array, two writes, two
 // calls, so the render shows whether a later array write reaches an
 // instruction pushed earlier through the same array reference.
@@ -585,6 +633,8 @@ fn main() {
             run_elf(build_divzero(), arguments[2]);
         } else if (arguments[1] == "elf-oom") {
             run_elf(build_oom(), arguments[2]);
+        } else if (arguments[1] == "elf-gc") {
+            run_elf(build_gc(), arguments[2]);
         } else if (arguments[1] == "lower") {
             lower_mode(arguments[2], "");
         } else if (arguments[1] == "float") {

@@ -1,0 +1,16 @@
+fn grow(string acc, int times) -> string {
+    int n = 0;
+    while (n < times) {
+        acc += acc;
+        n++;
+    }
+    return acc;
+}
+fn main() {
+    string acc = "x";
+    acc = grow(acc, 15);
+    print(length(acc));
+    string tail = acc + acc + "!";
+    print(length(tail));
+    print(tail == acc);
+}

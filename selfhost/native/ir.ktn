@@ -106,6 +106,15 @@ public fn blob_total(NativeScene scene, int blob) -> int {
 // language has no globals, so the cursor is backend-owned static memory —
 // and FailOOM jumps to the selector's out-of-memory paragraph, whose halt is
 // the C runtime's `purr: out of memory` text at status 1.
+//
+// The Phase 10.7 collector forms round the raw layer out: RawStore64 writes
+// one 8-byte slot at a dynamic address plus a small constant offset (the
+// mirrored store to RawLoad64), RawLoad8 and RawStore8 read and write one
+// byte at a dynamic address (byte-granularity for string data and the
+// collector's mark bytes), and StackPointer reads the current stack pointer
+// so the collector can capture and walk the live frames once, at mapping
+// time. Addresses flow as ints or refs; Add and Subtract fold either shape
+// because a pointer and its stack-slot reading are the same 64-bit value.
 public union Instruction {
     ConstInt { int target; int value; }
     ConstBool { int target; bool value; }
@@ -134,6 +143,10 @@ public union Instruction {
     GetStatic { int target; int blob; int offset; }
     SetStatic { int blob; int offset; int value; }
     FailOOM { }
+    RawStore64 { int address; int offset; int value; }
+    RawLoad8 { int target; int address; int offset; }
+    RawStore8 { int address; int offset; int value; }
+    StackPointer { int target; }
     RawSyscall { int target; int number; int[] arguments; int argument_count; }
     Jump { int label; }
     Branch { int condition; int label_true; int label_false; }
@@ -316,6 +329,10 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         GetStatic(n, b, o) {}
         SetStatic(b, o, v) {}
         FailOOM {}
+        RawStore64(a, o, v) {}
+        RawLoad8(n, a, o) {}
+        RawStore8(a, o, v) {}
+        StackPointer(n) {}
         Jump(l) {}
         Branch(c, t, f) {}
         Return(v) {}
@@ -361,6 +378,10 @@ fn snapshot_arguments(Instruction instruction) -> Instruction {
         GetStatic(n, b, o) { return instruction; }
         SetStatic(b, o, v) { return instruction; }
         FailOOM { return instruction; }
+        RawStore64(a, o, v) { return instruction; }
+        RawLoad8(n, a, o) { return instruction; }
+        RawStore8(a, o, v) { return instruction; }
+        StackPointer(n) { return instruction; }
         Jump(l) { return instruction; }
         Branch(c, t, f) { return instruction; }
         Label(l) { return instruction; }
@@ -572,17 +593,29 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
             failure = require_binding(function, source, NativeType.Void, position + "source");
             if (length(failure) == 0) {
                 NativeType shape = function.binding_types[source];
-                failure = require_binding(function, target, shape, position + "target");
+                string source_name = type_name(shape);
+                string target_name = type_name(function.binding_types[target]);
+                bool crossable = (source_name == "int" || source_name == "ref") ;
+                crossable = crossable && (target_name == "int" || target_name == "ref");
+                if (crossable) {
+                    // Int and ref are the same 64-bit value on this
+                    // machine; the collector's shells hand block addresses
+                    // to the language across exactly this boundary. Bool
+                    // and float shapes stay strict.
+                    failure = "";
+                } else {
+                    failure = require_binding(function, target, shape, position + "target");
+                }
             }
         }
         ConstFloat(target, bits) {
             failure = require_binding(function, target, NativeType.Float, position + "target");
         }
         Add(target, left, right) {
-            failure = check_int_pair(function, target, left, right, position);
+            failure = check_fold(function, target, left, right, position);
         }
         Subtract(target, left, right) {
-            failure = check_int_pair(function, target, left, right, position);
+            failure = check_fold(function, target, left, right, position);
         }
         Multiply(target, left, right) {
             failure = check_int_pair(function, target, left, right, position);
@@ -680,6 +713,36 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
         FailOOM {
             failure = "";
         }
+        RawStore64(address, offset, value) {
+            failure = check_raw_address(function, address, position + "address");
+            if (length(failure) == 0) {
+                failure = require_binding(function, value, NativeType.Int, position + "value");
+            }
+            if (length(failure) == 0 && (offset < 0 || offset > 255)) {
+                failure = position + "offset " + decimal(offset) + " is outside the selector's constant-offset range 0..255";
+            }
+        }
+        RawLoad8(target, address, offset) {
+            failure = check_raw_address(function, address, position + "address");
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+            if (length(failure) == 0 && (offset < 0 || offset > 255)) {
+                failure = position + "offset " + decimal(offset) + " is outside the selector's constant-offset range 0..255";
+            }
+        }
+        RawStore8(address, offset, value) {
+            failure = check_raw_address(function, address, position + "address");
+            if (length(failure) == 0) {
+                failure = require_binding(function, value, NativeType.Int, position + "value");
+            }
+            if (length(failure) == 0 && (offset < 0 || offset > 255)) {
+                failure = position + "offset " + decimal(offset) + " is outside the selector's constant-offset range 0..255";
+            }
+        }
+        StackPointer(target) {
+            failure = require_binding(function, target, NativeType.Int, position + "target");
+        }
         RawSyscall(target, number, arguments, argument_count) {
             failure = require_binding(function, number, NativeType.Int, position + "number");
             if (length(failure) == 0) {
@@ -740,6 +803,33 @@ fn check_int_pair(NativeFunction function, int target, int left, int right, stri
         return failure;
     }
     failure = require_binding(function, right, NativeType.Int, position + "right");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    return require_binding(function, target, NativeType.Int, position + "target");
+}
+
+// check_raw_address is the common gate for the raw-address forms: the
+// address binding must carry any real shape, since ints and refs are the
+// same 64-bit value on the machine.
+fn check_raw_address(NativeFunction function, int index, string role) -> string {
+    string failure = require_binding(function, index, NativeType.Void, role);
+    if (length(failure) == 0 && type_size(function.binding_types[index]) == 0) {
+        return role + " binding " + decimal(index) + " has no shape";
+    }
+    return "";
+}
+
+// check_fold is the Add/Subtract gate: both operands carry int or ref (a
+// reference folds with byte offsets, which is how the runtime reaches
+// object fields and payload bytes), and the target carries int. Every
+// arithmetic-only form keeps the stricter check_int_pair.
+fn check_fold(NativeFunction function, int target, int left, int right, string position) -> string {
+    string failure = check_raw_address(function, left, position + "left");
+    if (length(failure) != 0) {
+        return failure;
+    }
+    failure = check_raw_address(function, right, position + "right");
     if (length(failure) != 0) {
         return failure;
     }
@@ -870,6 +960,10 @@ fn label_defined(NativeFunction function, int label) -> bool {
             GetStatic(n, b, o) {}
             SetStatic(b, o, v) {}
             FailOOM {}
+            RawStore64(a, o, v) {}
+            RawLoad8(n, a, o) {}
+            RawStore8(a, o, v) {}
+            StackPointer(n) {}
             Jump(l) {}
             Branch(c, t, f) {}
             Return(v) {}

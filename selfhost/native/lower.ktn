@@ -74,6 +74,7 @@ struct Lowering {
     map[string]int functions;
     map[string]int literal_pool;
     AllocShell allocator;
+    StringShell strings;
     int string_print;
     int int_print;
     int bool_print;
@@ -159,6 +160,7 @@ fn new_lowering(SemanticModel model) -> Lowering {
         functions = new map[string]int,
         literal_pool = new map[string]int,
         allocator = AllocShell { alloc = 0, map_shell = 0, heap_blob = 0 },
+        strings = StringShell { length = 0, equal = 0, concat = 0, copy = 0 },
         string_print = -1,
         int_print = -1,
         bool_print = -1,
@@ -588,23 +590,38 @@ fn lower_binary(Lowering lowering, Token operator, Expr left, Expr right) -> int
     }
 
     if (op == "==" || op == "!=") {
-        if (expr_type(lowering, left).kind == TypeKind.String) {
-            fail_at(lowering, at, "string equality is not supported yet");
-            return -1;
-        }
         if (expr_type(lowering, left).kind == TypeKind.Bool) {
             fail_at(lowering, at, "comparing bool values is not supported yet");
             return -1;
         }
     }
-
-    if (op == "+") {
-        if (expr_type(lowering, left).kind == TypeKind.String) {
-            fail_at(lowering, at, "string concatenation is not supported yet");
-            return -1;
+    bool floating = type_name(lowering.body.binding_types[left_value]) == type_name(NativeType.Float);
+    // String values concatenate and compare by content through the string
+    // runtime: "$string_concat" is the one user-reachable allocation, and
+    // "$string_equal" walks both payloads byte for byte. `!=` negates the
+    // comparison like the derived comparisons do.
+    if (op == "+" && type_name(lowering.body.binding_types[left_value]) == type_name(NativeType.Ref)) {
+        int target = new_temporary(lowering.body, NativeType.Ref);
+        int[] arguments = new int[2];
+        arguments[0] = left_value;
+        arguments[1] = right_value;
+        push_instruction(lowering.body, Instruction.Call { target = target, function = lowering.strings.concat, arguments = arguments, argument_count = 2 });
+        return target;
+    }
+    if (op == "==" || op == "!=") {
+        if (type_name(lowering.body.binding_types[left_value]) == type_name(NativeType.Ref)) {
+            int equal_value = new_temporary(lowering.body, NativeType.Bool);
+            int[] equal_arguments = new int[2];
+            equal_arguments[0] = left_value;
+            equal_arguments[1] = right_value;
+            push_instruction(lowering.body, Instruction.Call { target = equal_value, function = lowering.strings.equal, arguments = equal_arguments, argument_count = 2 });
+            if (op == "!=") {
+                return negate_binding(lowering, equal_value);
+            }
+            return equal_value;
         }
     }
-    bool floating = type_name(lowering.body.binding_types[left_value]) == type_name(NativeType.Float);
+
     if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
         op == "<" || op == ">" || op == "<=" || op == ">=") {
         if (floating) {
@@ -789,7 +806,61 @@ fn lower_assign(Lowering lowering, Token operator, Expr target, Expr value) -> i
         push_instruction(lowering.body, Instruction.Copy { target = slot, source = assigned });
         return assigned;
     }
-    if (op == "+=" || op == "-=") {
+    if (op == "+=") {
+        NativeType fold_shape = NativeType.Int;
+        bool appending = type_name(lowering.body.binding_types[slot]) == type_name(NativeType.Ref);
+        bool floating = type_name(lowering.body.binding_types[slot]) == type_name(NativeType.Float);
+        if (appending) {
+            fold_shape = NativeType.Ref;
+        } else if (floating) {
+            if (!float_operand(lowering, slot, at)) {
+                return -1;
+            }
+            fold_shape = NativeType.Float;
+        } else {
+            if (!int_operand(lowering, slot, at)) {
+                return -1;
+            }
+        }
+        int assigned = lower_expression(lowering, value);
+        if (failed(lowering)) {
+            return -1;
+        }
+        if (appending) {
+            if (type_name(lowering.body.binding_types[assigned]) != type_name(NativeType.Ref)) {
+                fail_at(lowering, at, "string append is supported with a string value");
+                return -1;
+            }
+            // s' = append(s, t): the one user-reachable allocation, then
+            // the target takes the fresh object, exactly like the C
+            // pipeline's assignment expression.
+            int appended = new_temporary(lowering.body, NativeType.Ref);
+            int[] append_arguments = new int[2];
+            append_arguments[0] = slot;
+            append_arguments[1] = assigned;
+            push_instruction(lowering.body, Instruction.Call { target = appended, function = lowering.strings.concat, arguments = append_arguments, argument_count = 2 });
+            push_instruction(lowering.body, Instruction.Copy { target = slot, source = appended });
+            return appended;
+        }
+        if (floating) {
+            if (!float_operand(lowering, assigned, at)) {
+                return -1;
+            }
+        } else {
+            if (!int_operand(lowering, assigned, at)) {
+                return -1;
+            }
+        }
+        int folded = new_temporary(lowering.body, fold_shape);
+        if (floating) {
+            push_instruction(lowering.body, Instruction.AddFloat { target = folded, left = slot, right = assigned });
+        } else {
+            push_instruction(lowering.body, Instruction.Add { target = folded, left = slot, right = assigned });
+        }
+        push_instruction(lowering.body, Instruction.Copy { target = slot, source = folded });
+        return folded;
+    }
+    if (op == "-=") {
         NativeType fold_shape = NativeType.Int;
         bool floating = type_name(lowering.body.binding_types[slot]) == type_name(NativeType.Float);
         if (floating) {
@@ -816,18 +887,10 @@ fn lower_assign(Lowering lowering, Token operator, Expr target, Expr value) -> i
             }
         }
         int folded = new_temporary(lowering.body, fold_shape);
-        if (op == "+=") {
-            if (floating) {
-                push_instruction(lowering.body, Instruction.AddFloat { target = folded, left = slot, right = assigned });
-            } else {
-                push_instruction(lowering.body, Instruction.Add { target = folded, left = slot, right = assigned });
-            }
+        if (floating) {
+            push_instruction(lowering.body, Instruction.SubtractFloat { target = folded, left = slot, right = assigned });
         } else {
-            if (floating) {
-                push_instruction(lowering.body, Instruction.SubtractFloat { target = folded, left = slot, right = assigned });
-            } else {
-                push_instruction(lowering.body, Instruction.Subtract { target = folded, left = slot, right = assigned });
-            }
+            push_instruction(lowering.body, Instruction.Subtract { target = folded, left = slot, right = assigned });
         }
         push_instruction(lowering.body, Instruction.Copy { target = slot, source = folded });
         return folded;
@@ -854,6 +917,9 @@ fn lower_call(Lowering lowering, Expr callee, Expr[] arguments, int argument_cou
                             }
                             if (function.builtin == BuiltinKind.Exit) {
                                 return lower_exit_call(lowering, arguments, argument_count, open_paren);
+                            }
+                            if (function.builtin == BuiltinKind.Length) {
+                                return lower_length_call(lowering, arguments, argument_count, open_paren);
                             }
                             if (function.builtin != BuiltinKind.NotBuiltin) {
                                 fail_at(lowering, position_of_token(token), "built-in " + quoted(token.text) + " is not supported yet");
@@ -975,6 +1041,30 @@ fn type_name_expr_kind(Type type) -> string {
         Map { return "map"; }
         None { return "invalid"; }
     }
+}
+
+// lower_length_call lowers the length built-in: exactly one argument whose
+// type is string — every other argument shape failed earlier in the
+// checker or the value walk — through the "$string_length" shell, whose
+// load reads the object's length word.
+fn lower_length_call(Lowering lowering, Expr[] arguments, int argument_count, Position open_paren) -> int {
+    if (argument_count != 1) {
+        fail_at(lowering, open_paren, "length is supported with exactly one argument, but the call passes " + lower_decimal(argument_count));
+        return -1;
+    }
+    int value = lower_expression(lowering, arguments[0]);
+    if (failed(lowering)) {
+        return -1;
+    }
+    if (type_name(lowering.body.binding_types[value]) != type_name(NativeType.Ref)) {
+        fail_at(lowering, open_paren, "length is supported on string values only");
+        return -1;
+    }
+    int target = new_temporary(lowering.body, NativeType.Int);
+    int[] arguments_lowered = new int[1];
+    arguments_lowered[0] = value;
+    push_instruction(lowering.body, Instruction.Call { target = target, function = lowering.strings.length, arguments = arguments_lowered, argument_count = 1 });
+    return target;
 }
 
 // lower_exit_call lowers the exit built-in: the status lowers first, and
@@ -1512,6 +1602,7 @@ public fn lower_program(SemanticModel model) -> LowerResult {
         index++;
     }
     lowering.allocator = add_allocator(lowering.scene);
+    lowering.strings = add_strings(lowering.scene, lowering.allocator.alloc);
     bool needs_print = needs.string_kind || needs.int_kind || needs.bool_kind;
     if (needs_print) {
         lowering.print_newline = add_blob(lowering.scene, "\n");

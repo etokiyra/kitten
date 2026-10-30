@@ -503,6 +503,14 @@ fn mov_rax_slot(Bytes list, int displacement) {
     push_int(list, displacement, 1);
 }
 
+// mov_rax_slot_other loads a slot into rcx: mov rcx, [rbp+disp]. Raw
+// address/value pairs use one register each, rax for the value and rcx for
+// the address.
+fn mov_rax_slot_other(Bytes list, int displacement) {
+    push_hex(list, "48 8b 4d");
+    push_int(list, displacement, 1);
+}
+
 // mov_slot_rax stores rax into a slot: mov [rbp+disp], rax.
 fn mov_slot_rax(Bytes list, int displacement) {
     push_hex(list, "48 89 45");
@@ -768,7 +776,9 @@ fn lower_call(Lowering lowering, NativeFunction function, int callee, int[] argu
 }
 
 // syscall_argument_register is the six-register argument spelling the Linux
-// syscall ABI fixes: rdi, rsi, rdx, r10, r8, r9.
+// syscall ABI fixes: rdi, rsi, rdx, r10, r8, r9. The last three give their
+// register number through the r/m field with REX.B set (0x49), since
+// r10/r8/r9 have no register-field spelling.
 fn syscall_argument_register(Bytes list, int index) {
     if (index == 0) {
         push_hex(list, "48 89 c7");
@@ -777,11 +787,11 @@ fn syscall_argument_register(Bytes list, int index) {
     } else if (index == 2) {
         push_hex(list, "48 89 c2");
     } else if (index == 3) {
-        push_hex(list, "4c 89 c2");
+        push_hex(list, "49 89 c2");
     } else if (index == 4) {
-        push_hex(list, "4c 89 c0");
+        push_hex(list, "49 89 c0");
     } else {
-        push_hex(list, "4c 89 c8");
+        push_hex(list, "49 89 c8");
     }
 }
 
@@ -866,6 +876,34 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
             // One unconditional jump to the shared out-of-memory paragraph.
             add_oom_jump(lowering);
             push_hex(lowering.code, "e9 00 00 00 00");
+        }
+        RawStore64(address, offset, value) {
+            // mov rax, [rbp+slot], mov rcx, [rbp+slot], mov [rcx+disp8], rax —
+            // the store side of RawLoad64, mirrored byte for byte.
+            mov_rax_slot(lowering.code, slot_disp(function, value));
+            mov_rax_slot_other(lowering.code, slot_disp(function, address));
+            push_hex(lowering.code, "48 89 41");
+            push_int(lowering.code, offset, 1);
+        }
+        RawLoad8(target, address, offset) {
+            // mov rax, [rbp+slot]; movzx rax, byte [rax+disp8]; store.
+            mov_rax_slot(lowering.code, slot_disp(function, address));
+            push_hex(lowering.code, "48 0f b6 40");
+            push_int(lowering.code, offset, 1);
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        RawStore8(address, offset, value) {
+            // mov rax, [rbp+slot]; mov rcx, [rbp+slot]; mov [rcx+disp8], al.
+            mov_rax_slot(lowering.code, slot_disp(function, value));
+            mov_rax_slot_other(lowering.code, slot_disp(function, address));
+            push_hex(lowering.code, "88 41");
+            push_int(lowering.code, offset, 1);
+        }
+        StackPointer(target) {
+            // mov rax, rsp, then the usual slot store: the collector's one
+            // look at the current frame chain, taken while mapping.
+            push_hex(lowering.code, "48 89 e0");
+            mov_slot_rax(lowering.code, slot_disp(function, target));
         }
         Return(value) {
             if (type_name(function.result) == type_name(NativeType.Float)) {
@@ -998,6 +1036,10 @@ fn ends_with_return(NativeFunction function) -> bool {
         GetStatic(n, b, o) { return false; }
         SetStatic(b, o, v) { return false; }
         FailOOM { return false; }
+        RawStore64(a, o, v) { return false; }
+        RawLoad8(n, a, o) { return false; }
+        RawStore8(a, o, v) { return false; }
+        StackPointer(n) { return false; }
         RawSyscall(n, m, a, count) { return false; }
         Jump(l) { return false; }
         Branch(c, t, f) { return false; }
