@@ -905,6 +905,15 @@ fn lower_instruction(Lowering lowering, NativeFunction function, Instruction ins
             push_hex(lowering.code, "48 89 e0");
             mov_slot_rax(lowering.code, slot_disp(function, target));
         }
+        FloatBits(target, value) {
+            // movsd xmm0, [rbp+slot]; movq rax, xmm0; store: the double's
+            // raw bit pattern moves through an int slot intact, which is
+            // what lets the formatter decompose it with divide/remainder.
+            push_hex(lowering.code, "f2 0f 10 45");
+            push_int(lowering.code, slot_disp(function, value), 1);
+            push_hex(lowering.code, "66 48 0f 7e c0");
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
         Return(value) {
             if (type_name(function.result) == type_name(NativeType.Float)) {
                 movsd_slot_xmm(lowering.code, function, value);
@@ -1040,6 +1049,7 @@ fn ends_with_return(NativeFunction function) -> bool {
         RawLoad8(n, a, o) { return false; }
         RawStore8(a, o, v) { return false; }
         StackPointer(n) { return false; }
+        FloatBits(n, v) { return false; }
         RawSyscall(n, m, a, count) { return false; }
         Jump(l) { return false; }
         Branch(c, t, f) { return false; }

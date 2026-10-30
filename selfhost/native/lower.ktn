@@ -78,6 +78,7 @@ struct Lowering {
     int string_print;
     int int_print;
     int bool_print;
+    int float_print;
     int print_newline;
 
     NativeFunction body;
@@ -96,6 +97,7 @@ struct PrintNeeds {
     bool string_kind;
     bool int_kind;
     bool bool_kind;
+    bool float_kind;
 }
 
 // merge_print_needs OR-folds two walks' needs.
@@ -103,7 +105,8 @@ fn merge_print_needs(PrintNeeds left, PrintNeeds right) -> PrintNeeds {
     return PrintNeeds {
         string_kind = left.string_kind || right.string_kind,
         int_kind = left.int_kind || right.int_kind,
-        bool_kind = left.bool_kind || right.bool_kind
+        bool_kind = left.bool_kind || right.bool_kind,
+        float_kind = left.float_kind || right.float_kind
     };
 }
 
@@ -113,7 +116,8 @@ fn print_needs_of_kind(string kind) -> PrintNeeds {
     return PrintNeeds {
         string_kind = kind == "string",
         int_kind = kind == "int",
-        bool_kind = kind == "bool"
+        bool_kind = kind == "bool",
+        float_kind = kind == "float64"
     };
 }
 
@@ -164,6 +168,7 @@ fn new_lowering(SemanticModel model) -> Lowering {
         string_print = -1,
         int_print = -1,
         bool_print = -1,
+        float_print = -1,
         print_newline = -1,
         body = new_function("", NativeType.Void),
         label_next = 0,
@@ -1007,8 +1012,10 @@ fn lower_print_call(Lowering lowering, Expr[] arguments, int argument_count, Pos
         helper = lowering.int_print;
     } else if (kind == "bool") {
         helper = lowering.bool_print;
+    } else if (kind == "float64") {
+        helper = lowering.float_print;
     } else {
-        fail_at(lowering, open_paren, "print is supported with a string, int, or bool argument");
+        fail_at(lowering, open_paren, "print is supported with a string, int, float, or bool argument");
         return -1;
     }
     int value = lower_expression(lowering, arguments[0]);
@@ -1274,7 +1281,7 @@ fn lower_if(Lowering lowering, Expr condition, Stmt then_branch, OptionalStmt el
 fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
     match (statement) {
         Block(open_brace, statements, statement_count) {
-            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
             int index = 0;
             while (index < statement_count) {
                 needs = merge_print_needs(needs, body_print_needs(lowering, statements[index]));
@@ -1288,7 +1295,7 @@ fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
                     return expression_print_needs(lowering, expression);
                 }
                 Absent {
-                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
                 }
             }
         }
@@ -1310,7 +1317,7 @@ fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
             return merge_print_needs(expression_print_needs(lowering, condition), body_print_needs(lowering, body));
         }
         For(at, initializer, condition, increment, body) {
-            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
             match (initializer) {
                 Present(initial_statement) {
                     needs = merge_print_needs(needs, body_print_needs(lowering, initial_statement));
@@ -1340,7 +1347,7 @@ fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
                     return expression_print_needs(lowering, expression);
                 }
                 Absent {
-                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+                    return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
                 }
             }
         }
@@ -1355,11 +1362,11 @@ fn body_print_needs(Lowering lowering, Stmt statement) -> PrintNeeds {
 // everything else walks its own arguments.
 fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
     match (expression) {
-        Integer(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
-        Float(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
-        String(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
-        Boolean(node_id, token, value) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
-        Identifier(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false }; }
+        Integer(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false }; }
+        Float(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false }; }
+        String(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false }; }
+        Boolean(node_id, token, value) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false }; }
+        Identifier(node_id, token) { return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false }; }
         Unary(node_id, operator, operand, postfix) {
             return expression_print_needs(lowering, operand);
         }
@@ -1370,7 +1377,7 @@ fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
             return merge_print_needs(expression_print_needs(lowering, target), expression_print_needs(lowering, value));
         }
         Call(node_id, open_paren, callee, arguments, argument_count) {
-            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
             match (callee) {
                 Identifier(callee_id, name) {
                     ExprInfo info = expression_info(lowering.module, callee_id);
@@ -1416,7 +1423,7 @@ fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
             return expression_print_needs(lowering, receiver);
         }
         StructLiteral(node_id, type_ref, open_brace, fields, field_count) {
-            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
             int index = 0;
             while (index < field_count) {
                 needs = merge_print_needs(needs, expression_print_needs(lowering, fields[index].value));
@@ -1425,7 +1432,7 @@ fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
             return needs;
         }
         VariantLiteral(node_id, type_ref, variant, open_brace, fields, field_count) {
-            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
             int index = 0;
             while (index < field_count) {
                 needs = merge_print_needs(needs, expression_print_needs(lowering, fields[index].value));
@@ -1437,7 +1444,7 @@ fn expression_print_needs(Lowering lowering, Expr expression) -> PrintNeeds {
             return expression_print_needs(lowering, length);
         }
         NewMap(node_id, at, map_type) {
-            return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+            return PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
         }
         Index(node_id, bracket, target, index) {
             return merge_print_needs(expression_print_needs(lowering, target), expression_print_needs(lowering, index));
@@ -1585,7 +1592,7 @@ public fn lower_program(SemanticModel model) -> LowerResult {
         return LowerResult.Failed { message = "the program has no main function" };
     }
 
-    PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false };
+    PrintNeeds needs = PrintNeeds { string_kind = false, int_kind = false, bool_kind = false, float_kind = false };
     Program program = lowering.module.program;
     int index = 0;
     while (index < program.declaration_count) {
@@ -1603,7 +1610,7 @@ public fn lower_program(SemanticModel model) -> LowerResult {
     }
     lowering.allocator = add_allocator(lowering.scene);
     lowering.strings = add_strings(lowering.scene, lowering.allocator.alloc);
-    bool needs_print = needs.string_kind || needs.int_kind || needs.bool_kind;
+    bool needs_print = needs.string_kind || needs.int_kind || needs.bool_kind || needs.float_kind;
     if (needs_print) {
         lowering.print_newline = add_blob(lowering.scene, "\n");
     }
@@ -1616,6 +1623,10 @@ public fn lower_program(SemanticModel model) -> LowerResult {
     if (needs.int_kind) {
         IntPrintShell int_shell = add_int_print(lowering.scene, lowering.print_newline);
         lowering.int_print = int_shell.print_int;
+    }
+    if (needs.float_kind) {
+        FloatPrintShell float_shell = add_float_print(lowering.scene, lowering.allocator.alloc);
+        lowering.float_print = float_shell.print_float;
     }
 
     lower_bodies(lowering);

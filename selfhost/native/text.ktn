@@ -179,6 +179,9 @@ fn render_instruction(NativeFunction function, int index) -> string {
         StackPointer(target) {
             return "  " + binding(target) + ": int = stack_pointer";
         }
+        FloatBits(target, value) {
+            return "  " + binding(target) + ": int = floatbits " + binding(value);
+        }
         RawSyscall(target, number, arguments, argument_count) {
             return "  " + binding(target) + ": int = raw_syscall syscall " + binding(number) + render_arguments(arguments, argument_count);
         }

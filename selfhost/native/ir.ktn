@@ -115,6 +115,11 @@ public fn blob_total(NativeScene scene, int blob) -> int {
 // so the collector can capture and walk the live frames once, at mapping
 // time. Addresses flow as ints or refs; Add and Subtract fold either shape
 // because a pointer and its stack-slot reading are the same 64-bit value.
+// The Phase 10.8 formatting forms: FloatBits moves one float binding's
+// IEEE 754 bit pattern into an int binding, which is how the formatter's
+// shells decompose sign, exponent, and mantissa with the plain integer
+// arithmetic the scene already carries — no SSE2 integer conversion, and
+// no user-visible bitcast.
 public union Instruction {
     ConstInt { int target; int value; }
     ConstBool { int target; bool value; }
@@ -147,6 +152,7 @@ public union Instruction {
     RawLoad8 { int target; int address; int offset; }
     RawStore8 { int address; int offset; int value; }
     StackPointer { int target; }
+    FloatBits { int target; int value; }
     RawSyscall { int target; int number; int[] arguments; int argument_count; }
     Jump { int label; }
     Branch { int condition; int label_true; int label_false; }
@@ -330,6 +336,7 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         SetStatic(b, o, v) {}
         FailOOM {}
         RawStore64(a, o, v) {}
+        FloatBits(n, v) {}
         RawLoad8(n, a, o) {}
         RawStore8(a, o, v) {}
         StackPointer(n) {}
@@ -382,6 +389,7 @@ fn snapshot_arguments(Instruction instruction) -> Instruction {
         RawLoad8(n, a, o) { return instruction; }
         RawStore8(a, o, v) { return instruction; }
         StackPointer(n) { return instruction; }
+        FloatBits(n, v) { return instruction; }
         Jump(l) { return instruction; }
         Branch(c, t, f) { return instruction; }
         Label(l) { return instruction; }
@@ -743,6 +751,12 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
         StackPointer(target) {
             failure = require_binding(function, target, NativeType.Int, position + "target");
         }
+        FloatBits(target, value) {
+            failure = require_binding(function, value, NativeType.Float, position + "value");
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+        }
         RawSyscall(target, number, arguments, argument_count) {
             failure = require_binding(function, number, NativeType.Int, position + "number");
             if (length(failure) == 0) {
@@ -964,6 +978,7 @@ fn label_defined(NativeFunction function, int label) -> bool {
             RawLoad8(n, a, o) {}
             RawStore8(a, o, v) {}
             StackPointer(n) {}
+            FloatBits(n, v) {}
             Jump(l) {}
             Branch(c, t, f) {}
             Return(v) {}

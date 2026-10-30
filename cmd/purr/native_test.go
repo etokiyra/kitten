@@ -3018,7 +3018,7 @@ func lowerFailureCases(badDirectory string) []lowerFailureCase {
 		{file: "enum.ktn", line: "1", col: "1", message: "enum declarations are not supported yet"},
 		{file: "eprint.ktn", line: "2", col: "5", message: `built-in "eprint" is not supported yet`},
 		{file: "float.ktn", line: "2", col: "21", message: "float literals with more than 17 significant digits are not supported yet"},
-		{file: "printfloat.ktn", line: "2", col: "10", message: "print is supported with a string, int, or bool argument"},
+
 		{file: "imported.ktn", kind: "pathless", message: "the program has no main function"},
 		{file: "import.ktn", kind: "pathless", message: "the native lowering supports a single-module program, but the program has 2 modules"},
 		{file: "index.ktn", line: "2", col: "10", message: "indexing is not supported yet"},

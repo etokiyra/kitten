@@ -162,6 +162,23 @@ fn three_int_parameters() -> NativeType[] {
     return shapes;
 }
 
+// one_float_parameter returns a shape list holding exactly one float.
+fn one_float_parameter() -> NativeType[] {
+    NativeType[] shapes = new NativeType[1];
+    shapes[0] = NativeType.Float;
+    return shapes;
+}
+
+// float_int_int_parameters returns a shape list holding a float then two
+// ints, the "$float_px" signature.
+fn float_int_int_parameters() -> NativeType[] {
+    NativeType[] shapes = new NativeType[3];
+    shapes[0] = NativeType.Float;
+    shapes[1] = NativeType.Int;
+    shapes[2] = NativeType.Int;
+    return shapes;
+}
+
 // --- The collector ----------------------------------------------------------
 
 // add_allocator registers the collector into a scene: the `$heap` blob, the
@@ -1082,4 +1099,2025 @@ fn add_string_concat_shell(NativeScene scene, int copy_bytes, int alloc) -> int 
     push_instruction(concat_function, Instruction.CallVoid { function = copy_bytes, arguments = second, argument_count = 3 });
     push_instruction(concat_function, Instruction.Return { value = obj });
     return concat;
+}
+
+// FloatPrintShell carries the float print shells' function indices.
+public struct FloatPrintShell {
+    int print_float;
+}
+
+// four_int_parameters returns a shape list holding exactly four ints.
+fn four_int_parameters() -> NativeType[] {
+    NativeType[] shapes = new NativeType[4];
+    shapes[0] = NativeType.Int;
+    shapes[1] = NativeType.Int;
+    shapes[2] = NativeType.Int;
+    shapes[3] = NativeType.Int;
+    return shapes;
+}
+
+// --- The %g float formatter (Phase 10.8) ------------------------------------
+
+// The formatter prints doubles with C's %g spelling through shell groups in
+// this file. Its big integers are allocated objects holding 16-bit limbs:
+// [header word @0][limb count @8][limb slots @16, 8 bytes each], each limb
+// value fitting 0..65535. Every writer fills the whole limb array its count
+// names, so no zero-fill pass is needed, and the count is the smallest limb
+// count the value needs ("0" is count 1 with limb 0 at zero). Limb products
+// never exceed 32 bits, so WholeDivide and WholeRemainder by 65536 recover
+// both halves with plain scene arithmetic. The value being printed lives on
+// the shell's own stack, so every intermediate bigint is a GC-visible root.
+
+// bn_new registers "$bn_new": one big integer object of the limb count in
+// parameter 0, the count sealed at offset 8, the limb slots left for the
+// caller's writer. Locals: 3.
+fn add_bn_new_shell(NativeScene scene, int alloc) -> int {
+    int shell = add_function(scene, "$bn_new", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction bn_function = function_at(scene, shell);
+
+    int eight = new_temporary(bn_function, NativeType.Int);
+    push_instruction(bn_function, Instruction.ConstInt { target = eight, value = 8 });
+    int stride = new_temporary(bn_function, NativeType.Int);
+    push_instruction(bn_function, Instruction.Multiply { target = stride, left = 0, right = eight });
+    int request = new_temporary(bn_function, NativeType.Int);
+    push_instruction(bn_function, Instruction.Add { target = request, left = stride, right = eight });
+    push_instruction(bn_function, Instruction.Add { target = request, left = request, right = eight });
+    int obj = new_temporary(bn_function, NativeType.Int);
+    int[] alloc_arguments = new int[1];
+    alloc_arguments[0] = request;
+    push_instruction(bn_function, Instruction.Call { target = obj, function = alloc, arguments = alloc_arguments, argument_count = 1 });
+    push_instruction(bn_function, Instruction.RawStore64 { address = obj, offset = 0, value = request });
+    push_instruction(bn_function, Instruction.RawStore64 { address = obj, offset = 8, value = 0 });
+    push_instruction(bn_function, Instruction.Return { value = obj });
+    return shell;
+}
+
+// bn_get registers "$bn_get": limb i (parameter 1) of the object (parameter
+// 0), read from byte offset 16 + 8i. Locals: 5.
+fn add_bn_get_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$bn_get", NativeType.Int, two_int_parameters(), 2);
+    NativeFunction get_function = function_at(scene, shell);
+
+    int eight = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.ConstInt { target = eight, value = 8 });
+    int stride = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.Multiply { target = stride, left = 1, right = eight });
+    int sixteen = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.ConstInt { target = sixteen, value = 16 });
+    int offset = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.Add { target = offset, left = stride, right = sixteen });
+    int addr = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.Add { target = addr, left = 0, right = offset });
+    int limb = new_temporary(get_function, NativeType.Int);
+    push_instruction(get_function, Instruction.RawLoad64 { target = limb, address = addr, offset = 0 });
+    push_instruction(get_function, Instruction.Return { value = limb });
+    return shell;
+}
+
+// bn_set registers "$bn_set": parameter 2 stores into limb i of parameter 0.
+// Locals: 5.
+fn add_bn_set_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$bn_set", NativeType.Void, three_int_parameters(), 3);
+    NativeFunction set_function = function_at(scene, shell);
+
+    int eight = new_temporary(set_function, NativeType.Int);
+    push_instruction(set_function, Instruction.ConstInt { target = eight, value = 8 });
+    int stride = new_temporary(set_function, NativeType.Int);
+    push_instruction(set_function, Instruction.Multiply { target = stride, left = 1, right = eight });
+    int sixteen = new_temporary(set_function, NativeType.Int);
+    push_instruction(set_function, Instruction.ConstInt { target = sixteen, value = 16 });
+    int offset = new_temporary(set_function, NativeType.Int);
+    push_instruction(set_function, Instruction.Add { target = offset, left = stride, right = sixteen });
+    int addr = new_temporary(set_function, NativeType.Int);
+    push_instruction(set_function, Instruction.Add { target = addr, left = 0, right = offset });
+    push_instruction(set_function, Instruction.RawStore64 { address = addr, offset = 0, value = 2 });
+    push_instruction(set_function, Instruction.ReturnVoid);
+    return shell;
+}
+
+// bn_count registers "$bn_count": the limb count at offset 8. Locals: 1.
+fn add_bn_count_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$bn_count", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction count_function = function_at(scene, shell);
+    int count = new_temporary(count_function, NativeType.Int);
+    push_instruction(count_function, Instruction.RawLoad64 { target = count, address = 0, offset = 8 });
+    push_instruction(count_function, Instruction.Return { value = count });
+    return shell;
+}
+
+// bn_cmp registers "$bn_cmp": -1, 0, or 1 as parameter 0 stands to
+// parameter 1. Unequal counts decide first (counts stay trimmed); equal
+// counts walk the limbs from the most significant one down. Locals: 9.
+fn add_bn_cmp_shell(NativeScene scene, int bn_get) -> int {
+    int shell = add_function(scene, "$bn_cmp", NativeType.Int, two_int_parameters(), 2);
+    NativeFunction cmp_function = function_at(scene, shell);
+
+    int zero = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.ConstInt { target = one, value = 1 });
+    int minus_one = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.ConstInt { target = minus_one, value = -1 });
+    int count_a = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.RawLoad64 { target = count_a, address = 0, offset = 8 });
+    int count_b = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.RawLoad64 { target = count_b, address = 1, offset = 8 });
+    int smaller = new_temporary(cmp_function, NativeType.Bool);
+    push_instruction(cmp_function, Instruction.LessThan { target = smaller, left = count_a, right = count_b });
+    push_instruction(cmp_function, Instruction.Branch { condition = smaller, label_true = 0, label_false = 1 });
+    push_instruction(cmp_function, Instruction.Label { label = 0 });
+    push_instruction(cmp_function, Instruction.Return { value = minus_one });
+    push_instruction(cmp_function, Instruction.Label { label = 1 });
+    int bigger = new_temporary(cmp_function, NativeType.Bool);
+    push_instruction(cmp_function, Instruction.LessThan { target = bigger, left = count_b, right = count_a });
+    push_instruction(cmp_function, Instruction.Branch { condition = bigger, label_true = 2, label_false = 3 });
+    push_instruction(cmp_function, Instruction.Label { label = 2 });
+    push_instruction(cmp_function, Instruction.Return { value = one });
+    push_instruction(cmp_function, Instruction.Label { label = 3 });
+    // Walk from the top limb down: labels 4 (top), 5 (under), 6 (step body),
+    // 7 (bigger step), 8 (smaller step).
+    push_instruction(cmp_function, Instruction.Subtract { target = count_a, left = count_a, right = one });
+    push_instruction(cmp_function, Instruction.Label { label = 4 });
+    push_instruction(cmp_function, Instruction.LessThan { target = smaller, left = count_a, right = zero });
+    push_instruction(cmp_function, Instruction.Branch { condition = smaller, label_true = 5, label_false = 6 });
+    push_instruction(cmp_function, Instruction.Label { label = 5 });
+    push_instruction(cmp_function, Instruction.Return { value = zero });
+    push_instruction(cmp_function, Instruction.Label { label = 6 });
+    int[] get_a = new int[2];
+    get_a[0] = 0;
+    get_a[1] = count_a;
+    int limb_a = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.Call { target = limb_a, function = bn_get, arguments = get_a, argument_count = 2 });
+    int[] get_b = new int[2];
+    get_b[0] = 1;
+    get_b[1] = count_a;
+    int limb_b = new_temporary(cmp_function, NativeType.Int);
+    push_instruction(cmp_function, Instruction.Call { target = limb_b, function = bn_get, arguments = get_b, argument_count = 2 });
+    push_instruction(cmp_function, Instruction.LessThan { target = bigger, left = limb_b, right = limb_a });
+    push_instruction(cmp_function, Instruction.Branch { condition = bigger, label_true = 2, label_false = 7 });
+    push_instruction(cmp_function, Instruction.Label { label = 7 });
+    push_instruction(cmp_function, Instruction.LessThan { target = smaller, left = limb_a, right = limb_b });
+    push_instruction(cmp_function, Instruction.Branch { condition = smaller, label_true = 0, label_false = 8 });
+    push_instruction(cmp_function, Instruction.Label { label = 8 });
+    push_instruction(cmp_function, Instruction.Subtract { target = count_a, left = count_a, right = one });
+    push_instruction(cmp_function, Instruction.Jump { label = 4 });
+    push_instruction(cmp_function, Instruction.Return { value = zero });
+    return shell;
+}
+
+// bn_mul_small registers "$bn_mul_small": a fresh big integer holding
+// parameter 0 times factor parameter 1 (which fits a limb). Walks the limbs
+// with a carry, stores the carry limb at the top, then trims any zero top
+// limbs so the count stays minimal. Locals: 14.
+fn add_bn_mul_small_shell(NativeScene scene, int bn_new, int bn_get, int bn_set) -> int {
+    int shell = add_function(scene, "$bn_mul_small", NativeType.Int, two_int_parameters(), 2);
+    NativeFunction mul_function = function_at(scene, shell);
+
+    int count_a = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.RawLoad64 { target = count_a, address = 0, offset = 8 });
+    int zero = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.ConstInt { target = one, value = 1 });
+    int count_out = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.Add { target = count_out, left = count_a, right = one });
+    int out = new_temporary(mul_function, NativeType.Int);
+    int[] new_arguments = new int[1];
+    new_arguments[0] = count_out;
+    push_instruction(mul_function, Instruction.Call { target = out, function = bn_new, arguments = new_arguments, argument_count = 1 });
+    int carry = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.ConstInt { target = carry, value = 0 });
+    int base = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.ConstInt { target = base, value = 65536 });
+    int i = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.ConstInt { target = i, value = 0 });
+    int more = new_temporary(mul_function, NativeType.Bool);
+    push_instruction(mul_function, Instruction.Label { label = 0 });
+    push_instruction(mul_function, Instruction.LessThan { target = more, left = i, right = count_a });
+    push_instruction(mul_function, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(mul_function, Instruction.Label { label = 1 });
+    int[] load_arguments = new int[2];
+    load_arguments[0] = 0;
+    load_arguments[1] = i;
+    int limb = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.Call { target = limb, function = bn_get, arguments = load_arguments, argument_count = 2 });
+    int product = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.Multiply { target = product, left = limb, right = 1 });
+    push_instruction(mul_function, Instruction.Add { target = product, left = product, right = carry });
+    int stores = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.WholeRemainder { target = stores, left = product, right = base });
+    push_instruction(mul_function, Instruction.WholeDivide { target = carry, left = product, right = base });
+    int[] set_arguments = new int[3];
+    set_arguments[0] = out;
+    set_arguments[1] = i;
+    set_arguments[2] = stores;
+    push_instruction(mul_function, Instruction.CallVoid { function = bn_set, arguments = set_arguments, argument_count = 3 });
+    push_instruction(mul_function, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(mul_function, Instruction.Jump { label = 0 });
+    push_instruction(mul_function, Instruction.Label { label = 2 });
+    int[] top_arguments = new int[3];
+    top_arguments[0] = out;
+    top_arguments[1] = count_a;
+    top_arguments[2] = carry;
+    push_instruction(mul_function, Instruction.CallVoid { function = bn_set, arguments = top_arguments, argument_count = 3 });
+    push_instruction(mul_function, Instruction.Label { label = 3 });
+    push_instruction(mul_function, Instruction.LessThan { target = more, left = one, right = count_out });
+    push_instruction(mul_function, Instruction.Branch { condition = more, label_true = 4, label_false = 5 });
+    push_instruction(mul_function, Instruction.Label { label = 4 });
+    int top_index = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.Subtract { target = top_index, left = count_out, right = one });
+    int[] read_top = new int[2];
+    read_top[0] = out;
+    read_top[1] = top_index;
+    int top_limb = new_temporary(mul_function, NativeType.Int);
+    push_instruction(mul_function, Instruction.Call { target = top_limb, function = bn_get, arguments = read_top, argument_count = 2 });
+    push_instruction(mul_function, Instruction.Equal { target = more, left = top_limb, right = zero });
+    push_instruction(mul_function, Instruction.Branch { condition = more, label_true = 6, label_false = 5 });
+    push_instruction(mul_function, Instruction.Label { label = 6 });
+    push_instruction(mul_function, Instruction.Subtract { target = count_out, left = count_out, right = one });
+    push_instruction(mul_function, Instruction.Jump { label = 3 });
+    push_instruction(mul_function, Instruction.Label { label = 5 });
+    push_instruction(mul_function, Instruction.RawStore64 { address = out, offset = 8, value = count_out });
+    push_instruction(mul_function, Instruction.Return { value = out });
+    return shell;
+}
+
+// bn_sub_into registers "$bn_sub_into": parameter 0 loses parameter 1 in
+// place (parameter 0 stands at or above parameter 1). Limb borrows walk up
+// in arithmetic order, the two loops split at the shorter count (the tail
+// borrows alone), and the count is trimmed back down afterwards. Locals:
+// 14.
+fn add_bn_sub_into_shell(NativeScene scene, int bn_get, int bn_set) -> int {
+    int shell = add_function(scene, "$bn_sub_into", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction sub_function = function_at(scene, shell);
+
+    int count_a = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.RawLoad64 { target = count_a, address = 0, offset = 8 });
+    int count_b = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.RawLoad64 { target = count_b, address = 1, offset = 8 });
+    int zero = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.ConstInt { target = one, value = 1 });
+    int base = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.ConstInt { target = base, value = 65536 });
+    int borrow = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.ConstInt { target = borrow, value = 0 });
+    int i = new_temporary(sub_function, NativeType.Int);
+    push_instruction(sub_function, Instruction.ConstInt { target = i, value = 0 });
+    int[] store = new int[3];
+    store[0] = 0;
+    store[1] = i;
+    store[2] = zero;
+    int[] args = new int[2];
+    args[0] = 0;
+    args[1] = i;
+    int d = new_temporary(sub_function, NativeType.Int);
+    int more = new_temporary(sub_function, NativeType.Bool);
+    int negative = new_temporary(sub_function, NativeType.Bool);
+    int limb_a = new_temporary(sub_function, NativeType.Int);
+    int limb_b = new_temporary(sub_function, NativeType.Int);
+
+    // Shared walk: both objects have a limb at i.
+    push_instruction(sub_function, Instruction.Label { label = 0 });
+    push_instruction(sub_function, Instruction.LessThan { target = more, left = i, right = count_b });
+    push_instruction(sub_function, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(sub_function, Instruction.Label { label = 1 });
+    args[0] = 1;
+    args[1] = i;
+    push_instruction(sub_function, Instruction.Call { target = limb_b, function = bn_get, arguments = args, argument_count = 2 });
+    args[0] = 0;
+    args[1] = i;
+    push_instruction(sub_function, Instruction.Call { target = limb_a, function = bn_get, arguments = args, argument_count = 2 });
+    push_instruction(sub_function, Instruction.Subtract { target = d, left = limb_a, right = limb_b });
+    push_instruction(sub_function, Instruction.Subtract { target = d, left = d, right = borrow });
+    push_instruction(sub_function, Instruction.LessThan { target = negative, left = d, right = zero });
+    push_instruction(sub_function, Instruction.Branch { condition = negative, label_true = 3, label_false = 4 });
+    push_instruction(sub_function, Instruction.Label { label = 3 });
+    push_instruction(sub_function, Instruction.Add { target = d, left = d, right = base });
+    push_instruction(sub_function, Instruction.Copy { target = borrow, source = one });
+    push_instruction(sub_function, Instruction.Jump { label = 5 });
+    push_instruction(sub_function, Instruction.Label { label = 4 });
+    push_instruction(sub_function, Instruction.Copy { target = borrow, source = zero });
+    push_instruction(sub_function, Instruction.Label { label = 5 });
+    store[1] = i;
+    store[2] = d;
+    push_instruction(sub_function, Instruction.CallVoid { function = bn_set, arguments = store, argument_count = 3 });
+    push_instruction(sub_function, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(sub_function, Instruction.Jump { label = 0 });
+
+    // Borrow-only tail: a has limbs past b's.
+    push_instruction(sub_function, Instruction.Label { label = 2 });
+    push_instruction(sub_function, Instruction.LessThan { target = more, left = i, right = count_a });
+    push_instruction(sub_function, Instruction.Branch { condition = more, label_true = 6, label_false = 7 });
+    push_instruction(sub_function, Instruction.Label { label = 6 });
+    args[0] = 0;
+    args[1] = i;
+    push_instruction(sub_function, Instruction.Call { target = limb_a, function = bn_get, arguments = args, argument_count = 2 });
+    push_instruction(sub_function, Instruction.Subtract { target = d, left = limb_a, right = borrow });
+    push_instruction(sub_function, Instruction.LessThan { target = negative, left = d, right = zero });
+    push_instruction(sub_function, Instruction.Branch { condition = negative, label_true = 8, label_false = 9 });
+    push_instruction(sub_function, Instruction.Label { label = 8 });
+    push_instruction(sub_function, Instruction.Add { target = d, left = d, right = base });
+    push_instruction(sub_function, Instruction.Copy { target = borrow, source = one });
+    push_instruction(sub_function, Instruction.Jump { label = 10 });
+    push_instruction(sub_function, Instruction.Label { label = 9 });
+    push_instruction(sub_function, Instruction.Copy { target = borrow, source = zero });
+    push_instruction(sub_function, Instruction.Label { label = 10 });
+    store[1] = i;
+    store[2] = d;
+    push_instruction(sub_function, Instruction.CallVoid { function = bn_set, arguments = store, argument_count = 3 });
+    push_instruction(sub_function, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(sub_function, Instruction.Jump { label = 2 });
+
+    // Trim: drop zero top limbs.
+    push_instruction(sub_function, Instruction.Label { label = 7 });
+    push_instruction(sub_function, Instruction.Label { label = 11 });
+    push_instruction(sub_function, Instruction.LessThan { target = more, left = one, right = count_a });
+    push_instruction(sub_function, Instruction.Branch { condition = more, label_true = 12, label_false = 13 });
+    push_instruction(sub_function, Instruction.Label { label = 12 });
+    push_instruction(sub_function, Instruction.Subtract { target = i, left = count_a, right = one });
+    args[0] = 0;
+    args[1] = i;
+    push_instruction(sub_function, Instruction.Call { target = limb_a, function = bn_get, arguments = args, argument_count = 2 });
+    push_instruction(sub_function, Instruction.Equal { target = negative, left = limb_a, right = zero });
+    push_instruction(sub_function, Instruction.Branch { condition = negative, label_true = 14, label_false = 13 });
+    push_instruction(sub_function, Instruction.Label { label = 14 });
+    push_instruction(sub_function, Instruction.Subtract { target = count_a, left = count_a, right = one });
+    push_instruction(sub_function, Instruction.Jump { label = 11 });
+    push_instruction(sub_function, Instruction.Label { label = 13 });
+    push_instruction(sub_function, Instruction.RawStore64 { address = 0, offset = 8, value = count_a });
+    push_instruction(sub_function, Instruction.ReturnVoid);
+    return shell;
+}
+
+// bn_mul10 registers "$bn_mul10": parameter 0 times ten, fresh (the digit
+// loop's step). Locals: 5.
+fn add_bn_mul10_shell(NativeScene scene, int bn_mul_small) -> int {
+    int shell = add_function(scene, "$bn_mul10", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+    int ten = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten, value = 10 });
+    int out = new_temporary(h, NativeType.Int);
+    int[] args = new int[2];
+    args[0] = 0;
+    args[1] = ten;
+    push_instruction(h, Instruction.Call { target = out, function = bn_mul_small, arguments = args, argument_count = 2 });
+    push_instruction(h, Instruction.Return { value = out });
+    return shell;
+}
+
+// bn_copy_into registers "$bn_copy_into": parameter 0's limbs take
+// parameter 1's limbs (zero-padded up to its own count), and the count word
+// takes parameter 1's count. Locals: 9.
+fn add_bn_copy_into_shell(NativeScene scene, int bn_get, int bn_set, int bn_count) -> int {
+    int shell = add_function(scene, "$bn_copy_into", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int dst_count = new_temporary(h, NativeType.Int);
+    int[] count_args = new int[1];
+    count_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = dst_count, function = bn_count, arguments = count_args, argument_count = 1 });
+    int src_count = new_temporary(h, NativeType.Int);
+    count_args[0] = 1;
+    push_instruction(h, Instruction.Call { target = src_count, function = bn_count, arguments = count_args, argument_count = 1 });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = i, value = 0 });
+    int[] get_args = new int[2];
+    get_args[0] = 1;
+    get_args[1] = i;
+    int[] set_args = new int[3];
+    set_args[0] = 0;
+    set_args[1] = i;
+    set_args[2] = zero;
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = dst_count });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 4 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = src_count });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Call { target = set_args[2], function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Jump { label = 3 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.RawStore64 { address = 0, offset = 8, value = src_count });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// bn_digit registers "$bn_digit": the digit loop's step. Parameters: 0 the
+// fraction numerator whose limbs the shell consumes and refills with the
+// next digit's tail, 1 the denominator, 2 the multiplier (one for the
+// value's leading digit, ten for every digit after). The step multiplies
+// through "$bn_mul_small", counts denominator subtractions (one to ten),
+// parks the remainder back into parameter 0's limbs through
+// "$bn_copy_into", and returns the digit. Locals: 9.
+fn add_bn_digit_shell(NativeScene scene, int bn_mul_small, int bn_cmp, int bn_sub_into, int bn_copy_into) -> int {
+    int shell = add_function(scene, "$bn_digit", NativeType.Int, three_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int shifted = new_temporary(h, NativeType.Int);
+    int[] mul_args = new int[2];
+    mul_args[0] = 0;
+    mul_args[1] = 2;
+    push_instruction(h, Instruction.Call { target = shifted, function = bn_mul_small, arguments = mul_args, argument_count = 2 });
+    int d = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = d, value = 0 });
+    int[] cmp_args = new int[2];
+    cmp_args[0] = shifted;
+    cmp_args[1] = 1;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int cmp = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = cmp, function = bn_cmp, arguments = cmp_args, argument_count = 2 });
+    int low = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = low, left = cmp, right = zero });
+    push_instruction(h, Instruction.Branch { condition = low, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.CallVoid { function = bn_sub_into, arguments = cmp_args, argument_count = 2 });
+    push_instruction(h, Instruction.Add { target = d, left = d, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int[] copy_args = new int[2];
+    copy_args[0] = 0;
+    copy_args[1] = shifted;
+    push_instruction(h, Instruction.CallVoid { function = bn_copy_into, arguments = copy_args, argument_count = 2 });
+    push_instruction(h, Instruction.Return { value = d });
+    return shell;
+}
+
+// bn_times10pow registers "$bn_times10pow": parameter 0 times ten to the
+// parameter 1 power, through copies and "$bn_mul_small". A zero exponent
+// answers a trimmed copy of the input. Locals: 9.
+fn add_bn_times10pow_shell(NativeScene scene, int bn_count, int bn_new, int bn_copy_into, int bn_mul_small) -> int {
+    int shell = add_function(scene, "$bn_times10pow", NativeType.Int, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int count = new_temporary(h, NativeType.Int);
+    int[] count_args = new int[1];
+    count_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = count, function = bn_count, arguments = count_args, argument_count = 1 });
+    int[] new_args = new int[1];
+    new_args[0] = count;
+    int acc = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = acc, function = bn_new, arguments = new_args, argument_count = 1 });
+    int[] copy_args = new int[2];
+    copy_args[0] = acc;
+    copy_args[1] = 0;
+    push_instruction(h, Instruction.CallVoid { function = bn_copy_into, arguments = copy_args, argument_count = 2 });
+    int ten = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten, value = 10 });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = i, value = 0 });
+    int[] mul_args = new int[2];
+    mul_args[0] = acc;
+    mul_args[1] = ten;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = 1 });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Call { target = acc, function = bn_mul_small, arguments = mul_args, argument_count = 2 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Return { value = acc });
+    return shell;
+}
+
+// bn_bump registers "$bn_bump": the six digit limbs of parameter 0 take a
+// one-up starting at the last digit with carries walking left.
+// It answers 0 once the bump lands on the last digit, 1 when a carry moves
+// to a higher digit, and 2 when the bump climbs past digit 0 (the digits
+// become 1,0,0,0,0,0 and the caller bumps its decimal exponent).
+// Locals: 10.
+fn add_bn_bump_shell(NativeScene scene, int bn_get, int bn_set) -> int {
+    int shell = add_function(scene, "$bn_bump", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int idx0 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = idx0, value = 0 });
+    int idx1 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = idx1, value = 1 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int ten = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten, value = 10 });
+    int five = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = five, value = 5 });
+    int j = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = j, value = 5 });
+    int digit = new_temporary(h, NativeType.Int);
+    int result = new_temporary(h, NativeType.Int);
+    int[] get_args = new int[2];
+    get_args[0] = 0;
+    get_args[1] = j;
+    int[] set_args = new int[3];
+    set_args[0] = 0;
+    set_args[1] = j;
+    set_args[2] = digit;
+    int more = new_temporary(h, NativeType.Bool);
+    // Walk digits from the last one left.
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.LessThan { target = more, left = j, right = zero });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 3, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Add { target = digit, left = digit, right = one });
+    push_instruction(h, Instruction.LessThan { target = more, left = digit, right = ten });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 2, label_false = 4 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    // The digit stays single: the bump landed here.
+    set_args[2] = digit;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    int probe = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Subtract { target = probe, left = j, right = zero });
+    int landed = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = landed, left = probe, right = zero });
+    push_instruction(h, Instruction.Branch { condition = landed, label_true = 5, label_false = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.ConstInt { target = result, value = 1 });
+    push_instruction(h, Instruction.Return { value = result });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.ConstInt { target = result, value = 0 });
+    push_instruction(h, Instruction.Return { value = result });
+    // The digit wrapped: store zero, walk left.
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Copy { target = set_args[2], source = zero });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.Subtract { target = j, left = j, right = one });
+    get_args[1] = j;
+    set_args[1] = j;
+    push_instruction(h, Instruction.Jump { label = 0 });
+    // The roll: digit 0 to one, digits 1..5 to zero.
+    push_instruction(h, Instruction.Label { label = 3 });
+    set_args[1] = zero;
+    push_instruction(h, Instruction.ConstInt { target = set_args[2], value = 1 });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    set_args[1] = one;
+    push_instruction(h, Instruction.Copy { target = set_args[2], source = zero });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.ConstInt { target = j, value = 2 });
+    push_instruction(h, Instruction.Label { label = 7 });
+    push_instruction(h, Instruction.LessThan { target = more, left = j, right = five });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 8, label_false = 9 });
+    push_instruction(h, Instruction.Label { label = 8 });
+    set_args[1] = j;
+    push_instruction(h, Instruction.Copy { target = set_args[2], source = zero });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.Add { target = j, left = j, right = one });
+    push_instruction(h, Instruction.Jump { label = 7 });
+    push_instruction(h, Instruction.Label { label = 9 });
+    push_instruction(h, Instruction.ConstInt { target = result, value = 2 });
+    push_instruction(h, Instruction.Return { value = result });
+    return shell;
+}
+
+
+// bn_trim registers "$bn_trim": drop zero top limbs in place (count stays
+// at least 1; "0" stays count 1 with a zero top limb). Locals: 6.
+fn add_bn_trim_shell(NativeScene scene, int bn_get) -> int {
+    int shell = add_function(scene, "$bn_trim", NativeType.Void, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int[] get_args = new int[2];
+    get_args[0] = 0;
+    get_args[1] = zero;
+    int count = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.RawLoad64 { target = count, address = 0, offset = 8 });
+    int limb = new_temporary(h, NativeType.Int);
+    int more = new_temporary(h, NativeType.Bool);
+    int at_zero = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.LessThan { target = more, left = one, right = count });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Subtract { target = get_args[1], left = count, right = one });
+    push_instruction(h, Instruction.Call { target = limb, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = at_zero, left = limb, right = zero });
+    push_instruction(h, Instruction.Branch { condition = at_zero, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Subtract { target = count, left = count, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.RawStore64 { address = 0, offset = 8, value = count });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// bn_pow2 registers "$bn_pow2": two to parameter 0, through two-multiplication
+// chains from a seeded one (the factor stays inside a limb). Locals: 8.
+fn add_bn_pow2_shell(NativeScene scene, int bn_new, int bn_set, int bn_mul_small) -> int {
+    int shell = add_function(scene, "$bn_pow2", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int seed = new_temporary(h, NativeType.Int);
+    int[] new_args = new int[1];
+    new_args[0] = one;
+    push_instruction(h, Instruction.Call { target = seed, function = bn_new, arguments = new_args, argument_count = 1 });
+    int idx0 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = idx0, value = 0 });
+    int[] set_args = new int[3];
+    set_args[0] = seed;
+    set_args[1] = idx0;
+    set_args[2] = one;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int pow = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = pow, source = seed });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = i, value = 0 });
+    int[] mul_args = new int[2];
+    mul_args[0] = pow;
+    mul_args[1] = two;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = 0 });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Call { target = pow, function = bn_mul_small, arguments = mul_args, argument_count = 2 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Return { value = pow });
+    return shell;
+}
+
+// float_sign registers "$float_sign": the IEEE sign bit of the parameter as
+// 0/1 int, including the -0 bit pattern. Locals: 5.
+fn add_float_sign_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$float_sign", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int bits = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.FloatBits { target = bits, value = 0 });
+    int negative = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = negative, left = bits, right = zero });
+    int sign = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = negative, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.ConstInt { target = sign, value = 1 });
+    push_instruction(h, Instruction.Jump { label = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.ConstInt { target = sign, value = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Return { value = sign });
+    return shell;
+}
+
+// float_special registers "$float_special": 0 for a finite value, 1 for
+// infinity, 2 for NaN. The magnitude's exponent field is bits/2^52 with the
+// all-ones field splitting on a nonzero mantissa. Locals: 12.
+// float_special registers "$float_special": 0 for a finite value, 1 for
+// infinity, 2 for NaN, from the exponent and mantissa fields. Locals: 13.
+// float_special registers "$float_special": 0 for a finite value, 1 for
+// infinity, 2 for NaN, from the exponent and mantissa fields. Locals: 13.
+fn add_float_special_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$float_special", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int two52 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two52, value = 4503599627370496 });
+    int allones = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = allones, value = 2047 });
+    int modulus = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = modulus, value = 2048 });
+    int four096 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = four096, value = 4096 });
+    int bits = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.FloatBits { target = bits, value = 0 });
+    int M = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = M, left = bits, right = two52 });
+    int flag = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = flag, left = M, right = zero });
+    push_instruction(h, Instruction.Branch { condition = flag, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Add { target = M, left = M, right = two52 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int diff = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Subtract { target = diff, left = bits, right = M });
+    int q = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeDivide { target = q, left = diff, right = two52 });
+    push_instruction(h, Instruction.LessThan { target = flag, left = bits, right = zero });
+    push_instruction(h, Instruction.Branch { condition = flag, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Add { target = q, left = q, right = four096 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    int Efield = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = Efield, left = q, right = modulus });
+    push_instruction(h, Instruction.Equal { target = flag, left = Efield, right = allones });
+    int isZeroMant = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Equal { target = isZeroMant, left = M, right = zero });
+    int answer = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = flag, label_true = 4, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 0 });
+    push_instruction(h, Instruction.Return { value = answer });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Branch { condition = isZeroMant, label_true = 6, label_false = 7 });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 1 });
+    push_instruction(h, Instruction.Return { value = answer });
+    push_instruction(h, Instruction.Label { label = 7 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 2 });
+    push_instruction(h, Instruction.Return { value = answer });
+    return shell;
+}
+
+
+// float_e registers "$float_e": the base-2 exponent of the float with
+// subnormals folded into the ordinary form, so M * 2^E equals the value.
+// Locals: 9.
+// float_e registers "$float_e": the base-2 exponent of the float with
+// subnormals folded into the ordinary form, so M * 2^E equals the value.
+// Locals: 12.
+// float_e registers "$float_e": the base-2 exponent of the float with
+// subnormals folded into the ordinary form, so M * 2^E equals the value.
+// Locals: 13.
+fn add_float_e_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$float_e", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int two52 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two52, value = 4503599627370496 });
+    int allones = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = allones, value = 2047 });
+    int modulus = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = modulus, value = 2048 });
+    int four096 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = four096, value = 4096 });
+    int bits = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.FloatBits { target = bits, value = 0 });
+    int M = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = M, left = bits, right = two52 });
+    int negM = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = negM, left = M, right = zero });
+    push_instruction(h, Instruction.Branch { condition = negM, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Add { target = M, left = M, right = two52 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int diff = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Subtract { target = diff, left = bits, right = M });
+    int q = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeDivide { target = q, left = diff, right = two52 });
+    push_instruction(h, Instruction.LessThan { target = negM, left = bits, right = zero });
+    push_instruction(h, Instruction.Branch { condition = negM, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Add { target = q, left = q, right = four096 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    int Efield = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = Efield, left = q, right = modulus });
+    push_instruction(h, Instruction.Equal { target = negM, left = Efield, right = zero });
+    push_instruction(h, Instruction.Branch { condition = negM, label_true = 4, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.ConstInt { target = diff, value = -1074 });
+    push_instruction(h, Instruction.Jump { label = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    int ten75 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten75, value = 1075 });
+    push_instruction(h, Instruction.Subtract { target = diff, left = Efield, right = ten75 });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.Return { value = diff });
+    return shell;
+}
+
+
+
+// float_mantissa registers "$float_mantissa": the significand M with the
+// subnormal fold, so M * 2^E equals the value. Locals: 12.
+// float_mantissa registers "$float_mantissa": the significand M with the
+// subnormal fold, so M * 2^E equals the value. Locals: 13.
+fn add_float_mantissa_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$float_mantissa", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int two52 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two52, value = 4503599627370496 });
+    int allones = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = allones, value = 2047 });
+    int modulus = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = modulus, value = 2048 });
+    int four096 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = four096, value = 4096 });
+    int bits = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.FloatBits { target = bits, value = 0 });
+    int M = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = M, left = bits, right = two52 });
+    int negM = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = negM, left = M, right = zero });
+    push_instruction(h, Instruction.Branch { condition = negM, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Add { target = M, left = M, right = two52 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int diff = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Subtract { target = diff, left = bits, right = M });
+    int q = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeDivide { target = q, left = diff, right = two52 });
+    int bneg = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = bneg, left = bits, right = zero });
+    push_instruction(h, Instruction.Branch { condition = bneg, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Add { target = q, left = q, right = four096 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    int Efield = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = Efield, left = q, right = modulus });
+    int sub = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Equal { target = sub, left = Efield, right = zero });
+    int mfinal = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = sub, label_true = 4, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Copy { target = mfinal, source = M });
+    push_instruction(h, Instruction.Jump { label = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.Add { target = mfinal, left = M, right = two52 });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.Return { value = mfinal });
+    return shell;
+}
+
+
+
+// bn_shift_up registers "$bn_shift_up": parameter 0 times two, parameter 1
+// times, once per step through "$bn_mul_small". Locals: 8.
+fn add_bn_shift_up_shell(NativeScene scene, int bn_mul_small) -> int {
+    int shell = add_function(scene, "$bn_shift_up", NativeType.Int, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int acc = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = acc, source = 0 });
+    int k = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = k, source = 1 });
+    int[] mul_args = new int[2];
+    mul_args[0] = acc;
+    mul_args[1] = two;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = zero, right = k });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Call { target = acc, function = bn_mul_small, arguments = mul_args, argument_count = 2 });
+    push_instruction(h, Instruction.Subtract { target = k, left = k, right = one });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Return { value = acc });
+    return shell;
+}
+
+// float_num registers "$float_num": the P of M * 2^E. M is written as four
+// limbs split by divide/remainder chains by 65536, the seeded object is
+// trimmed to M's own limb count, and a positive E shifts it up through
+// "$bn_shift_up". Locals: 14.
+fn add_float_num_shell(NativeScene scene, int bn_new, int bn_set, int bn_trim, int float_mantissa, int float_e, int bn_shift_up) -> int {
+    int shell = add_function(scene, "$float_num", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int base = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = base, value = 65536 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int four = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = four, value = 4 });
+
+    int m = new_temporary(h, NativeType.Int);
+    int[] man_args = new int[1];
+    man_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = m, function = float_mantissa, arguments = man_args, argument_count = 1 });
+    int e = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = e, function = float_e, arguments = man_args, argument_count = 1 });
+
+    int l0 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = l0, left = m, right = base });
+    int q1 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeDivide { target = q1, left = m, right = base });
+    int l1 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = l1, left = q1, right = base });
+    int q2 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeDivide { target = q2, left = q1, right = base });
+
+    int p = new_temporary(h, NativeType.Int);
+    int[] new_args = new int[1];
+    push_instruction(h, Instruction.ConstInt { target = one, value = 4 });
+    new_args[0] = one;
+    push_instruction(h, Instruction.Call { target = p, function = bn_new, arguments = new_args, argument_count = 1 });
+
+    int[] set_args = new int[3];
+    set_args[0] = p;
+    set_args[1] = zero;
+    set_args[2] = l0;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    set_args[1] = one;
+    set_args[2] = l1;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    // l2 reuses l0's slot
+    push_instruction(h, Instruction.WholeRemainder { target = l0, left = q2, right = base });
+    push_instruction(h, Instruction.ConstInt { target = one, value = 2 });
+    set_args[1] = one;
+    set_args[2] = l0;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    // l3 reuses l1's slot
+    push_instruction(h, Instruction.WholeDivide { target = l1, left = q2, right = base });
+    push_instruction(h, Instruction.ConstInt { target = one, value = 3 });
+    set_args[1] = one;
+    set_args[2] = l1;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+
+    new_args[0] = p;
+    push_instruction(h, Instruction.CallVoid { function = bn_trim, arguments = new_args, argument_count = 1 });
+
+    int positive = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = positive, left = zero, right = e });
+    int[] shift_args = new int[2];
+    shift_args[0] = p;
+    shift_args[1] = e;
+    push_instruction(h, Instruction.Branch { condition = positive, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Call { target = p, function = bn_shift_up, arguments = shift_args, argument_count = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Return { value = p });
+    return shell;
+}
+
+
+
+
+
+// float_den registers "$float_den": the Q of M * 2^E as two to max(0, -E),
+// so E at or above zero answers the one-limb 1 through "$bn_pow2(0)". The
+// value and the numerator share the "$float_e" reading. Locals: 7.
+fn add_float_den_shell(NativeScene scene, int bn_pow2, int float_e) -> int {
+    int shell = add_function(scene, "$float_den", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int e = new_temporary(h, NativeType.Int);
+    int[] e_args = new int[1];
+    e_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = e, function = float_e, arguments = e_args, argument_count = 1 });
+    int negative = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = negative, left = e, right = zero });
+    int shift = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = negative, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Negate { target = shift, value = e });
+    push_instruction(h, Instruction.Jump { label = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Copy { target = shift, source = zero });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int q = new_temporary(h, NativeType.Int);
+    int[] pow_args = new int[1];
+    pow_args[0] = shift;
+    push_instruction(h, Instruction.Call { target = q, function = bn_pow2, arguments = pow_args, argument_count = 1 });
+    push_instruction(h, Instruction.Return { value = q });
+    return shell;
+}
+
+// px_probe registers "$px_probe": 1 when the value P/Q stands at or above
+// 10^k (parameter 2), 0 otherwise. For k at or above zero it scales the Q
+// copy by ten k times and answers P >= w; for negative k it scales the P
+// copy by ten |k| times and answers w >= Q. Locals: 13.
+// px_probe registers "$px_probe": 1 when the value P/Q stands at or
+// above 10^k (parameter 2), 0 otherwise. Uses bn_times10pow for the scale.
+// Locals: 9.
+fn add_px_probe_shell(NativeScene scene, int bn_count, int bn_new, int bn_copy_into, int bn_times10pow, int bn_cmp) -> int {
+    int shell = add_function(scene, "$px_probe", NativeType.Int, three_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int small = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = small, left = 2, right = zero });
+
+    int src = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = small, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Copy { target = src, source = 0 });
+    push_instruction(h, Instruction.Jump { label = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Copy { target = src, source = 1 });
+    push_instruction(h, Instruction.Label { label = 2 });
+
+    int mag = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = small, label_true = 3, label_false = 4 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.Negate { target = mag, value = 2 });
+    push_instruction(h, Instruction.Jump { label = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Copy { target = mag, source = 2 });
+    push_instruction(h, Instruction.Label { label = 5 });
+
+    int count = new_temporary(h, NativeType.Int);
+    int[] count_args = new int[1];
+    count_args[0] = src;
+    push_instruction(h, Instruction.Call { target = count, function = bn_count, arguments = count_args, argument_count = 1 });
+    int[] new_args = new int[1];
+    new_args[0] = count;
+    int w = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = w, function = bn_new, arguments = new_args, argument_count = 1 });
+    int[] copy_args = new int[2];
+    copy_args[0] = w;
+    copy_args[1] = src;
+    push_instruction(h, Instruction.CallVoid { function = bn_copy_into, arguments = copy_args, argument_count = 2 });
+
+    int[] scale_args = new int[2];
+    scale_args[0] = w;
+    scale_args[1] = mag;
+    push_instruction(h, Instruction.Call { target = w, function = bn_times10pow, arguments = scale_args, argument_count = 2 });
+
+    int cmp = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = small, label_true = 6, label_false = 7 });
+    push_instruction(h, Instruction.Label { label = 6 });
+    int[] cmp_small = new int[2];
+    cmp_small[0] = w;
+    cmp_small[1] = 1;
+    push_instruction(h, Instruction.Call { target = cmp, function = bn_cmp, arguments = cmp_small, argument_count = 2 });
+    push_instruction(h, Instruction.Jump { label = 8 });
+    push_instruction(h, Instruction.Label { label = 7 });
+    int[] cmp_big = new int[2];
+    cmp_big[0] = 0;
+    cmp_big[1] = w;
+    push_instruction(h, Instruction.Call { target = cmp, function = bn_cmp, arguments = cmp_big, argument_count = 2 });
+    push_instruction(h, Instruction.Label { label = 8 });
+
+    int answer = new_temporary(h, NativeType.Int);
+    int low = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = low, left = cmp, right = zero });
+    push_instruction(h, Instruction.Branch { condition = low, label_true = 9, label_false = 10 });
+    push_instruction(h, Instruction.Label { label = 9 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 0 });
+    push_instruction(h, Instruction.Jump { label = 11 });
+    push_instruction(h, Instruction.Label { label = 10 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 1 });
+    push_instruction(h, Instruction.Label { label = 11 });
+    push_instruction(h, Instruction.Return { value = answer });
+    return shell;
+}
+
+// float_px registers "$float_px": the value's decimal exponent X with
+// 10^X <= |value| < 10^(X+1). The estimate comes from the exponent field
+// (the subnormal band centers wide, so a wide search window covers it),
+// then a probe walk settles the boundary: one down to the first miss, one
+// up to the first hit. Locals: 14.
+// float_px registers "$float_px": the value's decimal exponent X with
+// 10^X <= |value| < 10^(X+1). The estimate comes from float_e, the
+// subnormal band centers wide, then a probe walk settles the boundary.
+// Locals: 13.
+fn add_float_px_shell(NativeScene scene, int px_probe, int float_e, int float_mantissa) -> int {
+    int shell = add_function(scene, "$float_px", NativeType.Int, float_int_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one_c = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one_c, value = 1 });
+    int fifty_two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = fifty_two, value = 4503599627370496 });
+    int mant = new_temporary(h, NativeType.Int);
+    int[] mant_args = new int[1];
+    mant_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = mant, function = float_mantissa, arguments = mant_args, argument_count = 1 });
+    int sub = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = sub, left = mant, right = fifty_two });
+    int est = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = sub, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.ConstInt { target = est, value = -315 });
+    push_instruction(h, Instruction.Jump { label = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int e = new_temporary(h, NativeType.Int);
+    int[] e_args = new int[1];
+    e_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = e, function = float_e, arguments = e_args, argument_count = 1 });
+    int log_mul = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = log_mul, value = 30103 });
+    int log_share = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Multiply { target = log_share, left = e, right = log_mul });
+    push_instruction(h, Instruction.ConstInt { target = log_mul, value = 1580000 });
+    push_instruction(h, Instruction.Add { target = log_share, left = log_share, right = log_mul });
+    push_instruction(h, Instruction.ConstInt { target = log_mul, value = 100000 });
+    push_instruction(h, Instruction.WholeDivide { target = est, left = log_share, right = log_mul });
+    push_instruction(h, Instruction.Add { target = est, left = est, right = one_c });
+    push_instruction(h, Instruction.Add { target = est, left = est, right = one_c });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int k = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = k, source = est });
+    int[] probe_args = new int[3];
+    probe_args[0] = 1;
+    probe_args[1] = 2;
+    probe_args[2] = k;
+    int hit = new_temporary(h, NativeType.Int);
+    // Bidirectional walk: probe is monotonic (1 for k <= X). If probe(k)
+    // hits, walk up while probe(k+1) hits; if it misses, walk down until
+    // probe(k) hits. Returns X.
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.Call { target = hit, function = px_probe, arguments = probe_args, argument_count = 3 });
+    push_instruction(h, Instruction.Equal { target = sub, left = hit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = sub, label_true = 4, label_false = 5 });
+    // probe(k) missed -> walk down
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Subtract { target = k, left = k, right = one_c });
+    push_instruction(h, Instruction.Copy { target = probe_args[2], source = k });
+    push_instruction(h, Instruction.Jump { label = 3 });
+    // probe(k) hit -> walk up while probe(k+1) hits
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.Add { target = k, left = k, right = one_c });
+    push_instruction(h, Instruction.Copy { target = probe_args[2], source = k });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.Call { target = hit, function = px_probe, arguments = probe_args, argument_count = 3 });
+    push_instruction(h, Instruction.Equal { target = sub, left = hit, right = one_c });
+    push_instruction(h, Instruction.Branch { condition = sub, label_true = 7, label_false = 8 });
+    push_instruction(h, Instruction.Label { label = 7 });
+    push_instruction(h, Instruction.Add { target = k, left = k, right = one_c });
+    push_instruction(h, Instruction.Copy { target = probe_args[2], source = k });
+    push_instruction(h, Instruction.Jump { label = 6 });
+    push_instruction(h, Instruction.Label { label = 8 });
+    push_instruction(h, Instruction.Subtract { target = k, left = k, right = one_c });
+    push_instruction(h, Instruction.Return { value = k });
+    return shell;
+}
+// float_pack registers "$float_pack": the norm pair for digit printing.
+// The value = numerator/denominator; the norm = value * 10^(x_neg) lands in
+// [1, 10). The pack object answers [num@limb0][div@limb1].
+// Locals: 10.
+fn add_float_pack_shell(NativeScene scene, int bn_new, int bn_set, int bn_times10pow) -> int {
+    int shell = add_function(scene, "$float_pack", NativeType.Int, three_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int idx0 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = idx0, value = 0 });
+    int idx1 = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = idx1, value = 1 });
+    int small = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = small, left = 2, right = zero });
+    int up = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = up, left = zero, right = 2 });
+    int scaled_t = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = small, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.Negate { target = scaled_t, value = 2 });
+    push_instruction(h, Instruction.Jump { label = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Copy { target = scaled_t, source = zero });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int div_t = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = up, label_true = 3, label_false = 4 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.Copy { target = div_t, source = 2 });
+    push_instruction(h, Instruction.Jump { label = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.Copy { target = div_t, source = zero });
+    push_instruction(h, Instruction.Label { label = 5 });
+    int scaled = new_temporary(h, NativeType.Int);
+    int[] num_args = new int[2];
+    num_args[0] = 0;
+    num_args[1] = scaled_t;
+    push_instruction(h, Instruction.Call { target = scaled, function = bn_times10pow, arguments = num_args, argument_count = 2 });
+    int divisor = new_temporary(h, NativeType.Int);
+    int[] den_args = new int[2];
+    den_args[0] = 1;
+    den_args[1] = div_t;
+    push_instruction(h, Instruction.Call { target = divisor, function = bn_times10pow, arguments = den_args, argument_count = 2 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int[] new_args = new int[1];
+    new_args[0] = two;
+    int pack = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = pack, function = bn_new, arguments = new_args, argument_count = 1 });
+    int[] set_num = new int[3];
+    set_num[0] = pack;
+    set_num[1] = idx0;
+    set_num[2] = scaled;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_num, argument_count = 3 });
+    set_num[1] = idx1;
+    set_num[2] = divisor;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_num, argument_count = 3 });
+    push_instruction(h, Instruction.Return { value = pack });
+    return shell;
+}
+
+// float_round registers "$float_round": answers 0 when the digits stand,
+// and the bump result (1 or 2) when one round-up applies. Parameters: 0 the
+// digit buffer, 1 the fraction remainder after six digits, 2 the norm
+// divisor. The half test doubles the remainder and compares with the
+// divisor; the exact half rounds to the neighboring even sixth digit.
+// Locals: 10.
+fn add_float_round_shell(NativeScene scene, int bn_mul_small, int bn_cmp, int bn_get, int bn_bump) -> int {
+    int shell = add_function(scene, "$float_round", NativeType.Int, three_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int five = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = five, value = 5 });
+    int dbl = new_temporary(h, NativeType.Int);
+    int[] mul_args = new int[2];
+    mul_args[0] = 1;
+    mul_args[1] = two;
+    push_instruction(h, Instruction.Call { target = dbl, function = bn_mul_small, arguments = mul_args, argument_count = 2 });
+    int[] cmp_args = new int[2];
+    cmp_args[0] = dbl;
+    cmp_args[1] = 2;
+    int cmp = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = cmp, function = bn_cmp, arguments = cmp_args, argument_count = 2 });
+    int low = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = low, left = cmp, right = zero });
+    push_instruction(h, Instruction.Branch { condition = low, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.ConstInt { target = cmp, value = 0 });
+    push_instruction(h, Instruction.Return { value = cmp });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int high = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = high, left = zero, right = cmp });
+    push_instruction(h, Instruction.Branch { condition = high, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int[] bump_args = new int[1];
+    bump_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = dbl, function = bn_bump, arguments = bump_args, argument_count = 1 });
+    push_instruction(h, Instruction.Return { value = dbl });
+    push_instruction(h, Instruction.Label { label = 3 });
+    // Exact half: round up when the sixth digit is odd.
+    int[] get_args = new int[2];
+    get_args[0] = 0;
+    get_args[1] = five;
+    int last_digit = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = last_digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    int parity = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.WholeRemainder { target = parity, left = last_digit, right = two });
+    int odd = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Equal { target = odd, left = parity, right = one });
+    push_instruction(h, Instruction.Branch { condition = odd, label_true = 4, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    bump_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = dbl, function = bn_bump, arguments = bump_args, argument_count = 1 });
+    push_instruction(h, Instruction.Return { value = dbl });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.ConstInt { target = cmp, value = 0 });
+    push_instruction(h, Instruction.Return { value = cmp });
+    return shell;
+}
+
+// float_digits registers "$float_digits": the six significand limbs of the
+// printed value. Parameters: 0 the numerator, 1 the denominator, 2 the
+// decimal exponent, 3 the six-limb digit buffer to fill. Answers the round
+// result from "$float_round" (0 stands, 1 was bumped, 2 rolled). Locals:
+// 14.
+fn add_float_digits_shell(NativeScene scene, int float_pack, int bn_digit, int bn_set, int float_round) -> int {
+    int shell = add_function(scene, "$float_digits", NativeType.Int, four_int_parameters(), 4);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int five = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = five, value = 6 });
+    int ten = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten, value = 10 });
+    int[] pack_args = new int[3];
+    pack_args[0] = 0;
+    pack_args[1] = 1;
+    pack_args[2] = 2;
+    int pack = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = pack, function = float_pack, arguments = pack_args, argument_count = 3 });
+    int scaled = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.RawLoad64 { target = scaled, address = pack, offset = 16 });
+    int divisor = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.RawLoad64 { target = divisor, address = pack, offset = 24 });
+    int[] digit_args = new int[3];
+    digit_args[0] = scaled;
+    digit_args[1] = divisor;
+    digit_args[2] = one;
+    int d = new_temporary(h, NativeType.Int);
+    int[] set_args = new int[3];
+    set_args[0] = 3;
+    set_args[1] = zero;
+    set_args[2] = d;
+    push_instruction(h, Instruction.Call { target = d, function = bn_digit, arguments = digit_args, argument_count = 3 });
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = i, value = 1 });
+    int[] re_args = new int[2];
+    re_args[0] = 3;
+    re_args[1] = i;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = five });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    digit_args[2] = ten;
+    push_instruction(h, Instruction.Call { target = d, function = bn_digit, arguments = digit_args, argument_count = 3 });
+    set_args[1] = i;
+    set_args[2] = d;
+    push_instruction(h, Instruction.CallVoid { function = bn_set, arguments = set_args, argument_count = 3 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    re_args[1] = i;
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int[] round_args = new int[3];
+    round_args[0] = 3;
+    round_args[1] = scaled;
+    round_args[2] = divisor;
+    int round = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = round, function = float_round, arguments = round_args, argument_count = 3 });
+    push_instruction(h, Instruction.Return { value = round });
+    return shell;
+}
+
+// float_wchar registers "$float_wchar": one byte of its blob's payload (set
+// with SetStatic at the raw offset 24) goes through "$fwrite1". Locals: 1.
+fn add_float_wchar_shell(NativeScene scene, int scratch_blob, int fwrite1) -> int {
+    int shell = add_function(scene, "$float_wchar", NativeType.Void, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+    int glyph = new_temporary(h, NativeType.Ref);
+    push_instruction(h, Instruction.ConstRefData { target = glyph, blob = scratch_blob });
+    push_instruction(h, Instruction.SetStatic { blob = scratch_blob, offset = 24, value = 0 });
+    int[] write_args = new int[1];
+    write_args[0] = glyph;
+    push_instruction(h, Instruction.CallVoid { function = fwrite1, arguments = write_args, argument_count = 1 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// float_wdigit registers "$float_wdigit": one digit limb of the printed
+// buffer goes out as its character. Locals: 5.
+fn add_float_wdigit_shell(NativeScene scene, int bn_get, int float_wchar) -> int {
+    int shell = add_function(scene, "$float_wdigit", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+    int digit = new_temporary(h, NativeType.Int);
+    int[] get_args = new int[2];
+    get_args[0] = 0;
+    get_args[1] = 1;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    int base = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = base, value = 48 });
+    push_instruction(h, Instruction.Add { target = digit, left = digit, right = base });
+    int[] wchar_args = new int[1];
+    wchar_args[0] = digit;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = wchar_args, argument_count = 1 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// float_last registers "$float_last": the highest digit index of the buffer
+// holding a nonzero limb (the input has a nonzero lead, so 0 always
+// answers). Locals: 7.
+// float_last registers "$float_last": the highest digit index of the buffer
+// holding a nonzero limb (the input has a nonzero lead, so 0 always
+// answers). Unrolled over the six positions to sidestep a slot-allocation
+// quirk in the native backend's loop lowering. Locals: 9.
+fn add_float_last_shell(NativeScene scene, int bn_get) -> int {
+    int shell = add_function(scene, "$float_last", NativeType.Int, one_int_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int three = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = three, value = 3 });
+    int four = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = four, value = 4 });
+    int five = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = five, value = 5 });
+    int[] get_args = new int[2];
+    get_args[0] = 0;
+    get_args[1] = five;
+    int digit = new_temporary(h, NativeType.Int);
+    int nz = new_temporary(h, NativeType.Bool);
+    // index 5
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = nz, left = digit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = nz, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Return { value = five });
+    // index 4
+    push_instruction(h, Instruction.Label { label = 0 });
+    get_args[1] = four;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = nz, left = digit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = nz, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.Return { value = four });
+    // index 3
+    push_instruction(h, Instruction.Label { label = 2 });
+    get_args[1] = three;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = nz, left = digit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = nz, label_true = 4, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.Return { value = three });
+    // index 2
+    push_instruction(h, Instruction.Label { label = 4 });
+    get_args[1] = two;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = nz, left = digit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = nz, label_true = 6, label_false = 7 });
+    push_instruction(h, Instruction.Label { label = 7 });
+    push_instruction(h, Instruction.Return { value = two });
+    // index 1
+    push_instruction(h, Instruction.Label { label = 6 });
+    get_args[1] = one;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Equal { target = nz, left = digit, right = zero });
+    push_instruction(h, Instruction.Branch { condition = nz, label_true = 8, label_false = 9 });
+    push_instruction(h, Instruction.Label { label = 9 });
+    push_instruction(h, Instruction.Return { value = one });
+    // index 0
+    push_instruction(h, Instruction.Label { label = 8 });
+    get_args[1] = zero;
+    push_instruction(h, Instruction.Call { target = digit, function = bn_get, arguments = get_args, argument_count = 2 });
+    push_instruction(h, Instruction.Return { value = zero });
+    return shell;
+}
+
+// float_wdigits registers "$float_wdigits": digits [lo..hi] inclusive go
+// out through "$float_wdigit". Locals: 8.
+fn add_float_wdigits_shell(NativeScene scene, int float_wdigit) -> int {
+    int shell = add_function(scene, "$float_wdigits", NativeType.Void, three_int_parameters(), 3);
+    NativeFunction h = function_at(scene, shell);
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = i, source = 1 });
+    int hi_plus = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Add { target = hi_plus, left = 2, right = one });
+    int[] wd_args = new int[2];
+    wd_args[0] = 0;
+    wd_args[1] = i;
+    push_instruction(h, Instruction.Label { label = 0 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = hi_plus });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 1, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.CallVoid { function = float_wdigit, arguments = wd_args, argument_count = 2 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(h, Instruction.Copy { target = wd_args[1], source = i });
+    push_instruction(h, Instruction.Jump { label = 0 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// float_write_scientific registers "$float_write_scientific":
+// d1[.d2..dnz]e±XX with the digits' trailing zeros trimmed by "$float_last"
+// and the exponent at least two wide (three when it needs a hundred).
+// Locals: 14.
+// float_write_scientific registers "$float_write_scientific":
+// d1[.d2..dnz]e±XX with the digits' trailing zeros trimmed by "$float_last"
+// and the exponent at least two wide (three when it needs a hundred).
+// Locals: 14.
+// float_write_scientific registers "$float_write_scientific":
+// d1[.d2..dnz]e±XX with the digits' trailing zeros trimmed by "$float_last"
+// and the exponent at least two wide (three when it needs a hundred).
+// Locals: 14.
+fn add_float_write_scientific_shell(NativeScene scene, int float_last, int float_wdigits, int float_wdigit, int float_wchar) -> int {
+    int shell = add_function(scene, "$float_write_scientific", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int ten = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = ten, value = 10 });
+    int hundred = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = hundred, value = 100 });
+    int glyph = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 48 });
+    int nz = new_temporary(h, NativeType.Int);
+    int[] last_args = new int[1];
+    last_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = nz, function = float_last, arguments = last_args, argument_count = 1 });
+    int[] d1_args = new int[2];
+    d1_args[0] = 0;
+    d1_args[1] = zero;
+    push_instruction(h, Instruction.CallVoid { function = float_wdigit, arguments = d1_args, argument_count = 2 });
+    int any_frac = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = any_frac, left = zero, right = nz });
+    push_instruction(h, Instruction.Branch { condition = any_frac, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 46 });
+    int[] dot_args = new int[1];
+    dot_args[0] = glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = dot_args, argument_count = 1 });
+    int[] frac_args = new int[3];
+    frac_args[0] = 0;
+    frac_args[1] = one;
+    frac_args[2] = nz;
+    push_instruction(h, Instruction.CallVoid { function = float_wdigits, arguments = frac_args, argument_count = 3 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 101 });
+    int[] e_args = new int[1];
+    e_args[0] = glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = e_args, argument_count = 1 });
+    int underline = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = underline, left = 1, right = zero });
+    push_instruction(h, Instruction.Branch { condition = underline, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 45 });
+    int[] slash_args = new int[1];
+    slash_args[0] = glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = slash_args, argument_count = 1 });
+    push_instruction(h, Instruction.Negate { target = 1, value = 1 });
+    push_instruction(h, Instruction.Jump { label = 4 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 43 });
+    int[] plus_args = new int[1];
+    plus_args[0] = glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = plus_args, argument_count = 1 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    push_instruction(h, Instruction.ConstInt { target = glyph, value = 48 });
+    int digit = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.LessThan { target = underline, left = hundred, right = 1 });
+    push_instruction(h, Instruction.Branch { condition = underline, label_true = 5, label_false = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.WholeDivide { target = digit, left = 1, right = hundred });
+    int hund_glyph = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Add { target = hund_glyph, left = digit, right = glyph });
+    int[] hund_args = new int[1];
+    hund_args[0] = hund_glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = hund_args, argument_count = 1 });
+    push_instruction(h, Instruction.WholeRemainder { target = 1, left = 1, right = hundred });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.WholeDivide { target = digit, left = 1, right = ten });
+    int tens_glyph = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Add { target = tens_glyph, left = digit, right = glyph });
+    int[] tens_args = new int[1];
+    tens_args[0] = tens_glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = tens_args, argument_count = 1 });
+    push_instruction(h, Instruction.WholeRemainder { target = digit, left = 1, right = ten });
+    int ones_glyph = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Add { target = ones_glyph, left = digit, right = glyph });
+    int[] ones_args = new int[1];
+    ones_args[0] = ones_glyph;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = ones_args, argument_count = 1 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// float_write_fixed registers "$float_write_fixed": the fixed shape of the
+// buffer's six digits at decimal exponent parameter 1. X at or above zero
+// writes d1..d(x+1) and, when digits stand beyond, a dot and the rest (the
+// "$float_last" index answers where the trailing zeros end). X below zero
+// writes 0., (|x|-1) zeros, then the digits up to the last nonzero.
+// Locals: 14.
+fn add_float_write_fixed_shell(NativeScene scene, int float_last, int float_wdigits, int float_wchar) -> int {
+    int shell = add_function(scene, "$float_write_fixed", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int glyph_dot = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_dot, value = 46 });
+    int glyph_zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_zero, value = 48 });
+    int nz = new_temporary(h, NativeType.Int);
+    int[] last_args = new int[1];
+    last_args[0] = 0;
+    push_instruction(h, Instruction.Call { target = nz, function = float_last, arguments = last_args, argument_count = 1 });
+    int under = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = under, left = 1, right = zero });
+    push_instruction(h, Instruction.Branch { condition = under, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int end_digit = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Add { target = end_digit, left = 1, right = one });
+    int[] body_args = new int[3];
+    body_args[0] = 0;
+    body_args[1] = zero;
+    body_args[2] = 1;
+    push_instruction(h, Instruction.CallVoid { function = float_wdigits, arguments = body_args, argument_count = 3 });
+    int has_frac = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = has_frac, left = nz, right = end_digit });
+    push_instruction(h, Instruction.Branch { condition = has_frac, label_true = 3, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    int[] dot_args = new int[1];
+    dot_args[0] = glyph_dot;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = dot_args, argument_count = 1 });
+    int[] frac_args = new int[3];
+    frac_args[0] = 0;
+    frac_args[1] = end_digit;
+    frac_args[2] = nz;
+    push_instruction(h, Instruction.CallVoid { function = float_wdigits, arguments = frac_args, argument_count = 3 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.ReturnVoid);
+    push_instruction(h, Instruction.Label { label = 0 });
+    int[] zero_args = new int[1];
+    zero_args[0] = glyph_zero;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = zero_args, argument_count = 1 });
+    int[] dot2 = new int[1];
+    dot2[0] = glyph_dot;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = dot2, argument_count = 1 });
+    int zeros = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Negate { target = zeros, value = 1 });
+    push_instruction(h, Instruction.Subtract { target = zeros, left = zeros, right = one });
+    int i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Copy { target = i, source = zero });
+    int[] one_args = new int[1];
+    one_args[0] = glyph_zero;
+    push_instruction(h, Instruction.Label { label = 4 });
+    int more = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = more, left = i, right = zeros });
+    push_instruction(h, Instruction.Branch { condition = more, label_true = 5, label_false = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = one_args, argument_count = 1 });
+    push_instruction(h, Instruction.Add { target = i, left = i, right = one });
+    push_instruction(h, Instruction.Jump { label = 4 });
+    push_instruction(h, Instruction.Label { label = 6 });
+    int[] tail_args = new int[3];
+    tail_args[0] = 0;
+    tail_args[1] = zero;
+    tail_args[2] = nz;
+    push_instruction(h, Instruction.CallVoid { function = float_wdigits, arguments = tail_args, argument_count = 3 });
+    push_instruction(h, Instruction.Jump { label = 3 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+// float_write registers "$float_write": the fixed shape for decimal
+// exponents -4..5, the scientific shape otherwise. Locals: 9.
+// float_write registers "$float_write": the fixed shape for decimal
+// exponents -4..5, the scientific shape otherwise. Dense labels: 0 the
+// scientific path, 1 the high-exponent test, 2 the fixed path, 3 the end.
+// Locals: 5.
+fn add_float_write_shell(NativeScene scene, int float_write_fixed, int float_write_scientific) -> int {
+    int shell = add_function(scene, "$float_write", NativeType.Void, two_int_parameters(), 2);
+    NativeFunction h = function_at(scene, shell);
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int five = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = five, value = 5 });
+    int six = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = six, value = 6 });
+    int minus_four = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = minus_four, value = -4 });
+    int[] write_args = new int[2];
+    write_args[0] = 0;
+    write_args[1] = 1;
+    int low = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = low, left = 1, right = minus_four });
+    push_instruction(h, Instruction.Branch { condition = low, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int high = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = high, left = five, right = 1 });
+    push_instruction(h, Instruction.Branch { condition = high, label_true = 0, label_false = 2 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.CallVoid { function = float_write_scientific, arguments = write_args, argument_count = 2 });
+    push_instruction(h, Instruction.Jump { label = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.CallVoid { function = float_write_fixed, arguments = write_args, argument_count = 2 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+
+// float_write_special registers "$float_write_special": the zero/-0 region
+// answers its digit and returns; the finite region returns empty; the
+// inf/nan region writes the spelling. Dense labels: 0 zero, 1 finite,
+// 2 return, 3 nan chars, 4 inf chars, 5 join. Locals: 12.
+// float_write_special registers "$float_write_special": the non-finite
+// spelling on parameter 0's flag (0 inf, 1 nan; the sign already printed).
+// Locals: 6.
+// float_write_special registers "$float_write_special": the zero/-0 and
+// inf/nan region from the float itself (the sign already printed).
+// Locals: 11.
+fn add_float_write_special_shell(NativeScene scene, int float_zero_bits, int float_special, int float_wchar) -> int {
+    int shell = add_function(scene, "$float_write_special", NativeType.Void, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int two = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = two, value = 2 });
+    int glyph_i = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_i, value = 105 });
+    int glyph_n = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_n, value = 110 });
+    int glyph_f = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_f, value = 102 });
+    int glyph_a = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_a, value = 97 });
+    int glyph_zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_zero, value = 48 });
+    int[] sign_args = new int[1];
+    sign_args[0] = 0;
+    int zb = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = zb, function = float_zero_bits, arguments = sign_args, argument_count = 1 });
+    int special = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = special, function = float_special, arguments = sign_args, argument_count = 1 });
+    int b = new_temporary(h, NativeType.Bool);
+    int[] z_args = new int[1];
+    z_args[0] = glyph_zero;
+    // zero region
+    push_instruction(h, Instruction.Equal { target = b, left = zb, right = one });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = z_args, argument_count = 1 });
+    push_instruction(h, Instruction.ReturnVoid);
+    // finite: nothing
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.LessThan { target = b, left = zero, right = special });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 2, label_false = 5 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.ReturnVoid);
+    // inf/nan
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Equal { target = b, left = special, right = two });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 3, label_false = 4 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    int[] n_args = new int[1];
+    n_args[0] = glyph_n;
+    int[] a_args = new int[1];
+    a_args[0] = glyph_a;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = n_args, argument_count = 1 });
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = a_args, argument_count = 1 });
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = n_args, argument_count = 1 });
+    push_instruction(h, Instruction.Jump { label = 5 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    int[] i_args = new int[1];
+    i_args[0] = glyph_i;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = i_args, argument_count = 1 });
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = n_args, argument_count = 1 });
+    int[] f_args = new int[1];
+    f_args[0] = glyph_f;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = f_args, argument_count = 1 });
+    
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+
+// float_zero_bits registers "$float_zero_bits": 1 for +0.0 and for -0.0
+// (the all-zero and the sign-only bit patterns). Locals: 6.
+fn add_float_zero_bits_shell(NativeScene scene) -> int {
+    int shell = add_function(scene, "$float_zero_bits", NativeType.Int, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int zero = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero, value = 0 });
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int bits = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.FloatBits { target = bits, value = 0 });
+    int is_plain = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Equal { target = is_plain, left = bits, right = zero });
+    int min_int = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = min_int, value = -9223372036854775807 });
+    push_instruction(h, Instruction.Subtract { target = min_int, left = min_int, right = one });
+    int is_signed = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.Equal { target = is_signed, left = bits, right = min_int });
+    int answer = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Branch { condition = is_plain, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 1 });
+    push_instruction(h, Instruction.Return { value = answer });
+    push_instruction(h, Instruction.Label { label = 1 });
+    push_instruction(h, Instruction.Branch { condition = is_signed, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 1 });
+    push_instruction(h, Instruction.Return { value = answer });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.ConstInt { target = answer, value = 0 });
+    push_instruction(h, Instruction.Return { value = answer });
+    return shell;
+}
+
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. Label map: 0 zero region,
+// 1 special region, 2/3 the zero path's sign select, 4/6/7 the special
+// region's sign select, 8/9/10 the nan flag select, 5 the finite region,
+// 11/12 its sign select, 13/14 the roll. Locals: 12.
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. Label map: 0 zero region,
+// 1 special region, 2/3 the zero path's sign select, 4/6/7 the special
+// region's sign select, 8/9/10 the nan flag select, 5 the finite region,
+// 11/12 its sign select, 13/14 the roll. Locals: 14.
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. Label map: 0 zero region,
+// 1 special region, 2/3 the zero path's sign select, 4/6/7 the special
+// region's sign select, 8/9/10 the nan flag select, 5 the finite region,
+// 11/12 its sign select, 13/14 the roll. Locals: 14.
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. The specials' region is
+// "$float_write_special"'s whole job; the finite path takes its six digits
+// through "$float_digits", gets its one-round bump applied, and prints
+// through "$float_write"'s fixed or scientific shape. Label map: 0/1 the
+// sign selects, 2/3 the roll. Locals: 13.
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. The write_special shell
+// handles the zero/-0/inf/nan region; the finite path takes its six digits
+// through "$float_digits", gets its one-round bump applied, and prints
+// through "$float_write"'s fixed or scientific shape. Labels: 0/1 the sign
+// select, 2 the special call, 3/4 the roll. Locals: 13.
+// print_float registers "$print_float": the %g spelling of one float value,
+// byte for byte the C pipeline's `printf("%g")`. The sign's minus goes
+// first; "$float_write_special" answers the zero, inf, and NaN spellings
+// and stays silent for finite values; the finite path takes its six digits
+// through "$float_digits", applies the round's exponent bump, and prints
+// through "$float_write"'s fixed or scientific shape. Dense labels: 0 the
+// minus write, 1 the special spelling, 2 the finite gate, 3 the early
+// return, 4 the finite body, 5 the roll, 6 the write. Locals: 13.
+// print_float registers "$print_float": minimal version for debugging.
+// print_float registers "$print_float": debugging finite path step 1.
+// print_float registers "$print_float": the %g spelling of one float value.
+// Dense labels: 0 minus, 1 write_special, 2 finite gate true, 3 return,
+// 4 finite body, 5 roll, 6 write. Locals: 13.
+// print_float step: float_num + float_den + float_px
+fn add_print_float_shell(NativeScene scene, int float_sign, int float_zero_bits, int float_special, int float_write_special, int float_num, int float_den, int float_px, int bn_new, int float_digits, int float_write, int float_wchar) -> int {
+    int shell = add_function(scene, "$print_float", NativeType.Void, one_float_parameter(), 1);
+    NativeFunction h = function_at(scene, shell);
+
+    int[] value_args = new int[1];
+    value_args[0] = 0;
+    int zero_c = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = zero_c, value = 0 });
+    int one_c = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one_c, value = 1 });
+    int six_c = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = six_c, value = 6 });
+    int glyph_minus = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = glyph_minus, value = 45 });
+    int sign = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = sign, function = float_sign, arguments = value_args, argument_count = 1 });
+    int zb = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = zb, function = float_zero_bits, arguments = value_args, argument_count = 1 });
+    int special = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = special, function = float_special, arguments = value_args, argument_count = 1 });
+    int b = new_temporary(h, NativeType.Bool);
+    push_instruction(h, Instruction.LessThan { target = b, left = zero_c, right = sign });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 0, label_false = 1 });
+    push_instruction(h, Instruction.Label { label = 0 });
+    int[] minus_args = new int[1];
+    minus_args[0] = glyph_minus;
+    push_instruction(h, Instruction.CallVoid { function = float_wchar, arguments = minus_args, argument_count = 1 });
+    push_instruction(h, Instruction.Label { label = 1 });
+    int[] value_args2 = new int[1];
+    value_args2[0] = 0;
+    push_instruction(h, Instruction.CallVoid { function = float_write_special, arguments = value_args2, argument_count = 1 });
+    push_instruction(h, Instruction.Equal { target = b, left = zb, right = zero_c });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 2, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 3 });
+    push_instruction(h, Instruction.ReturnVoid);
+    push_instruction(h, Instruction.Label { label = 2 });
+    push_instruction(h, Instruction.Equal { target = b, left = special, right = zero_c });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 4, label_false = 3 });
+    push_instruction(h, Instruction.Label { label = 4 });
+    int num = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = num, function = float_num, arguments = value_args, argument_count = 1 });
+    int den = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = den, function = float_den, arguments = value_args, argument_count = 1 });
+    int[] px_args = new int[3];
+    px_args[0] = 0;
+    px_args[1] = num;
+    px_args[2] = den;
+    int x = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = x, function = float_px, arguments = px_args, argument_count = 3 });
+    int[] new_args = new int[1];
+    new_args[0] = six_c;
+    int buffer = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = buffer, function = bn_new, arguments = new_args, argument_count = 1 });
+    int[] digit_args = new int[4];
+    digit_args[0] = num;
+    digit_args[1] = den;
+    digit_args[2] = x;
+    digit_args[3] = buffer;
+    int round = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.Call { target = round, function = float_digits, arguments = digit_args, argument_count = 4 });
+    int[] write_args = new int[2];
+    write_args[0] = buffer;
+    write_args[1] = x;
+    // roll (round == 2): X += 1
+    push_instruction(h, Instruction.LessThan { target = b, left = one_c, right = round });
+    push_instruction(h, Instruction.Branch { condition = b, label_true = 5, label_false = 6 });
+    push_instruction(h, Instruction.Label { label = 5 });
+    push_instruction(h, Instruction.Add { target = write_args[1], left = x, right = one_c });
+    push_instruction(h, Instruction.Label { label = 6 });
+    push_instruction(h, Instruction.CallVoid { function = float_write, arguments = write_args, argument_count = 2 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return shell;
+}
+
+
+// add_write_one_shell_for_float registers the float prints' own one-byte
+// write shell: the same shape "$write1" gives the integer print, kept
+// separate so the float-only programs carry their own set.
+fn add_write_one_shell_for_float(NativeScene scene) -> int {
+    int writer = add_function(scene, "$fwrite1", NativeType.Void, one_ref_parameter(), 1);
+    NativeFunction h = function_at(scene, writer);
+
+    int one = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.ConstInt { target = one, value = 1 });
+    int data = new_temporary(h, NativeType.Ref);
+    push_instruction(h, Instruction.RawLoad64 { target = data, address = 0, offset = 16 });
+    int[] arguments = new int[3];
+    arguments[0] = one;
+    arguments[1] = data;
+    arguments[2] = one;
+    int written = new_temporary(h, NativeType.Int);
+    push_instruction(h, Instruction.RawSyscall { target = written, number = one, arguments = arguments, argument_count = 3 });
+    push_instruction(h, Instruction.ReturnVoid);
+    return writer;
+}
+
+// add_float_print registers the %g float print shells into a scene, after
+// the allocator shells, wired through the same builders the lowering and
+// the probe use. It returns the "$print_float" index.
+public fn add_float_print(NativeScene scene, int alloc) -> FloatPrintShell {
+    FloatPrintShell shell = FloatPrintShell { print_float = 0 };
+    int bn_new = add_bn_new_shell(scene, alloc);
+    int bn_get = add_bn_get_shell(scene);
+    int bn_set = add_bn_set_shell(scene);
+    int bn_count = add_bn_count_shell(scene);
+    int bn_cmp = add_bn_cmp_shell(scene, bn_get);
+    int bn_mul_small = add_bn_mul_small_shell(scene, bn_new, bn_get, bn_set);
+    int bn_sub_into = add_bn_sub_into_shell(scene, bn_get, bn_set);
+    int bn_copy_into = add_bn_copy_into_shell(scene, bn_get, bn_set, bn_count);
+    int bn_digit = add_bn_digit_shell(scene, bn_mul_small, bn_cmp, bn_sub_into, bn_copy_into);
+    int bn_times10pow = add_bn_times10pow_shell(scene, bn_count, bn_new, bn_copy_into, bn_mul_small);
+    int bn_bump = add_bn_bump_shell(scene, bn_get, bn_set);
+    int bn_pow2 = add_bn_pow2_shell(scene, bn_new, bn_set, bn_mul_small);
+    int bn_trim = add_bn_trim_shell(scene, bn_get);
+    int float_sign = add_float_sign_shell(scene);
+    int float_special = add_float_special_shell(scene);
+    int float_zero_bits = add_float_zero_bits_shell(scene);
+    int float_mantissa = add_float_mantissa_shell(scene);
+    int float_e = add_float_e_shell(scene);
+    int bn_shift_up = add_bn_shift_up_shell(scene, bn_mul_small);
+    int float_num = add_float_num_shell(scene, bn_new, bn_set, bn_trim, float_mantissa, float_e, bn_shift_up);
+    int float_den = add_float_den_shell(scene, bn_pow2, float_e);
+    int px_probe = add_px_probe_shell(scene, bn_count, bn_new, bn_copy_into, bn_times10pow, bn_cmp);
+    int float_px = add_float_px_shell(scene, px_probe, float_e, float_mantissa);
+    int float_pack = add_float_pack_shell(scene, bn_new, bn_set, bn_times10pow);
+    int float_round = add_float_round_shell(scene, bn_mul_small, bn_cmp, bn_get, bn_bump);
+    int scratch_blob = add_blob(scene, "0");
+    int fwrite1 = add_write_one_shell_for_float(scene);
+    int float_wchar = add_float_wchar_shell(scene, scratch_blob, fwrite1);
+    int float_wdigit = add_float_wdigit_shell(scene, bn_get, float_wchar);
+    int float_last = add_float_last_shell(scene, bn_get);
+    int float_wdigits = add_float_wdigits_shell(scene, float_wdigit);
+    int float_digits = add_float_digits_shell(scene, float_pack, bn_digit, bn_set, float_round);
+    int float_write_scientific = add_float_write_scientific_shell(scene, float_last, float_wdigits, float_wdigit, float_wchar);
+    int float_write_fixed = add_float_write_fixed_shell(scene, float_last, float_wdigits, float_wchar);
+    int float_write = add_float_write_shell(scene, float_write_fixed, float_write_scientific);
+    int float_write_special = add_float_write_special_shell(scene, float_zero_bits, float_special, float_wchar);
+    int print_float = add_print_float_shell(scene, float_sign, float_zero_bits, float_special, float_write_special, float_num, float_den, float_px, bn_new, float_digits, float_write, float_wchar);
+    shell.print_float = print_float;
+    return shell;
 }
