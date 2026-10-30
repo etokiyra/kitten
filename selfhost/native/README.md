@@ -10,16 +10,24 @@ landed the skeleton slice — constants, calls, the program's opening paragraph,
 write and exit syscalls, and string-literal printing, no GC and no C compiler
 anywhere. Phase 10.3 added step 2's scalar arithmetic and control flow:
 integer add through guard-led divide and remainder, negate, equal, less_than,
-jump, branch, and label. The instruction union is now fully encoded; every
-scene the checker can form (for the scalar, allocation-free subset) lowers into
-a runnable static executable. No part of the production sidecar depends on this
-module yet.
+jump, branch, and label. The instruction union is now fully encoded. Phase
+10.4 lowered the checked program: `native/lower.ktn` reduces a checked
+single-module program's semantic model into a scene for the scalar,
+allocation-free subset, with one deterministic message per unsupported
+construct, and the probe's `lower` mode runs real `.ktn` sources from disk
+through loader, checker, lowering, selector, and ELF writer. Every corpus
+program's executable matches the C pipeline's behavior; no part of the
+production sidecar depends on this module yet.
 
 ## Files
 
 - `selfhost/native/ir.ktn` — `NativeScene`, its builders, and `check_scene`,
   the whole-scene well-formedness pass; `push_instruction` snapshots call
   argument arrays so the scene stays an immutable snapshot.
+- `selfhost/native/lower.ktn` — the lowering from a checked program's
+  semantic model to one scene, covering the scalar, allocation-free subset,
+  with one deterministic message for every unsupported construct (top of the
+  file lists the subset).
 - `selfhost/native/text.ktn` — the deterministic text renderer whose pinned
   output protects the scene's shape as the backend grows around it.
 - `selfhost/native/selector.ktn` — the raw byte buffer, the frame layout, the
@@ -30,12 +38,41 @@ module yet.
   segment, and the entry point.
 - `selfhost/native.ktn` — the probe: the skeleton target's scene, the
   arithmetic scene, the divide-failure scene, the growth scene, the failure
-  scenes, and `elf`, `elf-arith`, and `elf-divzero`, which write runnable
-  executables.
+  scenes, the `lower` driver over real sources — `load_program` →
+  `check_modules` → `lower_program` → `check_scene` → `select_scene` and the
+  writer — and `elf`, `elf-arith`, `elf-divzero`, and `lower <source>
+  [<output>]`, which write runnable executables.
 - `cmd/purr/native_test.go` — the pinned tests, the executions and their
   C-pipeline parity, staticness checks, and both-pipeline ELF byte identity.
+- `tests/native/*.ktn` — the scalar corpus: every program lowers, and its
+  native executable's output, standard error, and status match the C
+  pipeline's `purr run` of the same source. `tests/native/bad/*.ktn` — one
+  deterministic failure message per unsupported construct and per load, lex,
+  parse, and check failure.
 
-## The scene contract
+## The lowering
+
+`lower_program(model)` walks one checked single-module program and fills the
+scene directly from the model the Kitten-written checker produced; it never
+resolves a name, infers a type, or re-reads source text. Function shells
+register in declaration order, the print helper — when resolution needs it —
+lands after them, and bodies lower in declaration order, so binding order is
+the walk order: parameters first, then each local and temporary as the
+lowering creates it. String literals pool by decoded bytes exactly as the C
+generator pools its literals. The lowering emits the boolean operators and
+the derived comparisons through the branch forms the scene already carries —
+`!`, `!=`, `<=`, and `>=` materialize a bool through a branch on their
+flipped condition — and lowers `&&` and `||` short-circuit, so the right
+operand evaluates only when the first did not decide, matching the C
+pipeline's generated `&&`/`||`. The `print` built-in lowers with exactly one
+string argument to a scene-internal helper named `"$print"`, which no user
+name can collide with, and `exit` lowers to the backend's own raw
+`exit_group` syscall. The slice's frame is still the selector's: at most
+fourteen locals per function, so corpus functions stay small; the C
+generator's known self-shadowing-initializer quirk is why the corpus avoids
+a `local` whose initializer names a same-scoped outer local.
+
+## Scene contract
 
 A `NativeScene` is ordered functions, ordered static blobs, and an entry index.
 Each `NativeFunction` has a result shape, a binding table, and an ordered
@@ -94,14 +131,19 @@ expects it.
 
 ## What is not here
 
-- A lowering from the checked program: `NativeScene` is an input the lowering
-  will produce, not an output it yet has. The probe builds the scene by hand.
+- Field access, allocation, bounds checks, and tag switches: strings lower
+  as static literal blobs alone; concatenation, string equality, and every
+  composite type fail with their message.
 - Float arithmetic and conversions: no float forms exist in the instruction
   union yet; they land with the selector's SSE2 work.
-- Field access, allocation, bounds checks, and tag switches.
+- Bitwise and shift operators, byte values, imports, and `match`: the
+  scalar subset is single-module, and each fails with its message.
 - Stack-alignment refinement, a System V interop convention, register
-  allocation, and the runtime's GC. The proposal's order stages all of it
-  into later slices.
+  allocation, and the runtime's GC. The frame still carries at most fourteen
+  parameters and fourteen locals, which shapes the corpus; the proposal's
+  order stages the rest into later slices.
+- The print helper is the only runtime-shaped routine the lowering emits;
+  the runtime written in Kitten arrives with the runtime slice.
 
 ## What the selector lowers
 
@@ -158,6 +200,8 @@ purr build selfhost/native.ktn -o /tmp/native-probe
 /tmp/native-probe elf /tmp/hello && /tmp/hello               # write and run the skeleton executable
 /tmp/native-probe elf-arith /tmp/arith && /tmp/arith         # write and run the arithmetic executable
 /tmp/native-probe elf-divzero /tmp/dv && /tmp/dv             # write and run the divide-failure executable
+/tmp/native-probe lower tests/native/pool.ktn                # render a real source's lowered scene
+/tmp/native-probe lower tests/native/arith.ktn /tmp/a        # write and run a real source's executable
 ```
 
 ## Verification
@@ -176,6 +220,13 @@ purr build selfhost/native.ktn -o /tmp/native-probe
   the divide-failure executable prints `purr: integer division by zero` to
   standard error with status 1; each matches the C pipeline's build of the
   mirrored source byte for byte.
-- Both pipelines produce byte-identical ELFs for all three scene kinds: the
-  Kitten-written `purr-kt` sidecar builds the probe and runs the whole
-  suite, and its ELFs equal the Go pipeline's.
+- The Phase 10.4 lowering corpus (`tests/native/*.ktn`) lowers and runs with
+  output, standard error, and status matching the C pipeline's `purr run` of
+  the same source, deterministically per source; the pooled-literal scene's
+  rendering is pinned byte for byte; and one message per unsupported
+  construct and per load/lex/parse/check failure is pinned.
+- Both pipelines produce byte-identical ELFs for all three scene kinds and
+  for every corpus program, and their `lower`-mode renderings and failure
+  messages agree byte for byte: the Kitten-written `purr-kt` sidecar builds
+  the probe and runs the whole suite, and its outputs equal the Go
+  pipeline's.

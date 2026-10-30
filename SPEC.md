@@ -3683,3 +3683,77 @@ kinds alike. What remains unimplemented here is unchanged from Section 30.2:
 no lowering from the checked program, no float operations, no field access,
 allocation, bounds checks, or tag switches, no stack-alignment refinement,
 and no register allocation.
+
+### 30.5 The lowering (Phase 10.4)
+
+`selfhost/native/lower.ktn` lowers a checked program into a `NativeScene`,
+closing the first half of the proposal's verification ladder step 2: real
+language source goes in, a static native executable comes out, with no C
+compiler, libc, or libgc anywhere.
+
+- **The input.** The lowering reads the Kitten-written checker's
+  `SemanticModel`: it never resolves a name, infers a type, or re-reads
+  source text. It consumes exactly one module — an import, or the
+  checker's injected prelude module, fails with its message — and walks that
+  module's declarations with the annotations the checker recorded on node
+  ids, including the resolved function a call callee carries.
+- **The subset.** Functions with `int`, `bool`, and `string` parameters and
+  `int`, `bool`, or `void` results; `int`, `bool`, and `string` literals and
+  locals; `+ - * / %` and unary `-`; `== <` with `!= > <= >=` lowered
+  through them; `! && ||`, with `&&` and `||` short-circuiting exactly as
+  the C pipelines' generated C does; `=` `+=` `-=` `++` `--`; `if`, `while`,
+  `for`, and `return`; calls to module functions; and the `print` built-in
+  with exactly one string argument plus `exit`. Anything else struct,
+  array, map, enum, and union values and declarations, float and byte
+  values, bitwise and shift operators, byte/string conversions, indexing,
+  field access, struct and variant literals, `new`, `match`, every other
+  built-in — fails the whole run with one deterministic message naming the
+  construct and its position, spelled `<path>:<line>:<column>: <message>`,
+  and no partially lowered scene is ever returned.
+- **Order.** Function shells register in declaration order; the print
+  helper registers after them when, and only when, some call resolved to
+  the `print` built-in (a user function named `print` shadows it, so such
+  programs never get the helper); bodies lower in declaration order. A
+  function's bindings are its parameters first, then locals and temporaries
+  in walk order; string literals pool by decoded bytes exactly as the C
+  generator pools its literals. The helper is named `"$print"`, which no
+  user name can collide with, and holds the runtime-shaped write routine
+  the 10.2 probe's hand-built scenes carried. `exit` lowers to the
+  backend's own raw `exit_group` syscall with the lowered status argument.
+- **The compiled shape.** The scene emits one `Instruction` per construct
+  it already carries — no new instruction forms were needed: the boolean
+  operators and the derived comparisons materialize through the branch
+  forms (`!`, `!=`, `<=`, and `>=` branch on their flipped condition and
+  store a constant on the decided side), `&&` and `||` evaluate the right
+  operand only when the first did not decide, assignments lower to the
+  value's binding plus one `Copy` (compound forms through a fold temporary),
+  and prefix/postfix `++`/`--` keep their value positions. Declarations
+  without an initializer create their binding and initialize it with
+  nothing, exactly like the C generator's plain declarations. The selector's
+  defensive epilogue covers function ends the statements do not return from.
+- **The limits.** The slice's frame still carries at most fourteen
+  parameters and fourteen locals, so a lowered function allocates every
+  temporary its expressions need into that one frame; larger programs fail
+  with the selector's message until a later slice reworks the frame layout.
+  Uninitialized-location reads stay as underspecified as the C pipeline's
+  are; the corpus never reads one, and the reference's same-name
+  self-shadowing-initializer quirk (the C generator's scoping collides on
+  such an initializer) keeps the corpus from lowering that construct.
+- **The acceptance rung.** `tests/native/*.ktn` — fifteen targeted
+  programs covering arithmetic, defined division and its fatal path,
+  comparisons and boolean operators with their short-circuit side effects,
+  both increment positions, literal bases and ranges, scoping, string
+  escapes and pooling, recursion, loops and empty loop clauses, for loops,
+  an `exit` status, and uninitialized declarations that are assigned before
+  use — all lower, and each executable's output, standard error, and status
+  match the C pipeline's `purr run` of the same source, each with an empty
+  `PATH`, every production byte-identical in repeat, and the two pipelines'
+  productions byte-identical. `tests/native/bad/*.ktn` pins one message per
+  unsupported construct and per load, lex, parse, and check failure, with
+  status 1 and empty standard error. The pool render — blob pooling, the
+  `"$print"` helper, and the binding order — is pinned byte for byte.
+
+What remains unimplemented from earlier sections is unchanged: no float
+operations, no field access, allocation, bounds checks, or tag switches, no
+bitwise and shift operators, no stack-alignment refinement, and no register
+allocation. The production sidecar still does not depend on this module.

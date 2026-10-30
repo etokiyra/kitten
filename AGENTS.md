@@ -482,10 +482,22 @@ immutable snapshot even when a builder reuses one array. The probe gained an
 arithmetic-and-control-flow scene pinned byte for byte and `elf-arith` and
 `elf-divzero` executables whose output, status, and standard error match the
 C pipeline's builds of mirrored sources; both pipelines produce
-byte-identical ELFs for all three scene kinds. Floats, field access,
-allocation, bounds checks, tag switches, stack-alignment refinement,
-register allocation, and a lowering from language source remain staged for
-later slices.
+byte-identical ELFs for all three scene kinds. Phase 10.4 then landed the
+lowering: `selfhost/native/lower.ktn` reduces a checked single-module
+program's semantic model into a `NativeScene` for the scalar,
+allocation-free subset — int/bool/string values, arithmetic, comparisons
+and boolean operators through branch patterns (with short-circuit `&&`/`||`),
+the assignment family, if/while/for statements, calls, `print` with one
+string argument, and `exit` — failing every unsupported construct with one
+deterministic positioned message and never returning a partial scene. The
+probe's `lower` mode runs real `.ktn` sources through the Kitten-written
+loader, checker, lowering, selector, and ELF writer; the corpus under
+`tests/native` (15 programs plus one-pinned-message-per-failure sources in
+`bad/`) matches the C pipeline's output, status, and stderr exactly, all
+pipelines produce byte-identical ELFs and agreeing renders and messages, and
+a pooled-literal render is pinned. Floats, field access, allocation, bounds
+checks, tag switches, stack-alignment refinement, register allocation, and
+the composite subset's lowering remain staged for later slices.
 
 ## Roadmap
 
@@ -547,8 +559,11 @@ later slices.
    the runtime off C as well. This is independence from C. **Authorized** (Phase
    10.0): the typed-IR/stack-first/direct-ELF design is approved and
    implementation proceeds in the proposal's staged order. Phase 10.1 landed
-   the typed-IR scene (no machine code yet); the skeleton slice — static ELF,
-   write/exit syscalls, string-literal printing, no GC — is next.
+   the typed-IR scene; Phase 10.2 the static-ELF skeleton; Phase 10.3 scalar
+   arithmetic and control flow in the selector; Phase 10.4 the lowering of
+   checked programs into scenes and corpus executable parity with the C
+   pipeline. GC and basic runtime (proposal step 3) is next; the full
+   instruction set and a standard library remain designed but unimplemented.
 5. Grow a broader standard library and an ecosystem for command-line tools first,
    then GUI, servers, and games. This is independence from other languages'
    ecosystems, and it includes the whole `purr` toolchain: one-command install of
