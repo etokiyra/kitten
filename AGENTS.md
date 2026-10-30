@@ -470,7 +470,22 @@ program headers and no interpreter or dynamic section, the output and status
 match the C pipeline's program, and both pipelines produce byte-identical
 ELFs. The full instruction set — no lowering from language source yet — and
 a standard library remain designed but unimplemented; relative work per the
-proposal order continues.
+proposal order continues. Phase 10.3 landed proposal step 2, scalar
+functions and control flow: the selector now encodes every instruction form
+— `add` through `whole_remainder`, `negate`, `equal`, `less_than`, `jump`,
+`branch`, `label` — with no allocation. Division follows SPEC's defined
+rules: a zero divisor jumps to a shared failure paragraph that writes the C
+runtime's exact `purr: integer division by zero` text and exits with status
+1, and a minus-one divisor takes the wrap path so `idiv` can never trap.
+`push_instruction` now snapshots call argument arrays, so the scene stays an
+immutable snapshot even when a builder reuses one array. The probe gained an
+arithmetic-and-control-flow scene pinned byte for byte and `elf-arith` and
+`elf-divzero` executables whose output, status, and standard error match the
+C pipeline's builds of mirrored sources; both pipelines produce
+byte-identical ELFs for all three scene kinds. Floats, field access,
+allocation, bounds checks, tag switches, stack-alignment refinement,
+register allocation, and a lowering from language source remain staged for
+later slices.
 
 ## Roadmap
 

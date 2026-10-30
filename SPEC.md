@@ -3635,3 +3635,51 @@ with the same source, and confirm repeated productions and both pipelines'
 productions are byte-identical. The scene stayed truthful about the gap: the
 probe builds the scene by hand, and no language source lowers into it yet,
 which is the next slices' work.
+
+### 30.4 Scalar arithmetic and control flow (Phase 10.3)
+
+The selector now encodes every instruction form the scene union carries, so
+an allocation-free scalar program lowers into one runnable static executable
+with no C compiler, libc, or libgc:
+
+- **Integer arithmetic.** `add`, `subtract`, and `multiply` fold two stack
+  slots through rax and store the full 64-bit result; `negate` negates
+  through rax. Reading happens strictly before the store, so a target that
+  aliases an operand is correct.
+- **Defined division.** `whole_divide` and `whole_remainder` guard the SPEC
+  19.x rules Phase 8.1 fixed: a zero divisor jumps to the program's shared
+  failure paragraph, which writes the C runtime's exact fatal text
+  `purr: integer division by zero` to standard error and terminates with
+  status 1 through `exit_group`; a minus-one divisor takes the wrap path —
+  `neg` for the quotient, which preserves `INT64_MIN / -1 = INT64_MIN`
+  exactly, and zero for the remainder — so `idiv` can never trap. The
+  paragraph and its private message blob exist only when some guard reach
+  emitted one.
+- **Comparisons.** `equal` and `less_than` compare through rax and
+  materialize the one-bit result through a setCC followed by a
+  zero-extension, storing a normalized 0/1 in all eight bytes. A `branch`
+  reads its condition as one byte (`cmp byte [rbp+d], 0`), so a bool slot's
+  unused upper bytes never steer control flow.
+- **Control flow.** `label` records its position as an absolute code-buffer
+  index; `jump` and `branch` record forward-jump fixups (rel32 after the
+  one-byte `e9` or two-byte `0f 85` opcode) patched after the emitting
+  function's labels are all defined.
+- **The snapshot rule.** `push_instruction` now copies the argument array of
+  every pushed `Call`, `CallVoid`, and `RawSyscall`, so the stored scene is
+  an immutable snapshot: a builder that reuses one argument array across
+  several calls keeps each instruction's own arguments, and no later write
+  can retroactively change an instruction already pushed.
+
+The acceptance rung for this slice is step 2's: a corpus of
+non-allocating programs compares output, status, and standard error with the
+C pipeline. The probe's arithmetic scene — a loop calling a helper through
+defined divide, remainder, and add, then two conditional prints — is pinned
+byte for byte in its rendering; its executable prints the same lines with
+the same status as the C pipeline's build of the mirrored source, and the
+divide-failure scene's executable matches the C pipeline's fatal text,
+stream, and status 1 exactly. Repeated productions and both pipelines'
+productions remain byte-identical for hello, arithmetic, and divide-failure
+kinds alike. What remains unimplemented here is unchanged from Section 30.2:
+no lowering from the checked program, no float operations, no field access,
+allocation, bounds checks, or tag switches, no stack-alignment refinement,
+and no register allocation.
