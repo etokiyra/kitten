@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,27 +33,37 @@ func buildGoPurr(t *testing.T) string {
 
 func buildPurrKTWithGo(t *testing.T) string {
 	t.Helper()
-	output := filepath.Join(t.TempDir(), "purr-kt-go")
-	var diagnostics bytes.Buffer
-	if err := buildExecutable(repoPath(t, "..", "..", "purr.ktn"), output, &diagnostics); err != nil {
-		t.Fatalf("building purr-kt with Go pipeline: %v\n%s", err, diagnostics.String())
-	}
-	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
-		t.Fatalf("C diagnostics while building purr-kt with Go pipeline:\n%s", warnings)
-	}
-	return output
+	return cachedBuild(t, "purr-kt-go", cachedBuildHash(t, "purr-kt-go", []string{
+		repoPath(t, "..", "..", "purr"),
+		repoPath(t, "..", "..", "selfhost"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}), func(output string) error {
+		var diagnostics bytes.Buffer
+		if err := buildExecutable(repoPath(t, "..", "..", "purr.ktn"), output, &diagnostics); err != nil {
+			return err
+		}
+		if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+			return fmt.Errorf("C diagnostics while building purr-kt with Go pipeline:\n%s", warnings)
+		}
+		return nil
+	})
 }
 
 func buildPurrKTWithKitten(t *testing.T, stage1 string) string {
 	t.Helper()
-	output := filepath.Join(t.TempDir(), "purr-kt-kitten")
-	result := runExternal(t, wrapperPath(t), []string{
-		"build", repoPath(t, "..", "..", "purr.ktn"), "-o", output,
-	}, repoPath(t, "..", ".."), wrapperEnvironment(stage1, t))
-	if result.status != 0 || result.stderr != "" {
-		t.Fatalf("building purr-kt with Kitten pipeline: status %d, stderr %q", result.status, result.stderr)
-	}
-	return output
+	key := cachedBuildHash(t, "purr-kt-kitten", []string{
+		repoPath(t, "..", "..", "purr"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}) + "-" + fileHash(t, stage1)
+	return cachedBuild(t, "purr-kt-kitten", key, func(output string) error {
+		result := runExternal(t, wrapperPath(t), []string{
+			"build", repoPath(t, "..", "..", "purr.ktn"), "-o", output,
+		}, repoPath(t, "..", ".."), wrapperEnvironment(stage1, t))
+		if result.status != 0 || result.stderr != "" {
+			return fmt.Errorf("status %d, stderr %q", result.status, result.stderr)
+		}
+		return nil
+	})
 }
 
 func runPurrKT(t *testing.T, executable, directory string, arguments []string) programResult {

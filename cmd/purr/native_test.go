@@ -9,6 +9,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,15 +20,19 @@ import (
 func buildNativeProbe(t *testing.T) string {
 	t.Helper()
 	requireToolchain(t)
-	executable := filepath.Join(t.TempDir(), "native-probe")
-	var diagnostics bytes.Buffer
-	if err := buildExecutable(repoPath(t, "..", "..", "selfhost", "native.ktn"), executable, &diagnostics); err != nil {
-		t.Fatalf("building the native probe: %v\n%s", err, diagnostics.String())
-	}
-	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
-		t.Fatalf("C diagnostics while building the native probe:\n%s", warnings)
-	}
-	return executable
+	return cachedBuild(t, "native-probe", cachedBuildHash(t, "native-probe", []string{
+		repoPath(t, "..", "..", "selfhost"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}), func(executable string) error {
+		var diagnostics bytes.Buffer
+		if err := buildExecutable(repoPath(t, "..", "..", "selfhost", "native.ktn"), executable, &diagnostics); err != nil {
+			return err
+		}
+		if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+			return fmt.Errorf("C diagnostics while building the native probe:\n%s", warnings)
+		}
+		return nil
+	})
 }
 
 // The exact rendering of the skeleton target: two data blobs, a runtime

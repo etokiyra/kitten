@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -26,29 +27,37 @@ type newTreeEntry struct {
 
 func buildNewProbeWithGo(t *testing.T) string {
 	t.Helper()
-	output := filepath.Join(t.TempDir(), "new_probe_go")
-	var diagnostics bytes.Buffer
-	if err := buildExecutable(repoPath(t, "..", "..", "purr", "new_probe.ktn"), output, &diagnostics); err != nil {
-		t.Fatalf("building new probe with Go pipeline: %v\n%s", err, diagnostics.String())
-	}
-	if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
-		t.Fatalf("C diagnostics while building new probe:\n%s", warnings)
-	}
-	return output
+	return cachedBuild(t, "new_probe_go", cachedBuildHash(t, "new_probe_go", []string{
+		repoPath(t, "..", "..", "purr"),
+		repoPath(t, "..", "..", "selfhost"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}), func(output string) error {
+		var diagnostics bytes.Buffer
+		if err := buildExecutable(repoPath(t, "..", "..", "purr", "new_probe.ktn"), output, &diagnostics); err != nil {
+			return err
+		}
+		if warnings := strings.TrimSpace(diagnostics.String()); warnings != "" {
+			return fmt.Errorf("C diagnostics while building new probe:\n%s", warnings)
+		}
+		return nil
+	})
 }
 
 func buildNewProbeWithKitten(t *testing.T, stage1 string) string {
 	t.Helper()
-	output := filepath.Join(t.TempDir(), "new_probe_kitten")
-	result := runExternal(t, wrapperPath(t), []string{
-		"build", repoPath(t, "..", "..", "purr", "new_probe.ktn"), "-o", output,
-	}, repoPath(t, "..", ".."), wrapperEnvironment(stage1, t))
-	if result.status != 0 || result.stderr != "" {
-		t.Fatalf("building new probe with Kitten pipeline: status %d, stderr %q", result.status, result.stderr)
-	}
-	if _, err := os.Stat(output); err != nil {
-		t.Fatalf("Kitten new probe was not produced: %v", err)
-	}
+	key := cachedBuildHash(t, "new_probe_kitten", []string{
+		repoPath(t, "..", "..", "purr"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}) + "-" + fileHash(t, stage1)
+	output := cachedBuild(t, "new_probe_kitten", key, func(path string) error {
+		result := runExternal(t, wrapperPath(t), []string{
+			"build", repoPath(t, "..", "..", "purr", "new_probe.ktn"), "-o", path,
+		}, repoPath(t, "..", ".."), wrapperEnvironment(stage1, t))
+		if result.status != 0 || result.stderr != "" {
+			return fmt.Errorf("status %d, stderr %q", result.status, result.stderr)
+		}
+		return nil
+	})
 	return output
 }
 

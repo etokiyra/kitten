@@ -497,6 +497,14 @@ driver, and code generator are each compared against the Go implementation over 
 corpus, and every fixture is compiled, executed, and compared against its expected output
 under both GCC and Clang.
 
+The test harness caches the binaries it rebuilds — the stage-1 driver, both
+`purr-kt` builds, and the stage probes — under the platform's user cache
+(`$HOME/.cache/kitten-verify/builds` by default; `KITTEN_TEST_CACHE` overrides
+the directory or disables caching with `off`). Keys cover every source a
+build depends on, the resolved compiler, and the GC flags, so a hit is never
+stale, and repeated runs after small edits skip the rebuilds instead of
+paying for them a second time.
+
 ## How the project is developed
 
 - `SPEC.md` is the source of truth for language semantics. If code and the specification

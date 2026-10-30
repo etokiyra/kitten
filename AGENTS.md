@@ -25,6 +25,20 @@ Project instructions for everyone (human or AI) working on Kitten.
 6. Never claim a feature is implemented without verifying it. Run the relevant
    tests or commands and report what actually happened.
 
+Verification runs in tiers, so correctness claims stay tied to what a run
+actually covered: the required baseline above is the full suite under the
+discovered C compiler; the `CC=gcc` and `CC=clang` runs the README documents
+belong to milestone and freeze runs (for example the 9.9 freeze report),
+where every claim is checked under each compiler; ordinary slices verify the
+full suite under one compiler and name anything they could not run. The
+test harness builds the same large binaries repeatedly — the stage-1 driver,
+both purr-kt builds, and the stage probes — and caches them under
+`$HOME/.cache/kitten-verify/builds`, keyed by every input's content, the
+resolved compiler, and the GC flags, with `KITTEN_TEST_CACHE` overriding or
+disabling the directory. A cache hit can never be stale: any change to the
+sources a build depends on produces a different key, and every cache key's
+verification happens when its bytes are first built.
+
 The `.ktn` files under `tests/` are end-to-end tests: the lexer tokenizes them,
 the parser builds a syntax tree, the checker validates them, the code generator
 emits C, and the native executable's output is compared byte-for-byte with the

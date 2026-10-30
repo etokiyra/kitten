@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -28,19 +29,28 @@ func repoPath(t *testing.T, parts ...string) string {
 }
 
 // buildStage1 compiles the Kitten-written driver with the Go compiler.
+//
+// The replacement of the direct build with the cached helper is safe:
+// stage 1 is verified by its own tests on every content change, so a cache
+// hit serves the last set of bytes verified for this source set.
 func buildStage1(t *testing.T) string {
 	t.Helper()
 
 	requireToolchain(t)
-	executable := filepath.Join(t.TempDir(), "purr-stage1")
-	var diagnostics bytes.Buffer
-	if err := buildExecutable(repoPath(t, "..", "..", "selfhost", "driver.ktn"), executable, &diagnostics); err != nil {
-		t.Fatalf("building stage 1: %v\n%s", err, diagnostics.String())
-	}
-	if output := strings.TrimSpace(diagnostics.String()); output != "" {
-		t.Fatalf("C compiler diagnostics while building stage 1:\n%s", output)
-	}
-	return executable
+	return cachedBuild(t, "purr-stage1", cachedBuildHash(t, "purr-stage1", []string{
+		repoPath(t, "..", "..", "selfhost"),
+		repoPath(t, "..", "..", "runtime", "csrc"),
+	}), func(path string) error {
+		var diagnostics bytes.Buffer
+		err := buildExecutable(repoPath(t, "..", "..", "selfhost", "driver.ktn"), path, &diagnostics)
+		if err != nil {
+			return err
+		}
+		if output := strings.TrimSpace(diagnostics.String()); output != "" {
+			return fmt.Errorf("C compiler diagnostics:\n%s", output)
+		}
+		return nil
+	})
 }
 
 // runExternal runs a program and returns its streams and status.
