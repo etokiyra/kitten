@@ -116,6 +116,12 @@ fn render_instruction(NativeFunction function, int index) -> string {
         CallVoid(callee, arguments, argument_count) {
             return "  call @" + decimal(callee) + render_arguments(arguments, argument_count);
         }
+        RawLoad64(target, address, offset) {
+            return "  " + binding(target) + ": " + type_name(function.binding_types[target]) + " = raw_load64 " + binding(address) + " " + decimal(offset);
+        }
+        RawSyscall(target, number, arguments, argument_count) {
+            return "  " + binding(target) + ": int = raw_syscall syscall " + binding(number) + render_arguments(arguments, argument_count);
+        }
         Jump(label) {
             return "  jump " + label_name(label);
         }

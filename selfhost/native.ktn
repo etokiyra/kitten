@@ -3,10 +3,15 @@
 // It builds the Phase 10.1 scene corpus with the Kitten-written typed-IR
 // module, runs check_scene over it, and prints the deterministic text
 // rendering. With one argument, it builds one of the failure scenes instead
-// and prints check_scene's message, so the tests can pin the validation texts.
+// and prints check_scene's message, so the tests can pin the validation
+// texts. With `elf <path>`, it lowers and assembles the skeleton target's
+// scene into a static ELF64 executable and writes that file directly, with
+// no C compiler anywhere.
 //
-//     native                print the valid scene's rendering
-//     native <mode>         print one failure scene's check message
+//     native                  print the valid scene's rendering
+//     native <mode>           print one failure scene's check message
+//     native elf <path>       write the skeleton target's executable
+//     native big              render the growth corpus
 //
 // Modes: no-label, bad-binding, bad-call-count, bad-call-shape, bad-entry,
 // undefined-label. This is test infrastructure: the rendering and error
@@ -15,6 +20,8 @@
 import "loader/loader.ktn";
 import "native/ir.ktn";
 import "native/text.ktn";
+import "native/selector.ktn";
+import "native/elf.ktn";
 
 // one_ref_parameter is a parameter-shape list holding exactly one reference.
 fn one_ref_parameter() -> NativeType[] {
@@ -23,19 +30,58 @@ fn one_ref_parameter() -> NativeType[] {
     return shapes;
 }
 
-// build_print_hello is the skeleton target's scene: one static blob, a void
-// runtime function taking one reference, and an entry calling it.
-fn build_print_hello() -> NativeScene {
+// build_hello is the skeleton target's scene per the 10.2 slice: static
+// blobs for a string literal and the newline, a runtime-shaped print that
+// reads the string object's length and pointer and performs two write
+// syscalls, and an entry that binds the literal and calls print.
+fn build_hello() -> NativeScene {
     NativeScene scene = new_scene();
-    int blob = add_blob(scene, "hello");
+    int hello = add_blob(scene, "hello");
+    int newline = add_blob(scene, "\n");
 
     int print = add_function(scene, "print", NativeType.Void, one_ref_parameter(), 1);
+    NativeFunction print_function = function_at(scene, print);
+
+    int length_binding = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawLoad64 { target = length_binding, address = 0, offset = 0 });
+    int data_binding = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = data_binding, address = 0, offset = 8 });
+
+    int one = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = one, value = 1 });
+    int write = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = write, value = 1 });
+    int[] write_arguments = new int[3];
+    write_arguments[0] = one;
+    write_arguments[1] = data_binding;
+    write_arguments[2] = length_binding;
+    int first = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = first, number = write, arguments = write_arguments, argument_count = 3 });
+
+    int newline_ref = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.ConstRefData { target = newline_ref, blob = newline });
+    // The payload pointer sits behind the object header, exactly as for
+    // print's own string; load it before the write.
+    int newline_data = new_temporary(print_function, NativeType.Ref);
+    push_instruction(print_function, Instruction.RawLoad64 { target = newline_data, address = newline_ref, offset = 8 });
+    int one_again = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = one_again, value = 1 });
+    int count_one = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.ConstInt { target = count_one, value = 1 });
+    int[] newline_arguments = new int[3];
+    newline_arguments[0] = one_again;
+    newline_arguments[1] = newline_data;
+    newline_arguments[2] = count_one;
+    int second = new_temporary(print_function, NativeType.Int);
+    push_instruction(print_function, Instruction.RawSyscall { target = second, number = write, arguments = newline_arguments, argument_count = 3 });
+
+    push_instruction(print_function, Instruction.ReturnVoid);
 
     int main = add_function(scene, "main", NativeType.Void, new NativeType[0], 0);
     NativeFunction main_function = function_at(scene, main);
 
     int text = new_temporary(main_function, NativeType.Ref);
-    push_instruction(main_function, Instruction.ConstRefData { target = text, blob = blob });
+    push_instruction(main_function, Instruction.ConstRefData { target = text, blob = hello });
     int[] arguments = new int[1];
     arguments[0] = text;
     push_instruction(main_function, Instruction.CallVoid { function = print, arguments = arguments, argument_count = 1 });
@@ -43,6 +89,51 @@ fn build_print_hello() -> NativeScene {
 
     scene.entry = main;
     return scene;
+}
+
+// build_big is the growth probe: more functions, bindings, and blobs than
+// each table's first allocation, so every doubling path in the scene builder
+// runs.
+fn build_big() -> NativeScene {
+    NativeScene scene = new_scene();
+    int blob = 0;
+    while (blob < 9) {
+        add_blob(scene, substring("ab", blob % 2, blob % 2 + 1));
+        blob++;
+    }
+
+    int count = 12;
+    int index = 0;
+    while (index < count) {
+        int function = add_function(scene, "f" + decimal(index), NativeType.Int, new NativeType[0], 0);
+        NativeFunction handle = function_at(scene, function);
+        // Seventeen temporaries exceed the first binding allocation, so the
+        // binding table doubles inside every function.
+        int temporary = 0;
+        while (temporary < 17) {
+            int binding = new_temporary(handle, NativeType.Int);
+            push_instruction(handle, Instruction.ConstInt { target = binding, value = index * 17 + temporary });
+            temporary++;
+        }
+        push_instruction(handle, Instruction.Return { value = 16 });
+        index++;
+    }
+    scene.entry = 0;
+    return scene;
+}
+
+// decimal renders a non-negative integer in decimal.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
 }
 
 // failure_scene returns the broken scene a mode names. The check machinery
@@ -119,60 +210,68 @@ fn failure_scene(string mode) -> NativeScene {
     return empty;
 }
 
-// build_big is the growth probe: more functions, bindings, and blobs than each
-// table's first allocation, with a cyclic call, so every doubling path in the
-// scene builder runs.
-fn build_big() -> NativeScene {
-    NativeScene scene = new_scene();
-    int blob = 0;
-    while (blob < 9) {
-        add_blob(scene, substring("ab", blob % 2, blob % 2 + 1));
-        blob++;
-    }
+// run_elf lowers the skeleton target, assembles its ELF, and writes the
+// file with no C compiler involved anywhere.
+fn run_elf(string path) {
+    NativeScene scene = build_hello();
 
-    int count = 12;
-    int index = 0;
-    while (index < count) {
-        int function = add_function(scene, "f" + decimal(index), NativeType.Int, new NativeType[0], 0);
-        NativeFunction handle = function_at(scene, function);
-        // Seventeen temporaries exceed the first binding allocation, so the
-        // binding table doubles inside every function.
-        int temporary = 0;
-        while (temporary < 17) {
-            int binding = new_temporary(handle, NativeType.Int);
-            push_instruction(handle, Instruction.ConstInt { target = binding, value = index * 17 + temporary });
-            temporary++;
+    match (check_scene(scene)) {
+        Failed(message) {
+            eprint("native: " + message);
+            exit(1);
         }
-        push_instruction(handle, Instruction.Return { value = 16 });
-        index++;
+        Ok {
+            match (select_scene(scene)) {
+                Failed(message) {
+                    eprint("native: " + message);
+                    exit(1);
+                }
+                Ok(selection) {
+                    match (assemble(selection)) {
+                        Failed(message) {
+                            eprint("native: " + message);
+                            exit(1);
+                        }
+                        Ok(bytes) {
+                            // The file bytes are raw binary and may hold NUL
+                            // bytes anywhere, so they go through the raw
+                            // byte writer, not the text writer.
+                            match (try_write_bytes(path, to_array(bytes))) {
+                                Failed(message) {
+                                    eprint("native: " + message);
+                                    exit(1);
+                                }
+                                Ok {
+                                    print("built " + path);
+                                    exit(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    scene.entry = 0;
-    return scene;
-}
-
-// decimal renders a non-negative integer in decimal.
-fn decimal(int value) -> string {
-    if (value == 0) {
-        return "0";
-    }
-    string result = "";
-    while (value > 0) {
-        int digit = value % 10;
-        result = substring("0123456789", digit, digit + 1) + result;
-        value = value / 10;
-    }
-    return result;
 }
 
 fn main() {
     string[] arguments = argv();
-    if (length(arguments) > 2) {
-        eprint("native: expected zero or one argument");
+    if (length(arguments) > 3) {
+        eprint("native: expected at most two arguments");
         exit(2);
     }
-    bool failure_mode = false;
 
-    NativeScene scene = build_print_hello();
+    if (length(arguments) == 3) {
+        if (arguments[1] == "elf") {
+            run_elf(arguments[2]);
+        } else {
+            eprint("native: unknown mode " + arguments[1]);
+            exit(2);
+        }
+    }
+
+    bool failure_mode = false;
+    NativeScene scene = build_hello();
     if (length(arguments) == 2) {
         if (arguments[1] == "big") {
             scene = build_big();

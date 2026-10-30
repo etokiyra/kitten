@@ -76,6 +76,14 @@ public fn type_alignment(NativeType value) -> int {
 // address, which is how a lowered string literal reaches the data section.
 // Forward calls are legal because check_scene runs once, after every function
 // exists.
+//
+// The two raw instructions carry the compiler's own runtime layer:
+// RawLoad64 reads one 8-byte slot at a reference-or-int address plus a small
+// constant offset, and RawSyscall makes one raw Linux syscall. Neither belongs
+// in user code. The scene is produced by the backend itself, so the scene does
+// not police who may use them; the checker-level runtime-module gate remains
+// the user-facing boundary, and no selector lowers a user program through
+// raw instructions.
 public union Instruction {
     ConstInt { int target; int value; }
     ConstBool { int target; bool value; }
@@ -91,6 +99,8 @@ public union Instruction {
     LessThan { int target; int left; int right; }
     Call { int target; int function; int[] arguments; int argument_count; }
     CallVoid { int function; int[] arguments; int argument_count; }
+    RawLoad64 { int target; int address; int offset; }
+    RawSyscall { int target; int number; int[] arguments; int argument_count; }
     Jump { int label; }
     Branch { int condition; int label_true; int label_false; }
     Label { int label; }
@@ -254,6 +264,8 @@ fn append_instruction(NativeFunction function, Instruction instruction) {
         LessThan(n, l, r) {}
         Call(n, c, a, count) {}
         CallVoid(c, a, count) {}
+        RawLoad64(n, a, o) {}
+        RawSyscall(n, m, a, count) {}
         Jump(l) {}
         Branch(c, t, f) {}
         Return(v) {}
@@ -493,6 +505,51 @@ fn check_instruction(NativeScene scene, NativeFunction function, int instruction
         CallVoid(callee, arguments, argument_count) {
             failure = check_call(scene, function, callee, arguments, argument_count, position, false);
         }
+        RawLoad64(target, address, offset) {
+            failure = require_binding(function, address, NativeType.Void, position + "address");
+            if (length(failure) == 0) {
+                NativeType address_shape = function.binding_types[address];
+                if (type_size(address_shape) == 0) {
+                    failure = position + "address binding " + decimal(address) + " has no shape";
+                }
+            }
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Void, position + "target");
+                if (length(failure) == 0) {
+                    NativeType target_shape = function.binding_types[target];
+                    if (type_size(target_shape) == 0) {
+                        failure = position + "target binding " + decimal(target) + " has no shape";
+                    } else if (type_name(target_shape) == type_name(NativeType.Bool) || type_name(target_shape) == type_name(NativeType.Void)) {
+                        failure = position + "target binding " + decimal(target) + " carries " + type_name(target_shape) + ", which cannot hold a raw 8-byte slot";
+                    }
+                }
+            }
+            if (length(failure) == 0 && (offset < 0 || offset > 255)) {
+                failure = position + "offset " + decimal(offset) + " is outside the selector's constant-offset range 0..255";
+            }
+        }
+        RawSyscall(target, number, arguments, argument_count) {
+            failure = require_binding(function, number, NativeType.Int, position + "number");
+            if (length(failure) == 0) {
+                failure = require_binding(function, target, NativeType.Int, position + "target");
+            }
+            if (length(failure) == 0 && argument_count > 6) {
+                failure = position + "a syscall passes at most six arguments, got " + decimal(argument_count);
+            }
+            if (length(failure) == 0) {
+                int index = 0;
+                while (index < argument_count && length(failure) == 0) {
+                    failure = require_binding(function, arguments[index], NativeType.Void, position + "argument " + decimal(index));
+                    if (length(failure) == 0) {
+                        NativeType shape = function.binding_types[arguments[index]];
+                        if (type_size(shape) != 8) {
+                            failure = position + "argument " + decimal(index) + " binding " + decimal(arguments[index]) + " carries " + type_name(shape) + ", which is not an 8-byte register value";
+                        }
+                    }
+                    index++;
+                }
+            }
+        }
         Jump(label) {
             failure = require_label(function, label, position);
         }
@@ -602,6 +659,8 @@ fn label_defined(NativeFunction function, int label) -> bool {
             LessThan(n, l, r) {}
             Call(n, c, a, count) {}
             CallVoid(c, a, count) {}
+            RawLoad64(n, a, o) {}
+            RawSyscall(n, m, a, count) {}
             Jump(l) {}
             Branch(c, t, f) {}
             Return(v) {}

@@ -1,0 +1,752 @@
+// selector.ktn - lower the slice's scene subset to x86-64 machine code.
+//
+// Phase 10.2's skeleton slice, from
+// proposals/zero-dependency-toolchain.md Section 9 step 1: static ELF, the
+// write and exit syscalls, and string-literal printing, with no GC and no C.
+// The selector walks a scene that passed check_scene and emits machine code
+// plus a data section into raw byte arrays, recording every address that is
+// not known until layout: call targets patch as relative displacements, data
+// references patch as RIP-relative displacements, and data-section pointer
+// slots patch as absolute 64-bit values. Byte arrays are mutable, so patches
+// write their four or eight displacement bytes in place and every earlier
+// fixup keeps its position.
+//
+// The emitted calling convention is the proposal's first internal one
+// (Section 5.2): every argument is one caller-allocated 8-byte stack slot,
+// pushed in reverse declaration order; the callee reads parameter k at
+// rbp+16+8k; results return in rax; the caller pops the argument slots.
+// Locals live at rbp-8 and downwards inside the frame, carving sub rsp out
+// of the prologue, so the slice's one-byte displacement form bounds both
+// tables; the selector fails with a deterministic message when a frame
+// would not fit. Any instruction the slice cannot encode yet also fails
+// with a deterministic message; the full instruction set, stack-alignment
+// refinement, and register allocation are later slices.
+
+import "ir.ktn";
+
+// Segment geometry, decided once and fixed for the slice: the text segment
+// holds the ELF header, both program headers, and the code, so code begins
+// at file offset header_size(); the data segment is page aligned at its own
+// base.
+public fn text_base() -> int {
+    return 0x400000;
+}
+
+public fn data_base() -> int {
+    return 0xf00000;
+}
+
+public fn header_size() -> int {
+    return 176;
+}
+
+public fn page_size() -> int {
+    return 0x1000;
+}
+
+// Bytes is a mutable growable raw byte buffer. Positions are simply indices:
+// a patch writes in place, so no recorded position ever moves.
+public struct Bytes {
+    byte[] data;
+    int count;
+    int capacity;
+}
+
+public fn new_bytes() -> Bytes {
+    return Bytes {
+        data = new byte[256],
+        count = 0,
+        capacity = 256
+    };
+}
+
+fn bytes_grow(Bytes list) {
+    int capacity = list.capacity * 2;
+    byte[] grown = new byte[capacity];
+    int index = 0;
+    while (index < list.count) {
+        grown[index] = list.data[index];
+        index++;
+    }
+    list.data = grown;
+    list.capacity = capacity;
+}
+
+// push_byte appends one byte, masking to its 8-bit pattern.
+public fn push_byte(Bytes list, int value) {
+    if (list.count == list.capacity) {
+        bytes_grow(list);
+    }
+    list.data[list.count] = byte_from_int(value & 255);
+    list.count++;
+}
+
+// push_hex appends the bytes a readable space-separated hex list spells, so
+// every encoder shows its encoding at its site.
+public fn push_hex(Bytes list, string spelling) {
+    int index = 0;
+    int size = length(spelling);
+    int high = -1;
+    while (index < size) {
+        int character = spelling[index];
+        int nibble = -1;
+        if (character >= 48 && character <= 57) {
+            nibble = character - 48;
+        } else if (character >= 97 && character <= 102) {
+            nibble = character - 87;
+        } else if (character >= 65 && character <= 70) {
+            nibble = character - 55;
+        }
+        if (nibble < 0) {
+            // Separators flush a pending high nibble.
+            if (high >= 0) {
+                push_byte(list, high);
+                high = -1;
+            }
+        } else if (high < 0) {
+            high = nibble;
+        } else {
+            push_byte(list, high * 16 + nibble);
+            high = -1;
+        }
+        index++;
+    }
+    if (high >= 0) {
+        push_byte(list, high);
+    }
+}
+
+// push_int appends value as count little-endian bytes, reading bit patterns:
+// the mask takes the low byte and the arithmetic shift walks the rest, so
+// negative values produce their two's-complement byte pattern.
+public fn push_int(Bytes list, int value, int count) {
+    int index = 0;
+    while (index < count) {
+        push_byte(list, value & 255);
+        value = value >> 8;
+        index++;
+    }
+}
+
+// push_zeros appends count zero bytes.
+public fn push_zeros(Bytes list, int count) {
+    int index = 0;
+    while (index < count) {
+        push_byte(list, 0);
+        index++;
+    }
+}
+
+// push_string appends a string's raw bytes, NUL bytes included; scene data
+// and payload bytes flow through the length-carrying string unchanged.
+public fn push_string(Bytes list, string value) {
+    byte[] raw = string_to_bytes(value);
+    int index = 0;
+    int size = length(raw);
+    while (index < size) {
+        push_byte(list, int_from_byte(raw[index]));
+        index++;
+    }
+}
+
+// to_array copies the list's live bytes into an exactly sized array, ready
+// for the byte writer.
+public fn to_array(Bytes list) -> byte[] {
+    byte[] exact = new byte[list.count];
+    int index = 0;
+    while (index < list.count) {
+        exact[index] = list.data[index];
+        index++;
+    }
+    return exact;
+}
+
+// decimal renders a non-negative integer in decimal for messages.
+fn decimal(int value) -> string {
+    if (value == 0) {
+        return "0";
+    }
+    string result = "";
+    while (value > 0) {
+        int digit = value % 10;
+        result = substring("0123456789", digit, digit + 1) + result;
+        value = value / 10;
+    }
+    return result;
+}
+
+// CallFixup is one e8 displacement slot to patch once function addresses
+// are known.
+struct CallFixup {
+    int position;
+    int callee;
+}
+
+// DisplacementFixup is one RIP-relative data reference to patch.
+struct DisplacementFixup {
+    int position;
+    int blob;
+}
+
+// PointerFixup is one absolute 64-bit data slot to patch with a payload
+// address.
+struct PointerFixup {
+    int position;
+    int blob;
+}
+
+// Lowering accumulates one select_scene run.
+struct Lowering {
+    Bytes code;
+    Bytes data;
+    int[] function_offsets;
+    CallFixup[] call_fixups;
+    int call_count;
+    int call_capacity;
+    DisplacementFixup[] displacement_fixups;
+    int displacement_count;
+    int displacement_capacity;
+    PointerFixup[] pointer_fixups;
+    int pointer_count;
+    int pointer_capacity;
+    int[] blob_offsets;
+}
+
+// Function offsets are indexed by scene function index; the table is exactly
+// sized to the scene's function count.
+fn new_lowering(NativeScene scene) -> Lowering {
+    return Lowering {
+        code = new_bytes(),
+        data = new_bytes(),
+        function_offsets = new int[scene.function_count],
+        call_fixups = new CallFixup[16],
+        call_count = 0,
+        call_capacity = 16,
+        displacement_fixups = new DisplacementFixup[16],
+        displacement_count = 0,
+        displacement_capacity = 16,
+        pointer_fixups = new PointerFixup[16],
+        pointer_count = 0,
+        pointer_capacity = 16,
+        blob_offsets = new int[scene.blob_count]
+    };
+}
+
+fn grow_calls(Lowering lowering) {
+    int capacity = lowering.call_capacity * 2;
+    CallFixup[] grown = new CallFixup[capacity];
+    int index = 0;
+    while (index < lowering.call_count) {
+        grown[index] = lowering.call_fixups[index];
+        index++;
+    }
+    lowering.call_fixups = grown;
+    lowering.call_capacity = capacity;
+}
+
+fn grow_displacements(Lowering lowering) {
+    int capacity = lowering.displacement_capacity * 2;
+    DisplacementFixup[] grown = new DisplacementFixup[capacity];
+    int index = 0;
+    while (index < lowering.displacement_count) {
+        grown[index] = lowering.displacement_fixups[index];
+        index++;
+    }
+    lowering.displacement_fixups = grown;
+    lowering.displacement_capacity = capacity;
+}
+
+fn grow_pointers(Lowering lowering) {
+    int capacity = lowering.pointer_capacity * 2;
+    PointerFixup[] grown = new PointerFixup[capacity];
+    int index = 0;
+    while (index < lowering.pointer_count) {
+        grown[index] = lowering.pointer_fixups[index];
+        index++;
+    }
+    lowering.pointer_fixups = grown;
+    lowering.pointer_capacity = capacity;
+}
+
+// add_function_offset records one function's code offset.
+fn add_function_offset(Lowering lowering, int index, int offset) {
+    lowering.function_offsets[index] = offset;
+}
+
+// add_call records an e8 slot: the callee's scene index and the position of
+// its four displacement bytes, one byte after the opcode.
+fn add_call(Lowering lowering, int callee) {
+    if (lowering.call_count == lowering.call_capacity) {
+        grow_calls(lowering);
+    }
+    lowering.call_fixups[lowering.call_count] = CallFixup {
+        position = lowering.code.count + 1,
+        callee = callee
+    };
+    lowering.call_count++;
+}
+
+// add_displacement records one RIP-relative slot: the blob's index and the
+// position of its four displacement bytes, three bytes into the lea.
+fn add_displacement(Lowering lowering, int blob) {
+    if (lowering.displacement_count == lowering.displacement_capacity) {
+        grow_displacements(lowering);
+    }
+    lowering.displacement_fixups[lowering.displacement_count] = DisplacementFixup {
+        position = lowering.code.count + 3,
+        blob = blob
+    };
+    lowering.displacement_count++;
+}
+
+// add_pointer records one absolute 64-bit data slot; the caller appends the
+// zero-filled slot immediately after the call.
+fn add_pointer(Lowering lowering, int blob) {
+    if (lowering.pointer_count == lowering.pointer_capacity) {
+        grow_pointers(lowering);
+    }
+    lowering.pointer_fixups[lowering.pointer_count] = PointerFixup {
+        position = lowering.data.count,
+        blob = blob
+    };
+    lowering.pointer_count++;
+}
+
+// frame_fits checks that a function's frame fits the slice's one-byte slot
+// displacements: at most fourteen parameters and fourteen locals.
+fn frame_fits(NativeFunction function) -> string {
+    if (function.parameter_count > 14) {
+        return "function @" + function.name + ": " + decimal(function.parameter_count) + " parameters do not fit the slice's frame layout";
+    }
+    int locals = function.binding_count - function.parameter_count;
+    if (locals > 14) {
+        return "function @" + function.name + ": " + decimal(locals) + " locals do not fit the slice's frame layout";
+    }
+    return "";
+}
+
+// slot_disp returns a binding's rbp-relative displacement. Parameters sit in
+// the caller's argument area at rbp+16 and up; locals sit below the frame,
+// inside the 8n bytes the prologue carved with sub rsp. frame_fits gates the
+// bound.
+fn slot_disp(NativeFunction function, int binding) -> int {
+    if (binding < function.parameter_count) {
+        return 16 + 8 * binding;
+    }
+    return -8 * (binding - function.parameter_count + 1);
+}
+
+// mov_rax_slot loads a slot into rax: mov rax, [rbp+disp].
+fn mov_rax_slot(Bytes list, int displacement) {
+    push_hex(list, "48 8b 45");
+    push_int(list, displacement, 1);
+}
+
+// mov_slot_rax stores rax into a slot: mov [rbp+disp], rax.
+fn mov_slot_rax(Bytes list, int displacement) {
+    push_hex(list, "48 89 45");
+    push_int(list, displacement, 1);
+}
+
+// mov_byte_slot stores an immediate byte into a slot:
+// mov byte [rbp+disp], value.
+fn mov_byte_slot(Bytes list, int displacement, int value) {
+    push_hex(list, "c6 45");
+    push_int(list, displacement, 1);
+    push_int(list, value, 1);
+}
+
+// lea_rax_data emits lea rax, [rip+disp] with a zero-filled slot to patch.
+fn lea_rax_data(Lowering lowering, int blob) {
+    add_displacement(lowering, blob);
+    push_hex(lowering.code, "48 8d 05 00 00 00 00");
+}
+
+// call_rel32 emits call [disp] with a zero-filled slot to patch.
+fn call_rel32(Lowering lowering, int callee) {
+    add_call(lowering, callee);
+    push_hex(lowering.code, "e8 00 00 00 00");
+}
+
+// Selection is the selector's output: the patched code, the patched data,
+// and the entry function's index, from which the ELF writer fixes the entry
+// point.
+public struct Selection {
+    Bytes code;
+    Bytes data;
+    int entry_function;
+}
+
+public union SelectionResult {
+    Ok { Selection selection; }
+    Failed { string message; }
+}
+
+// selector_fail packs one message into the Failed result.
+fn selector_fail(string message) -> SelectionResult {
+    return SelectionResult.Failed { message = message };
+}
+
+// frame_epilogue restores the frame and returns: add rsp back, pop rbp, ret.
+fn frame_epilogue(Bytes list, NativeFunction function) {
+    int locals = function.binding_count - function.parameter_count;
+    if (locals > 0) {
+        push_hex(list, "48 83 c4");
+        push_int(list, 8 * locals, 1);
+    }
+    push_hex(list, "5d c3");
+}
+
+// lower_call pushes the argument slots in reverse declaration order, emits
+// the call, and pops the caller-allocated slots.
+fn lower_call(Lowering lowering, NativeFunction function, int callee, int[] arguments, int argument_count) {
+    int index = argument_count - 1;
+    while (index >= 0) {
+        mov_rax_slot(lowering.code, slot_disp(function, arguments[index]));
+        push_hex(lowering.code, "50");
+        index--;
+    }
+    call_rel32(lowering, callee);
+    if (argument_count > 0) {
+        push_hex(lowering.code, "48 83 c4");
+        push_int(lowering.code, 8 * argument_count, 1);
+    }
+}
+
+// syscall_argument_register is the six-register argument spelling the Linux
+// syscall ABI fixes: rdi, rsi, rdx, r10, r8, r9.
+fn syscall_argument_register(Bytes list, int index) {
+    if (index == 0) {
+        push_hex(list, "48 89 c7");
+    } else if (index == 1) {
+        push_hex(list, "48 89 c6");
+    } else if (index == 2) {
+        push_hex(list, "48 89 c2");
+    } else if (index == 3) {
+        push_hex(list, "4c 89 c2");
+    } else if (index == 4) {
+        push_hex(list, "4c 89 c0");
+    } else {
+        push_hex(list, "4c 89 c8");
+    }
+}
+
+// lower_start is the file's opening paragraph: call the entry function, then
+// exit with status 0 through the exit_group syscall. argv is not read in
+// this slice.
+fn lower_start(Lowering lowering, int entry) {
+    call_rel32(lowering, entry);
+    push_hex(lowering.code, "31 ff");
+    push_hex(lowering.code, "b8 3c 00 00 00");
+    push_hex(lowering.code, "0f 05");
+}
+
+// supported checks whether the skeleton slice encodes a form; unsupported
+// forms fail the selection with a deterministic message rather than
+// inventing bytes.
+fn supported(NativeFunction function, Instruction instruction, int index) -> string {
+    string prefix = "function @" + function.name + ": instruction " + decimal(index) + ": ";
+    match (instruction) {
+        ConstInt(target, value) {
+            return "";
+        }
+        ConstBool(target, value) {
+            return "";
+        }
+        ConstRefData(target, blob) {
+            return "";
+        }
+        Copy(target, source) {
+            return "";
+        }
+        Call(target, callee, arguments, argument_count) {
+            return "";
+        }
+        CallVoid(callee, arguments, argument_count) {
+            return "";
+        }
+        RawLoad64(target, address, offset) {
+            return "";
+        }
+        RawSyscall(target, number, arguments, argument_count) {
+            return "";
+        }
+        Return(value) {
+            return "";
+        }
+        ReturnVoid {
+            return "";
+        }
+        Add(target, left, right) {
+            return prefix + "add is not in the skeleton slice yet";
+        }
+        Subtract(target, left, right) {
+            return prefix + "subtract is not in the skeleton slice yet";
+        }
+        Multiply(target, left, right) {
+            return prefix + "multiply is not in the skeleton slice yet";
+        }
+        WholeDivide(target, left, right) {
+            return prefix + "whole_divide is not in the skeleton slice yet";
+        }
+        WholeRemainder(target, left, right) {
+            return prefix + "whole_remainder is not in the skeleton slice yet";
+        }
+        Negate(target, value) {
+            return prefix + "negate is not in the skeleton slice yet";
+        }
+        Equal(target, left, right) {
+            return prefix + "equal is not in the skeleton slice yet";
+        }
+        LessThan(target, left, right) {
+            return prefix + "less_than is not in the skeleton slice yet";
+        }
+        Jump(label) {
+            return prefix + "jump is not in the skeleton slice yet";
+        }
+        Branch(condition, label_true, label_false) {
+            return prefix + "branch is not in the skeleton slice yet";
+        }
+        Label(label) {
+            return prefix + "label is not in the skeleton slice yet";
+        }
+    }
+    return "";
+}
+
+// lower_instruction emits one supported instruction.
+fn lower_instruction(Lowering lowering, NativeFunction function, Instruction instruction) {
+    match (instruction) {
+        ConstInt(target, value) {
+            // The constant reaches the slot through rax as a full 64-bit
+            // pattern: mov rax, imm64, then store.
+            movabs_rax(lowering.code, value);
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        ConstBool(target, value) {
+            int pattern = 0;
+            if (value) {
+                pattern = 1;
+            }
+            mov_byte_slot(lowering.code, slot_disp(function, target), pattern);
+        }
+        ConstRefData(target, blob) {
+            lea_rax_data(lowering, blob);
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        Copy(target, source) {
+            mov_rax_slot(lowering.code, slot_disp(function, source));
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        Call(target, callee, arguments, argument_count) {
+            lower_call(lowering, function, callee, arguments, argument_count);
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        CallVoid(callee, arguments, argument_count) {
+            lower_call(lowering, function, callee, arguments, argument_count);
+        }
+        RawLoad64(target, address, offset) {
+            mov_rax_slot(lowering.code, slot_disp(function, address));
+            push_hex(lowering.code, "48 8b 40");
+            push_int(lowering.code, offset, 1);
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        RawSyscall(target, number, arguments, argument_count) {
+            int argument = 0;
+            while (argument < argument_count) {
+                mov_rax_slot(lowering.code, slot_disp(function, arguments[argument]));
+                syscall_argument_register(lowering.code, argument);
+                argument++;
+            }
+            mov_rax_slot(lowering.code, slot_disp(function, number));
+            push_hex(lowering.code, "0f 05");
+            mov_slot_rax(lowering.code, slot_disp(function, target));
+        }
+        Return(value) {
+            mov_rax_slot(lowering.code, slot_disp(function, value));
+            frame_epilogue(lowering.code, function);
+        }
+        ReturnVoid {
+            frame_epilogue(lowering.code, function);
+        }
+        Add(target, left, right) {
+        }
+        Subtract(target, left, right) {
+        }
+        Multiply(target, left, right) {
+        }
+        WholeDivide(target, left, right) {
+        }
+        WholeRemainder(target, left, right) {
+        }
+        Negate(target, value) {
+        }
+        Equal(target, left, right) {
+        }
+        LessThan(target, left, right) {
+        }
+        Jump(label) {
+        }
+        Branch(condition, label_true, label_false) {
+        }
+        Label(label) {
+        }
+    }
+}
+
+// ends_with_return reports whether a function's body ends with a return, so
+// the selector knows whether to append a defensive epilogue.
+fn ends_with_return(NativeFunction function) -> bool {
+    if (function.instruction_count == 0) {
+        return false;
+    }
+    Instruction last = function.instructions[function.instruction_count - 1];
+    match (last) {
+        Return(value) {
+            return true;
+        }
+        ReturnVoid {
+            return true;
+        }
+        ConstInt(n, v) { return false; }
+        ConstBool(n, v) { return false; }
+        ConstRefData(n, b) { return false; }
+        Copy(n, s) { return false; }
+        Add(n, l, r) { return false; }
+        Subtract(n, l, r) { return false; }
+        Multiply(n, l, r) { return false; }
+        WholeDivide(n, l, r) { return false; }
+        WholeRemainder(n, l, r) { return false; }
+        Negate(n, v) { return false; }
+        Equal(n, l, r) { return false; }
+        LessThan(n, l, r) { return false; }
+        Call(n, c, a, count) { return false; }
+        CallVoid(c, a, count) { return false; }
+        RawLoad64(n, a, o) { return false; }
+        RawSyscall(n, m, a, count) { return false; }
+        Jump(l) { return false; }
+        Branch(c, t, f) { return false; }
+        Label(l) { return false; }
+    }
+    return false;
+}
+
+// select_scene lowers the whole scene: the program's opening paragraph,
+// every function in order, the blob data layout, and then one pass over all
+// recorded fixups.
+public fn select_scene(NativeScene scene) -> SelectionResult {
+    Lowering lowering = new_lowering(scene);
+
+    // _start occupies code offset zero; the table rows are scene functions.
+    lower_start(lowering, scene.entry);
+
+    int function = 0;
+    while (function < scene.function_count) {
+        NativeFunction handle = function_at(scene, function);
+        add_function_offset(lowering, function, lowering.code.count);
+
+        string frame_failure = frame_fits(handle);
+        if (length(frame_failure) != 0) {
+            return selector_fail(frame_failure);
+        }
+
+        push_hex(lowering.code, "55");
+        push_hex(lowering.code, "48 89 e5");
+        int locals = handle.binding_count - handle.parameter_count;
+        if (locals > 0) {
+            push_hex(lowering.code, "48 83 ec");
+            push_int(lowering.code, 8 * locals, 1);
+        }
+
+        int instruction_index = 0;
+        while (instruction_index < handle.instruction_count) {
+            Instruction instruction = handle.instructions[instruction_index];
+            string unsupported = supported(handle, instruction, instruction_index);
+            if (length(unsupported) != 0) {
+                return selector_fail(unsupported);
+            }
+            lower_instruction(lowering, handle, instruction);
+            instruction_index++;
+        }
+        if (!ends_with_return(handle)) {
+            frame_epilogue(lowering.code, handle);
+        }
+        function++;
+    }
+
+    // Data layout: one string object per blob (length, payload pointer,
+    // payload, pad to eight), eight-aligned, with the pointer slot's fixup
+    // recorded before its zero-filled placeholder is appended.
+    int layout = 0;
+    int blob = 0;
+    while (blob < scene.blob_count) {
+        lowering.blob_offsets[blob] = layout;
+        int size = length(scene.blobs[blob].bytes);
+        push_int(lowering.data, size, 8);
+        add_pointer(lowering, blob);
+        push_zeros(lowering.data, 8);
+        push_string(lowering.data, scene.blobs[blob].bytes);
+        int pad = (8 - size % 8) % 8;
+        push_zeros(lowering.data, pad);
+        layout += 16 + size + pad;
+        blob++;
+    }
+
+    int call_index = 0;
+    while (call_index < lowering.call_count) {
+        CallFixup fixup = lowering.call_fixups[call_index];
+        int target = text_base() + header_size() + lowering.function_offsets[fixup.callee];
+        int site = text_base() + header_size() + fixup.position + 4;
+        patch32(lowering.code, fixup.position, target - site);
+        call_index++;
+    }
+
+    int displacement = 0;
+    while (displacement < lowering.displacement_count) {
+        DisplacementFixup fixup = lowering.displacement_fixups[displacement];
+        int target = data_base() + lowering.blob_offsets[fixup.blob];
+        int site = text_base() + header_size() + fixup.position + 4;
+        patch32(lowering.code, fixup.position, target - site);
+        displacement++;
+    }
+
+    int pointer = 0;
+    while (pointer < lowering.pointer_count) {
+        PointerFixup fixup = lowering.pointer_fixups[pointer];
+        int payload = data_base() + lowering.blob_offsets[fixup.blob] + 16;
+        patch64(lowering.data, fixup.position, payload);
+        pointer++;
+    }
+
+    return SelectionResult.Ok {
+        selection = Selection {
+            code = lowering.code,
+            data = lowering.data,
+            entry_function = scene.entry
+        }
+    };
+}
+
+// movabs_rax loads a 64-bit constant into rax: mov rax, imm64.
+fn movabs_rax(Bytes list, int value) {
+    push_hex(list, "48 b8");
+    push_int(list, value, 8);
+}
+
+// patch32 rewrites four displacement bytes in place.
+fn patch32(Bytes list, int position, int displacement) {
+    int index = 0;
+    while (index < 4) {
+        list.data[position + index] = byte_from_int((displacement >> (8 * index)) & 255);
+        index++;
+    }
+}
+
+// patch64 rewrites eight pointer bytes in place.
+fn patch64(Bytes list, int position, int pointer) {
+    int index = 0;
+    while (index < 8) {
+        list.data[position + index] = byte_from_int((pointer >> (8 * index)) & 255);
+        index++;
+    }
+}

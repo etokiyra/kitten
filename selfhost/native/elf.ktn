@@ -1,0 +1,112 @@
+// elf.ktn - assemble one static ELF64 file.
+//
+// Phase 10.2's skeleton layout, from proposals
+// zero-dependency-toolchain.md Section 5.5: a static ELF64 ET_EXEC with two
+// program headers — one RX covering the header bytes and the code, and one
+// RW covering the data — no section headers, no dynamic section, no
+// interpreter, and no relocations after layout. The kernel maps the text
+// segment at text_base and the data segment at data_base, both page
+// aligned, so each segment's file bytes are its mapped bytes. The entry
+// point is the program's opening paragraph, which the selector emitted at
+// code offset zero. Everything lands in one mutable byte buffer, so the
+// assembled file is written with no further processing.
+
+import "selector.ktn";
+
+// ExecutableResult is a ready-to-write buffer or a deterministic message.
+public union ExecutableResult {
+    Ok { Bytes bytes; }
+    Failed { string message; }
+}
+
+// align_up rounds a size up to the next page boundary.
+fn align_up(int size, int boundary) -> int {
+    int remainder = size % boundary;
+    if (remainder == 0) {
+        return size;
+    }
+    return size + boundary - remainder;
+}
+
+// assemble lays out the file: the 64-byte ELF header with its header sizes,
+// the two 56-byte program headers, the code, zero padding up to the data
+// segment's page-aligned file offset, and then the data.
+public fn assemble(Selection selection) -> ExecutableResult {
+    int code_size = selection.code.count;
+    if (code_size == 0) {
+        return ExecutableResult.Failed { message = "the selection has no code" };
+    }
+    int text_size = header_size() + code_size;
+    int data_offset = align_up(text_size, page_size());
+    int entry = text_base() + header_size();
+
+    Bytes file = new_bytes();
+
+    // ELF identification and the fixed header fields.
+    push_byte(file, 127);
+    push_byte(file, 69);
+    push_byte(file, 76);
+    push_byte(file, 70);
+    push_byte(file, 2);                       // ELFCLASS64
+    push_byte(file, 1);                       // little-endian
+    push_byte(file, 1);                       // format version
+    push_byte(file, 0);                       // System V
+    push_zeros(file, 8);                      // identification padding
+    push_int(file, 2, 2);                     // ET_EXEC
+    push_int(file, 62, 2);                    // x86-64
+    push_int(file, 1, 4);                     // header version
+    push_int(file, entry, 8);                 // e_entry
+    push_int(file, 64, 8);                    // e_phoff
+    push_int(file, 0, 8);                     // e_shoff: none
+    push_int(file, 0, 4);                     // flags
+    push_int(file, 64, 2);                    // e_ehsize
+    push_int(file, 56, 2);                    // e_phentsize
+    push_int(file, 2, 2);                     // e_phnum
+    push_int(file, 0, 2);                     // e_shentsize
+    push_int(file, 0, 2);                     // e_shnum
+    push_int(file, 0, 2);                     // e_shstrndx
+
+    // Text: read and executable, covering header and code.
+    push_int(file, 1, 4);                     // PT_LOAD
+    push_int(file, 5, 4);                     // R + X
+    push_int(file, 0, 8);                     // file offset
+    push_int(file, text_base(), 8);           // vaddr
+    push_int(file, text_base(), 8);           // paddr
+    push_int(file, text_size, 8);             // filesz
+    push_int(file, text_size, 8);             // memsz
+    push_int(file, page_size(), 8);           // align
+
+    // Data: read and writable.
+    push_int(file, 1, 4);                     // PT_LOAD
+    push_int(file, 6, 4);                     // R + W
+    push_int(file, data_offset, 8);           // file offset
+    push_int(file, data_base(), 8);           // vaddr
+    push_int(file, data_base(), 8);           // paddr
+    push_int(file, selection.data.count, 8);  // filesz
+    push_int(file, selection.data.count, 8);  // memsz
+    push_int(file, page_size(), 8);           // align
+
+    // The code moves in whole after the program headers; then padding, then
+    // the data segment's bytes.
+    int header_bytes = 176;
+    int already = header_bytes;
+    int index = 0;
+    while (index < code_size) {
+        int value = int_from_byte(selection.code.data[index]);
+        push_byte(file, value);
+        index++;
+        already++;
+    }
+    push_zeros(file, data_offset - already);
+    push_string_compatible(file, selection.data);
+    return ExecutableResult.Ok { bytes = file };
+}
+
+// push_string_compatible copies one buffer's live bytes.
+fn push_string_compatible(Bytes file, Bytes list) {
+    int index = 0;
+    while (index < list.count) {
+        push_byte(file, int_from_byte(list.data[index]));
+        index++;
+    }
+}
