@@ -1900,16 +1900,20 @@ before the native fixpoint as later rungs land:
   raw offset inside a data object's whole mapped size; the language still
   has no globals (Section 19.9), so mutable static data is backend-owned —
   today the allocator's cursor and limit.
-- **Allocator.** Every lowered program receives a bump allocator over one
-  anonymous `mmap` of 256 MiB, mapped once, lazily, through a raw syscall on
-  first allocation. The allocator walks one 64-bit cursor and limit left in
-  static mutable data; objects are 8-aligned, preceded by the header word.
-  Exhaustion, a negative size, or a wrapped cursor is a fatal runtime error
-  with the C runtime's `ktn_rt_fail` spelling — `purr: out of memory` to
-  standard error and exit status 1 — and a failed mapping fails the same
-  way. No source construct reaches it yet; the approved mark-sweep
-  collector (Section 30) replaces the flat region without changing the
-  header ABI.
+- **Allocator.** Every lowered program receives the collector: one anonymous
+  `mmap` of 256 MiB for the heap, mapped once, lazily, through a raw
+  syscall on first allocation (with a one-byte-per-word mark ledger beside
+  it), a first-fit search over the sweep-built free list, a bump
+  allocation against the untouched cursor, and one conservative
+  mark-sweep collection between the two (Sections 30.7 and 30.8). Objects
+  are 8-aligned, preceded by the size-only header word. Exhaustion after
+  the collection, a negative size, or a wrapped cursor is a fatal runtime
+  error with the C runtime's `ktn_rt_fail` spelling — `purr: out of
+  memory` to standard error and exit status 1 — and a failed mapping fails
+  the same way. The mark-sweep collection reuses the same header ABI on
+  every block; the collector's shape can still refine before the native
+  fixpoint as later rungs land. No source construct allocates anything but
+  strings yet.
 - **Native print helpers.** `print` on the lowered argument kinds writes
   exactly the C runtime's bytes (Section 19.4): decimal text for `int`
   including the minus sign and INT64_MIN, `true`/`false` for `bool`, the
@@ -3941,3 +3945,63 @@ length/equality, no field access, bounds checks, or tag switches, no
 bitwise and shift operators, no stack-alignment refinement, no register
 allocation, and no mark-sweep collector — the flat region is this slice's
 whole heap. The production sidecar still does not depend on this module.
+
+### 30.8 The collector (Phase 10.7)
+
+The backend received the proposal Section 7.1's approved first collector:
+non-moving conservative mark-sweep over the header ABI Section 19.10
+records, written in Kitten as scene shells in `selfhost/native/runtime.ktn`.
+
+- **The block world.** All blocks live in one mapped region behind
+  size-only 8-byte header words: the header value is the whole block size,
+  8-aligned, with the three low bits reserved-zero in every writer. A
+  `$alloc(request)` request names the bytes that follow the header, the
+  whole size rounds up to eight with a 16-byte minimum, and the returned
+  address yields its ledger byte certified.
+- **The mark ledger.** Mark state lives beside the heap in one byte per
+  8-byte heap word, mapped with the heap at `$map` time: 1 certifies "a
+  block header starts at this word", 2 adds "and the block is marked
+  live", and 0 means free space. Allocation writes 1 through one shared
+  shell (`$byte_set1`) and release writes 0 (`$byte_set0`), so every
+  ledger write outside the sweep names a byte the allocator already owns.
+- **Conservative scanning.** `$map` captures the stack pointer once; a
+  collection walks every 8-byte slot from the current pointer (floored to
+  a word) to that capture. A slot value below the base or at/above the
+  limit is refused; a value inside maps to its ledger word, and only when
+  the ledger certifies a header does the scanner set the byte to 2. A
+  stale stack value or an interior pointer can therefore never write into
+  payload data: false matches retain nothing and touch nothing.
+- **The sweep.** One size-led walk from the block base to the allocation
+  cursor visits every block once: ledger 2 demotes to 1 (survivor), 1
+  hands the block to `$free_block`, 0 (released already) is skipped during
+  the construction pass and both in the re-shared one. The free-list
+  builder walks in address order, so a disposal whose address equals the
+  last list run's end extends that run's header instead of producing a
+  new list node, which is how the 256 MiB region reassembles into large
+  holes after strings churn.
+- **Allocation.** `$search` takes first fit through the free list —
+  unlinking the head or the predecessor, splitting the tail into a fresh
+  list node when the remainder still fits a block and re-stamping the
+  taken header — and `$bump` serves the untouched cursor while it has
+  room. `$alloc` = search, bump, then one full collection (scan, sweep),
+  then search and bump again, then the exact `purr: out of memory` halt at
+  status 1 the C runtime's `ktn_rt_fail` spelling words.
+- **The language surface.** String concatenation (`+`, `+=`) lower to
+  `$string_concat`, the one user-reachable allocation; content equality
+  (`==`, `!=`) lower to `$string_equal`; the `length` built-in lowers to
+  `$string_length`. The output is byte-identical with the C pipeline for
+  every program the corpus carries, with an empty `PATH`, in repeat, and
+  the two pipelines' ELFs are byte-identical for hello, arith, divzero,
+  oom, and gc scene kinds.
+- **The acceptance rung.** `gcstress.ktn` grows one string by doubling,
+  `concat.ktn`, `equal.ktn`, and `lengthgc.ktn` cover mixed pooling and
+  comparisons; the probe's `elf-gc` pushes 600 one-megabyte allocations
+  through the collector's path and still exits 0. Everything else remains
+  with the C oracle; the production sidecar still does not depend on this
+  module.
+
+What remains unimplemented is unchanged from Section 30.7: no float
+printing or value conversions, no arrays/maps/structs/unions in the
+native lowering, no field access or bounds checks, and no register
+allocation. The mark ledger's cost, the frame cap, and multi-module
+lowering all stay open on the way to the native compiler stage.

@@ -26,27 +26,39 @@ underflow as the C toolchain does), the scene grew its SSE2 forms
 the exact NaN-handling sequences the C generators emit, float results
 return in `xmm0`, and the corpus exercises the edges — ties, NaN, infinity,
 the subnormal rounding-to-zero edge, both increment positions — against
-the C pipeline byte for byte. Phase 10.6 landed the runtime foundations
-(`native/runtime.ktn`): every blob is one object on the proposal Section
-5.3 header ABI (SPEC Section 19.10) — an 8-byte header word carrying the
-whole size, an 8-byte length, an 8-byte payload pointer, and the payload —
-GetStatic/SetStatic reach a blob's payload for the heap cursor, the bump
-allocator maps one lazy 256 MiB region through `$map`/`$alloc` over a raw
-mmap and halts with the C runtime's exact `purr: out of memory` text at
-status 1, and print(int)/print(bool) lower into decimal-digit and
-true/false helpers that byte-match the C pipeline. The mark-sweep GC,
-string length/equality, and `%g` float printing stay with the runtime
-slices that follow.
+the C pipeline byte for byte. Phase 10.7 then landed the runtime
+foundations and the collector (`native/runtime.ktn`): every blob is one
+object on the proposal Section 5.3 header ABI (SPEC Section 19.10) — an
+8-byte header word carrying the whole size, an 8-byte length, an 8-byte
+payload pointer, and the payload — Phase 10.7 built the mark-sweep
+collector: every heap block is one object behind a size-only header word,
+mark state lives in a one-byte-per-word ledger beside the heap, and a
+conservative stack scan marks live objects only where the ledger
+certifies a header, so a stale stack value or an interior pointer can
+neither corrupt nor miss memory. The sweep builds an address-ordered free
+list whose adjacent holes coalesce, allocation goes first-fit through the
+list (splitting tails) before trying the untouched cursor, and after one
+full collection the exact `purr: out of memory` halt at status 1 is
+still the end. print(int)/print(bool) lower into decimal-digit and
+true/false helpers that byte-match the C pipeline, and string concat
+(`+`, `+=`), content equality (`==`, `!=`), and the `length` built-in are
+the first user-reachable `$alloc` clients. The mark-sweep GC — string
+length/equality, `%g` float printing, arrays/maps/structs/unions, field
+access, bounds checks, tag switches, stack-alignment refinement, and
+register allocation — stays with the slices that follow.
 
 ## Files
 
 - `selfhost/native/ir.ktn` — `NativeScene`, its builders, and `check_scene`,
   the whole-scene well-formedness pass; `push_instruction` snapshots call
-  argument arrays so the scene stays an immutable snapshot.
-- `selfhost/native/runtime.ktn` — the runtime shells: the `$heap` blob, the
-  `$map`/`$alloc` bump allocator, and the string, digit, and bool print
-  helpers, registered through the same builders the lowering and the probe
-  use; every shell stays below the slice's fourteen-local frame layout.
+  argument arrays so the scene stays an immutable snapshot; the scene's
+  backend-internal forms include the 10.7 collector's `RawStore64`,
+  `RawLoad8`, `RawStore8`, and `StackPointer`.
+- `selfhost/native/runtime.ktn` — the runtime shells: the collector (mapping,
+  the mark ledger, `$search`/`$bump` allocation, conservative scan, sweep
+  with free-list coalescing), the string runtime, and the print helpers,
+  registered through the same builders the lowering and the probe use;
+  every shell stays below the slice's fourteen-local frame layout.
 - `selfhost/native/lower.ktn` — the lowering from a checked program's
   semantic model to one scene, covering the scalar subset, with one
   deterministic message for every unsupported construct (top of the
@@ -110,23 +122,24 @@ initializer names a same-scoped outer local.
 ## The runtime shells
 
 `selfhost/native/runtime.ktn` is the first part of proposal Section 6.2's
-runtime written in Kitten. The allocator's `$heap` blob is mutable scene
-data: GetStatic/SetStatic address its payload at raw offsets 24 and 32,
-whose starting bytes are the all-ones pattern, the negative value -1, so
-`cursor < 0` is the one unmapped test. `$map` makes the raw `mmap`
-(PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS) for `heap_size()` — 256
-MiB, the proposal Section 7.1's first target — parks cursor and limit in
-`$heap`, and reaches a FailOOM on a failed mapping; `$alloc` rounds the
-request to eight, advances the cursor past the object's 8-byte header,
-guards against a negative size, a wrapped cursor, and a cursor past the
-limit, and returns the object address. Exhaustion is exact: the shared
-paragraph writes `purr: out of memory` to standard error and exits with
-status 1, the C runtime's `ktn_rt_fail` spelling. The print helpers mirror
-the C runtime byte for byte: `$write1` writes one payload byte, and the
-integer rendering prints the minus sign through it, then digits — `$digits`
-recurses on the truncated quotient over a negative magnitude, so
-`%lld`-equivalent text comes out most-significant-first and INT64_MIN needs
-no special case. Every shell is under the frame cap.
+runtime written in Kitten. The collector's `$heap` blob is mutable scene
+data: GetStatic/SetStatic address its six words (base, cursor, limit, the
+free-list head, and the sweep's last-block/last-end words) at raw offsets
+24..64, whose starting bytes are the all-ones pattern, the negative value
+-1, so "absent" is one test away for every table. `$map` makes the raw
+`mmap`s (PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS) for the heap —
+256 MiB, the proposal Section 7.1's first target — and a one-byte-per-word
+mark ledger beside it, and captures the stack pointer for scanning.
+`$alloc` walks first-fit through the sweep-built free list (splitting a
+tail when the remainder fits a node), then bump-allocates against the
+cursor, and after one full collection — conservative stack scan through
+the ledger, then the size-led sweep whose address-ordered disposal
+coalesces — the exact `purr: out of memory` at status 1 ends the program.
+The string shells mirror the C runtime byte for byte: `$string_concat`
+allocates through `$alloc` and copies both payloads, `$string_equal`
+compares byte for byte, and `$string_length` reads the length word, so
+`+`, `+=`, `==`, `!=` between strings and `length()` land in the language
+exactly as the C pipeline words them. Every shell is under the frame cap.
 
 ## The header ABI
 
@@ -218,20 +231,21 @@ expects it.
 
 ## What is not here
 
-- Field access, allocation from user code, bounds checks, and tag switches:
-  strings lower as static literal blobs alone; user-side allocation, string
-  concatenation, string equality, and every composite type fail with their
-  message. The allocator's shells exist and are exercised through the probe,
-  but no source construct reaches `$alloc` yet.
+- Field access, allocation of non-string types, bounds checks, and tag
+  switches: strings allocate and concatenate; every composite type user-side
+  fails with its message. The collector runs on every program that allocates
+  and is exercised end-to-end through `elf-gc`, but the mark ledger's
+  growth beyond one flat region and precise (collector-visible) safepoints
+  are later slices.
 - Printing floats and any int-to-float or float-to-int conversion: the
   rendering work belongs to the runtime slices (`%g` exactly), and the
   conversions have no lowering yet.
 - Bitwise and shift operators, byte values, imports, and `match`: the
   scalar subset is single-module, and each fails with its message.
-- Stack-alignment refinement, a System V interop convention, register
-  allocation, and the mark-sweep GC. The frame still carries at most
-  fourteen parameters and fourteen locals, which shapes the corpus and the
-  shells; the proposal's order stages the rest into later slices.
+- Stack-alignment refinement, a System V interop convention, and register
+  allocation. The frame still carries at most fourteen parameters and
+  fourteen locals, which shapes the corpus and the shells; the proposal's
+  order stages the rest into later slices.
 
 ## What the selector lowers
 
@@ -314,6 +328,7 @@ purr build selfhost/native.ktn -o /tmp/native-probe
 /tmp/native-probe elf-arith /tmp/arith && /tmp/arith         # write and run the arithmetic executable
 /tmp/native-probe elf-divzero /tmp/dv && /tmp/dv             # write and run the divide-failure executable
 /tmp/native-probe elf-oom /tmp/oom && /tmp/oom               # write and run the allocation-failure executable
+/tmp/native-probe elf-gc /tmp/gc && /tmp/gc                  # drive 600 MiB through the collector
 /tmp/native-probe lower tests/native/printint.ktn            # render a real source's lowered scene
 /tmp/native-probe lower tests/native/printint.ktn /tmp/pi     # write and run a real source's executable
 /tmp/native-probe lower tests/native/floats.ktn /tmp/f && /tmp/f   # float corpus, no C anywhere
@@ -342,6 +357,14 @@ purr build selfhost/native.ktn -o /tmp/native-probe
 - The allocation-failure executable prints the C runtime's exact
   `purr: out of memory` to standard error with status 1, byte for byte and
   deterministically.
+- The Phase 10.7 collector: `elf-gc` drives six hundred one-megabyte
+  allocations through the collector, printing `done` with status 0, byte
+  for byte and deterministically; the string corpus (`concat.ktn`,
+  `equal.ktn`, `lengthgc.ktn`, `gcstress.ktn`) covers concatenation,
+  content equality, and `length` against the C pipeline byte for byte,
+  inside the general corpus run; the string scenes' renderings are pinned
+  alongside the print scenes'; and the three validation messages stay
+  pinned.
 - The Phase 10.4 lowering corpus (`tests/native/*.ktn`) lowers and runs with
   output, standard error, and status matching the C pipeline's `purr run` of
   the same source, deterministically per source; the pooled-literal scene's
@@ -358,7 +381,7 @@ purr build selfhost/native.ktn -o /tmp/native-probe
   NaN and infinity behavior, the subnormal edge, both increment positions,
   tie rounding) match the C pipeline byte for byte with an empty PATH; and
   the float scene's rendering is pinned.
-- Both pipelines produce byte-identical ELFs for all four scene kinds and
+- Both pipelines produce byte-identical ELFs for all five scene kinds and
   for every corpus program, and their `lower`-mode renderings and failure
   messages agree byte for byte: the Kitten-written `purr-kt` sidecar builds
   the probe and runs the whole suite, and its outputs equal the Go

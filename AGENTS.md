@@ -518,11 +518,26 @@ status 1 — and `print(int)`/`print(bool)` lower into decimal-digit and
 true/false helpers that byte-match the C pipeline, including INT64_MIN.
 The print-kind prescan registers one print helper per argument kind, print
 is supported with exactly one string, int, or bool argument, and the probe
-gained `elf-oom` plus three pinned static-form validation messages. GC,
-string length/equality, and %g wait for 10.7/10.8. Field access,
-allocation, bounds checks, tag switches, stack-alignment refinement,
-register allocation, and the composite subset's lowering remain staged for
-later slices.
+gained `elf-oom` plus three pinned static-form validation messages.
+Phase 10.7 then built the mark-sweep collector: every heap block is one
+object behind a size-only header word, mark state lives in a
+one-byte-per-word ledger beside the heap, and a conservative stack scan
+(from the current stack pointer to the capture made at mapping time — a
+new `StackPointer` form) marks live objects only where the ledger
+certifies a header, so a stale value or an interior pointer can neither
+corrupt nor miss memory. The sweep builds an address-ordered free list
+whose adjacent holes coalesce, allocation goes first-fit through the list
+(splitting tails) before trying the untouched cursor, and after one full
+collection the exact `purr: out of memory` halt at status 1 is still the
+end. The scene grew `RawStore64`, `RawLoad8`, `RawStore8`, and
+`StackPointer`, and the string runtime — concat (`+`, `+=`), content
+equality (`==`, `!=`), and the `length` built-in — is the first
+user-reachable `$alloc` client. The probe gained `elf-gc`: six hundred
+one-megabyte allocations through the collector, exit 0. `%g` float
+printing and the composite subset (arrays, maps, structs, unions, field
+access, bounds checks, tag switches) plus stack-alignment refinement,
+register allocation, and multi-module lowering remain staged for later
+slices.
 
 ## Roadmap
 
