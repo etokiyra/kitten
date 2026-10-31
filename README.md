@@ -47,8 +47,7 @@
 **Kitten** is a compiled, statically typed, garbage-collected programming language that
 builds native executables. It is being built to be *pleasant enough to reach for by
 default, general enough to build almost anything with, and backed by an ecosystem that
-belongs to the language.* (´｡• ᵕ •｡`) ♡
-<p align="center">
+belongs to the language.*<p align="center">
   <b>Kitten</b> — the language &nbsp;·&nbsp; <b><code>.ktn</code></b> — the files &nbsp;·&nbsp; <b><code>purr</code></b> — the tool
 </p>
 
@@ -59,8 +58,7 @@ command-line tools, because that is where a young language can actually win.
 > **Read next:** [`VISION.md`](VISION.md) — what Kitten is for, what it refuses to become,
 > and the three kinds of independence it is working toward.
 
-## Table of contents (´•ω•`) ♡
-
+## Table of contents
 - [Status](#status)
 - [Why Kitten](#why-kitten)
 - [A quick taste](#a-quick-taste)
@@ -75,8 +73,7 @@ command-line tools, because that is where a young language can actually win.
 
 ---
 
-## Status (´•ω•`) ♡
-
+## Status
 **Early, and honest about it.** The language is `v0.1 (provisional)`, which means the
 specification is deliberately not frozen and the parts that are undecided are *listed* as
 undecided rather than quietly invented in code.
@@ -89,8 +86,7 @@ undecided rather than quietly invented in code.
 
 ---
 
-## Why Kitten (๑>◡<๑) ♡
-Most languages make you choose: simple but limited, or powerful but a career to learn;
+## Why KittenMost languages make you choose: simple but limited, or powerful but a career to learn;
 delightful to write, or equipped with an ecosystem you can actually use. Kitten is an
 attempt to refuse that trade.
 
@@ -191,9 +187,7 @@ fn evaluate(Expression expression) -> int {
 
 ---
 
-## Getting Kitten (´｡• ᵕ •｡`) ♡
-### The goal: one command (๑>◡<๑) ♡
-Going from nothing to a working, autocompleting Kitten toolchain should be one line. Not
+## Getting Kitten### The goal: one commandGoing from nothing to a working, autocompleting Kitten toolchain should be one line. Not
 a compiler here, a language server there, and an editor plugin found by searching:
 
 <!-- purr new and purr run work today; purr install awaits the registry. -->
@@ -209,8 +203,7 @@ and that updating it later is equally unceremonious. The toolchain is a set of
 components, so they can be added or refreshed individually once installed, but a new
 developer never has to assemble them by hand.
 
-### Scaffolding: `purr new` (´•ω•`) ♡
-Creating a project produces the layout you already recognise, with a manifest, a
+### Scaffolding: `purr new`Creating a project produces the layout you already recognise, with a manifest, a
 source directory, and nothing to configure.
 
 <!-- As implemented by purr new; matching Cargo's conventions. Library builds
@@ -238,8 +231,7 @@ catnip/
 A library is the same shape with `src/lib.ktn` instead of `src/main.ktn`, so publishing
 one is a build step rather than a separate workflow.
 
-### Today: build from source (´•ω•`) ♡
-You need Go, a C compiler (`cc`, `gcc`, or `clang`), and Boehm GC (`libgc`) with its
+### Today: build from sourceYou need Go, a C compiler (`cc`, `gcc`, or `clang`), and Boehm GC (`libgc`) with its
 development headers.
 
 ```sh
@@ -269,8 +261,7 @@ registry commands await the package ecosystem.
 
 ---
 
-## What works today (´•ω•`) ♡
-| Component | State |
+## What works today| Component | State |
 | --- | --- |
 | Lexer, parser, AST | complete for the specified language |
 | Type checker | complete for the specified language, with diagnostics and positions |
@@ -290,8 +281,7 @@ interfaces, closures, package management, a formatter, a language server, a debu
 cross-compilation, and a backend that does not go through C. The specification lists every
 deferred decision; nothing is silently invented.
 
-### The Kitten-written `purr` (´•ω•`) ♡
-`purr.ktn` (with `purr/cli.ktn`, `purr/build.ktn`, `purr/new.ktn`, and
+### The Kitten-written `purr``purr.ktn` (with `purr/cli.ktn`, `purr/build.ktn`, `purr/new.ktn`, and
 `purr/project.ktn`) is the toolchain written in Kitten. It supports
 `help`, `new`, `build`, and `run`. `build` links the Kitten-written compiler
 frontend and invokes the C compiler in process; `run` builds into a temporary
@@ -318,14 +308,12 @@ through a logged fake compiler), source and compiler failure diagnostics,
 
 ---
 
-## The toolchain and the ecosystem (´•ω•`) ♡
-A language is only as good as the code people can find and reuse in it — and that
+## The toolchain and the ecosystemA language is only as good as the code people can find and reuse in it — and that
 ecosystem belongs to Kitten, not to another language's package manager. One tool owns the
 whole workflow, from the first `purr new` to publishing, and it is designed to arrive
 installed and configured.
 
-### The `purr` command (´•ω•`) ♡
-| Piece | What it does | Status |
+### The `purr` command| Piece | What it does | Status |
 | --- | --- | --- |
 | `purr build`, `purr run` | compile a source file, or compile and execute it | **works** |
 | `purr new` | scaffold a project or a library with the standard layout; `new` works in the Kitten-written `purr`, while library builds report a documented deferred error | works (scaffolding) |
@@ -341,8 +329,7 @@ installed and configured.
 | `purr.toml`, `purr.lock` | manifest and lockfile for reproducible builds | planned |
 | a registry | namespaced, versioned packages, fetched by `purr` itself | planned |
 
-### Editor and shell integration (´•ω•`) ♡
-Being easy to *install* is not the same as being easy to *live in*. The goal is that
+### Editor and shell integrationBeing easy to *install* is not the same as being easy to *live in*. The goal is that
 Kitten arrives with the things people otherwise spend an afternoon wiring up:
 
 - **A language server** behind `purr lsp`, so any LSP-capable editor gets diagnostics,
@@ -351,8 +338,7 @@ Kitten arrives with the things people otherwise spend an afternoon wiring up:
   syntax highlighting that does not lag behind the language.
 - **Shell completion** for `purr` itself — subcommands, flags, and package names.
 
-### The registry (´•ω•`) ♡
-Packages are versioned, namespaced, and fetched by `purr` itself, with documentation
+### The registryPackages are versioned, namespaced, and fetched by `purr` itself, with documentation
 generated from source. Nothing about using the ecosystem may require another language's
 package manager, and a Kitten package is never a foreign package wearing a costume.
 
@@ -360,8 +346,7 @@ Beyond `build`, `run`, and `new`, this does not exist yet. It is the roadmap, no
 
 ---
 
-## Self-hosting (´•ω•`) ♡
-The long-term goal is that Kitten compiles its own compiler. Today the compiler is written
+## Self-hostingThe long-term goal is that Kitten compiles its own compiler. Today the compiler is written
 in Go, and that is deliberate: it is the bootstrap, and it stays the reference.
 [`VISION.md`](VISION.md) explains why that is only one of three separate independences the
 project is working toward.
@@ -465,8 +450,7 @@ independent of Go.
 
 ---
 
-## Repository layout (´•ω•`) ♡
-```text
+## Repository layout```text
 SPEC.md        the language specification — the source of truth for semantics
 VISION.md      what Kitten is for: goals, positioning, and the road to independence
 AGENTS.md      how the project is built: process, architecture, current phase
@@ -486,8 +470,7 @@ model, a module loader, a compiler driver with a temporary POSIX wrapper, and a 
 generator, each with a driver that prints what it produced so the Go-side harnesses can
 compare it with the reference.
 
-## Testing (´•ω•`) ♡
-```sh
+## Testing```sh
 go test ./...              # everything
 CC=gcc go test ./...       # the same suite with a chosen C compiler
 CC=clang go test ./...
@@ -507,8 +490,7 @@ build depends on, the resolved compiler, and the GC flags, so a hit is never
 stale, and repeated runs after small edits skip the rebuilds instead of
 paying for them a second time.
 
-## How the project is developed (´•ω•`) ♡
-- `SPEC.md` is the source of truth for language semantics. If code and the specification
+## How the project is developed- `SPEC.md` is the source of truth for language semantics. If code and the specification
   disagree, the specification wins until it is deliberately changed.
 - Semantics are never changed silently. An undecided question is recorded as deferred in
   the specification and raised, not invented in code.
@@ -518,8 +500,7 @@ paying for them a second time.
   against the reference rather than trusted.
 - Features are added in authorized phases, one coherent change per commit.
 
-## License (´•ω•`) ♡
-Kitten is free software: you can redistribute it and/or modify it under the terms of the
+## LicenseKitten is free software: you can redistribute it and/or modify it under the terms of the
 GNU General Public License as published by the Free Software Foundation, either version 3
 of the License, or (at your option) any later version. See `LICENSE`.
 
@@ -541,15 +522,13 @@ standard library — is MIT; everything else is GPL-3.0-or-later.
 
 <div align="center">
 <pre>
- ,_     _
- |\\_,-~/
- / _  _ |    ,--.
-(  @  @ )   / ,-'
- \  _T_/-._( (
- /         `. \
-|         _  \ |
- \ \ ,  /      |
-  || |-_\__   /
- ((_/`(____,-'
+        /\_/\
+       ( o.o )
+        > ^ <
+       /     \
+      (       )
+       \     /
+        `---'
 </pre>
+<sub>purr, purr - welcome to Kitten</sub>
 </div>
