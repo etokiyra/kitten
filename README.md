@@ -522,13 +522,16 @@ standard library — is MIT; everything else is GPL-3.0-or-later.
 
 <div align="center">
 <pre>
-        /\_/\
-       ( o.o )
-        > ^ <
-       /     \
-      (       )
-       \     /
-        `---'
+ ,_     _
+ |\\_,-~/
+ / _  _ |    ,--.
+(  @  @ )   / ,-'
+ \  _T_/-._( (
+ /         `. \
+|         _  \ |
+ \ \ ,  /      |
+  || |-_\__   /
+ ((_/`(____,-'
 </pre>
 <sub>purr, purr - welcome to Kitten</sub>
 </div>
