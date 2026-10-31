@@ -520,8 +520,7 @@ standard library — is MIT; everything else is GPL-3.0-or-later.
 
 ---
 
-<div align="center">
-<pre>
+```text
  ,_     _
  |\\_,-~/
  / _  _ |    ,--.
@@ -532,6 +531,4 @@ standard library — is MIT; everything else is GPL-3.0-or-later.
  \ \ ,  /      |
   || |-_\__   /
  ((_/`(____,-'
-</pre>
-<sub>purr, purr - welcome to Kitten</sub>
-</div>
+```
